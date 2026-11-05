@@ -33,7 +33,7 @@ pub fn apply(tool: &str, input: &str, language: Option<&str>) -> Result<(String,
         "minify" => match detect(input, language) {
             Some(Format::Json) => "json-minify",
             Some(Format::Xml) => "xml-minify",
-            _ => return Err("Minify works for JSON and XML only.".into()),
+            _ => return Err(t!("Minify works for JSON and XML only.").into()),
         },
         t => t,
     };
@@ -66,7 +66,7 @@ pub fn apply(tool: &str, input: &str, language: Option<&str>) -> Result<(String,
         "url-encode" => Ok(urlencoding::encode(input).into_owned()),
         "url-decode" => urlencoding::decode(input)
             .map(|s| s.into_owned())
-            .map_err(|e| format!("URL decode: {e}")),
+            .map_err(|e| t!("URL decode: {}", e)),
         "json-escape" => serde_json::to_string(input).map_err(|e| e.to_string()),
         "json-unescape" => json_unescape(input),
         other => Err(format!("Unknown tool: {other}")),
@@ -104,7 +104,7 @@ pub fn detect(input: &str, language: Option<&str>) -> Option<Format> {
 /// literals and duplicate keys are preserved exactly. `indent == None` minifies.
 pub fn json_reformat(input: &str, indent: Option<usize>) -> FmtResult {
     // Validate first to get a proper error message with position.
-    serde_json::from_str::<serde::de::IgnoredAny>(input).map_err(|e| format!("Invalid JSON: {e}"))?;
+    serde_json::from_str::<serde::de::IgnoredAny>(input).map_err(|e| t!("Invalid JSON: {}", e))?;
 
     let unit = " ".repeat(indent.unwrap_or(0));
     let pretty = indent.is_some();
@@ -197,12 +197,12 @@ pub fn xml_reformat(input: &str, pretty: bool) -> FmtResult {
                 writer.write_event(e).map_err(|e| format!("XML: {e}"))?;
             }
             Err(e) => {
-                return Err(format!("Invalid XML at byte {}: {e}", reader.error_position()));
+                return Err(t!("Invalid XML at byte {}: {}", reader.error_position(), e));
             }
         }
     }
     if depth != 0 {
-        return Err("Invalid XML: unclosed element".into());
+        return Err(t!("Invalid XML: unclosed element").into());
     }
     let mut out = String::from_utf8(writer.into_inner()).map_err(|e| e.to_string())?;
     if pretty {
@@ -213,7 +213,7 @@ pub fn xml_reformat(input: &str, pretty: bool) -> FmtResult {
 
 fn yaml_docs<T: serde::de::DeserializeOwned>(input: &str) -> Result<Vec<T>, String> {
     serde_yaml::Deserializer::from_str(input)
-        .map(|doc| T::deserialize(doc).map_err(|e| format!("Invalid YAML: {e}")))
+        .map(|doc| T::deserialize(doc).map_err(|e| t!("Invalid YAML: {}", e)))
         .collect()
 }
 
@@ -227,7 +227,7 @@ pub fn yaml_pretty(input: &str) -> FmtResult {
 }
 
 pub fn json_to_yaml(input: &str) -> FmtResult {
-    let v: serde_json::Value = serde_json::from_str(input).map_err(|e| format!("Invalid JSON: {e}"))?;
+    let v: serde_json::Value = serde_json::from_str(input).map_err(|e| t!("Invalid JSON: {}", e))?;
     serde_yaml::to_string(&v).map_err(|e| e.to_string())
 }
 
@@ -266,8 +266,8 @@ fn base64_decode(input: &str) -> FmtResult {
     let bytes = engines
         .iter()
         .find_map(|e| e.decode(&cleaned).ok())
-        .ok_or("Not valid Base64")?;
-    String::from_utf8(bytes).map_err(|_| "Decoded data is not UTF-8 text".into())
+        .ok_or(t!("Not valid Base64"))?;
+    String::from_utf8(bytes).map_err(|_| t!("Decoded data is not UTF-8 text").into())
 }
 
 fn json_unescape(input: &str) -> FmtResult {
@@ -277,7 +277,7 @@ fn json_unescape(input: &str) -> FmtResult {
     } else {
         format!("\"{t}\"")
     };
-    serde_json::from_str::<String>(&quoted).map_err(|e| format!("Invalid JSON string: {e}"))
+    serde_json::from_str::<String>(&quoted).map_err(|e| t!("Invalid JSON string: {}", e))
 }
 
 /// Applies `f` to the lines of `input`, keeping a trailing newline if present.

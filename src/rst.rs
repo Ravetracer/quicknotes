@@ -23,7 +23,7 @@ pub fn to_html(source: &str, base_dir: Option<&Path>) -> String {
     })) {
         Ok(Ok((page, _))) => body_of(&page).to_owned(),
         Ok(Err(halt)) => format!("<p class=\"message error\">{}</p>", escape(&format!("{halt:?}"))),
-        Err(_) => "<p class=\"message error\">The reStructuredText renderer failed on this document.</p>".to_owned(),
+        Err(_) => format!("<p class=\"message error\">{}</p>", t!("The reStructuredText renderer failed on this document.")),
     }
 }
 

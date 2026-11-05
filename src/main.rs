@@ -1,8 +1,11 @@
+#[macro_use]
+mod i18n;
 mod backup;
 mod calc;
 mod editor;
 mod export;
 mod format;
+mod geocaching;
 mod help;
 mod html;
 mod icons;

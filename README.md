@@ -24,6 +24,10 @@ after a restart.
 - Font size via Ctrl+mouse wheel or Ctrl +/−/0 (the preview follows)
 - **Calculation sheets**: variables, operators, functions and live results per line;
   templates like `> N ab° cd.{e*3:3}` fill in calculated values (e.g. Geocaching coordinates)
+- **Geocaching tools** in the editor's context menu: ROT13/5/18/47, Caesar, letter value
+  (sums, checksums), letter frequency, Scrabble values, prime alphabet, hex, ASCII, binary,
+  Roman numerals, Morse code, phone keypad — results are inserted below the selection
+- User interface in English or German (main menu → *Language*, applies after a restart)
 - Built-in help (F1) explaining all features, especially calculations and templates
 - Backup of all notes into a single `.tar.gz` and restore (add to or replace the current tabs)
 - Editor font selectable in the status bar (e.g. fonts with ligatures like Fira Code); ligatures can be switched off in the main menu

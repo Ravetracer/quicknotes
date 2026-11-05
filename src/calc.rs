@@ -160,7 +160,7 @@ fn apply_format(value: f64, spec: Option<&str>) -> Result<String, String> {
     let Some(spec) = spec.filter(|s| !s.is_empty()) else {
         return Ok(format_number(value));
     };
-    let bad = || format!("invalid format \":{spec}\" (use e.g. :3, :.2 or :3.2)");
+    let bad = || t!("invalid format \":{}\" (use e.g. :3, :.2 or :3.2)", spec);
     let (width, decimals) = match spec.split_once('.') {
         Some((w, d)) => (w, Some(d.parse::<usize>().map_err(|_| bad())?)),
         None => (spec, None),
@@ -244,7 +244,7 @@ fn tokenize(s: &str) -> Result<Vec<Tok>, String> {
                     i += 1;
                 }
                 let text: String = chars[start..i].iter().collect();
-                let n = text.parse::<f64>().map_err(|_| format!("invalid number \"{text}\""))?;
+                let n = text.parse::<f64>().map_err(|_| t!("invalid number \"{}\"", text))?;
                 toks.push(Tok::Num(n));
             }
             c if c.is_alphabetic() || c == '_' => {
@@ -286,7 +286,7 @@ fn tokenize(s: &str) -> Result<Vec<Tok>, String> {
                 toks.push(Tok::Comma);
                 i += 1;
             }
-            c => return Err(format!("unexpected \"{c}\"")),
+            c => return Err(t!("unexpected \"{}\"", c)),
         }
     }
     Ok(toks)
@@ -295,13 +295,13 @@ fn tokenize(s: &str) -> Result<Vec<Tok>, String> {
 fn parse(s: &str) -> Result<Expr, String> {
     let toks = tokenize(s)?;
     if toks.is_empty() {
-        return Err("empty expression".into());
+        return Err(t!("empty expression").into());
     }
     let mut p = Parser { toks, pos: 0 };
     let expr = p.expr()?;
     match p.peek() {
         None => Ok(expr),
-        Some(t) => Err(format!("unexpected {}", describe(t))),
+        Some(t) => Err(t!("unexpected {}", describe(t))),
     }
 }
 
@@ -419,7 +419,7 @@ impl Parser {
                     }
                     match self.next() {
                         Some(Tok::RParen) => Ok(Expr::Call(name, args)),
-                        _ => Err("missing \")\"".into()),
+                        _ => Err(t!("missing \")\"").into()),
                     }
                 } else {
                     Ok(Expr::Var(name))
@@ -429,11 +429,11 @@ impl Parser {
                 let e = self.expr()?;
                 match self.next() {
                     Some(Tok::RParen) => Ok(e),
-                    _ => Err("missing \")\"".into()),
+                    _ => Err(t!("missing \")\"").into()),
                 }
             }
-            Some(t) => Err(format!("unexpected {}", describe(&t))),
-            None => Err("incomplete expression".into()),
+            Some(t) => Err(t!("unexpected {}", describe(&t))),
+            None => Err(t!("incomplete expression").into()),
         }
     }
 }
@@ -445,7 +445,7 @@ fn eval(expr: &Expr, vars: &Vars) -> Result<f64, CalcError> {
             Some(v) => *v,
             None if name == "pi" => std::f64::consts::PI,
             None => {
-                return Err(CalcError { message: format!("unknown variable \"{name}\""), unknown_variable: true })
+                return Err(CalcError { message: t!("unknown variable \"{}\"", name), unknown_variable: true })
             }
         },
         Expr::Neg(e) => -eval(e, vars)?,
@@ -456,12 +456,12 @@ fn eval(expr: &Expr, vars: &Vars) -> Result<f64, CalcError> {
                 '+' => a + b,
                 '-' => a - b,
                 '*' => a * b,
-                '/' if b == 0.0 => return err("division by zero"),
+                '/' if b == 0.0 => return err(t!("division by zero")),
                 '/' => a / b,
-                '%' if b == 0.0 => return err("division by zero"),
+                '%' if b == 0.0 => return err(t!("division by zero")),
                 '%' => a % b,
                 '^' => a.powf(b),
-                _ => return err(format!("unknown operator \"{op}\"")),
+                _ => return err(t!("unknown operator \"{}\"", op)),
             }
         }
         Expr::Call(name, args) => call(name, args, vars)?,
@@ -469,13 +469,13 @@ fn eval(expr: &Expr, vars: &Vars) -> Result<f64, CalcError> {
     if v.is_finite() {
         Ok(v)
     } else {
-        err("result is not a finite number")
+        err(t!("result is not a finite number"))
     }
 }
 
 fn factorial(n: f64) -> Result<f64, CalcError> {
     if n < 0.0 || n.fract() != 0.0 || n > 170.0 {
-        return err("factorial needs a whole number from 0 to 170");
+        return err(t!("factorial needs a whole number from 0 to 170"));
     }
     Ok((1..=n as u64).map(|i| i as f64).product())
 }
@@ -489,19 +489,19 @@ fn call(name: &str, args: &[Expr], vars: &Vars) -> Result<f64, CalcError> {
     let one = |f: fn(f64) -> f64| -> Result<f64, CalcError> {
         match values.as_slice() {
             [x] => Ok(f(*x)),
-            _ => err(format!("{name}() takes one value")),
+            _ => err(t!("{}() takes one value", name)),
         }
     };
     let list = || -> Result<&[f64], CalcError> {
         if values.is_empty() {
-            err(format!("{name}() needs at least one value"))
+            err(t!("{}() needs at least one value", name))
         } else {
             Ok(&values)
         }
     };
     match name {
         "sqrt" => match values.as_slice() {
-            [x] if *x < 0.0 => err("square root of a negative number"),
+            [x] if *x < 0.0 => err(t!("square root of a negative number")),
             _ => one(f64::sqrt),
         },
         "abs" => one(f64::abs),
@@ -514,7 +514,7 @@ fn call(name: &str, args: &[Expr], vars: &Vars) -> Result<f64, CalcError> {
                 let f = 10f64.powi(*d as i32);
                 Ok((x * f).round() / f)
             }
-            _ => err("round() takes a value and optional decimals"),
+            _ => err(t!("round() takes a value and optional decimals")),
         },
         "sin" => one(f64::sin),
         "cos" => one(f64::cos),
@@ -540,7 +540,7 @@ fn call(name: &str, args: &[Expr], vars: &Vars) -> Result<f64, CalcError> {
             }
             v
         }),
-        _ => err(format!("unknown function \"{name}\"")),
+        _ => err(t!("unknown function \"{}\"", name)),
     }
 }
 

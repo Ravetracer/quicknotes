@@ -27,6 +27,10 @@ pub struct Settings {
     pub plantuml_command: Option<String>,
     /// Files larger than this are opened without syntax highlighting.
     pub large_file_mb: u64,
+    /// Last used options of the Geocaching tools, per tool id.
+    pub gc_options: std::collections::BTreeMap<String, crate::geocaching::Options>,
+    /// User interface language: "system", "en" or "de".
+    pub language: String,
 }
 
 impl Default for Settings {
@@ -41,6 +45,8 @@ impl Default for Settings {
             maximized: false,
             plantuml_command: None,
             large_file_mb: 8,
+            gc_options: Default::default(),
+            language: "system".into(),
         }
     }
 }

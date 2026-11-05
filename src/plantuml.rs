@@ -77,18 +77,18 @@ pub async fn render(cmd: Vec<String>, source: String) -> Result<String, String> 
         &argv,
         gio::SubprocessFlags::STDIN_PIPE | gio::SubprocessFlags::STDOUT_PIPE | gio::SubprocessFlags::STDERR_PIPE,
     )
-    .map_err(|e| format!("Cannot start PlantUML ({}): {e}", cmd.join(" ")))?;
+    .map_err(|e| t!("Cannot start PlantUML ({}): {}", cmd.join(" "), e))?;
     let input = glib::Bytes::from_owned(source.into_bytes());
     let (stdout, stderr) = proc
         .communicate_future(Some(&input))
         .await
-        .map_err(|e| format!("PlantUML failed: {e}"))?;
+        .map_err(|e| t!("PlantUML failed: {}", e))?;
     let out = stdout.map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
     match out.find("<svg") {
         Some(i) => Ok(out[i..].to_owned()),
         None => {
             let err = stderr.map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
-            Err(if err.trim().is_empty() { "PlantUML produced no output".into() } else { err })
+            Err(if err.trim().is_empty() { t!("PlantUML produced no output").into() } else { err })
         }
     }
 }

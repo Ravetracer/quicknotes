@@ -4,6 +4,7 @@
 use crate::editor::{CursorTarget, EditorTab, PreviewKind, Shared};
 use crate::image_tab::{self, ImageTab};
 use crate::store::{self, Session, Settings, TabKind, TabMeta};
+use crate::geocaching::{self, Field};
 use crate::{format, html, langs, APP_ID};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -127,6 +128,7 @@ pub fn persist_now() {
 
 impl Window {
     fn new(app: &adw::Application, settings: Settings) -> Rc<Self> {
+        crate::i18n::init(&settings.language);
         adw::StyleManager::default().set_color_scheme(if settings.dark {
             adw::ColorScheme::ForceDark
         } else {
@@ -156,28 +158,28 @@ impl Window {
                 .action_name(action)
                 .build()
         };
-        header.pack_start(&icon_button("tab-new-symbolic", "New note (Ctrl+N)", "win.new-note"));
-        header.pack_start(&icon_button("document-open-symbolic", "Open file (Ctrl+O)", "win.open"));
-        header.pack_start(&icon_button("document-save-symbolic", "Save to file (Ctrl+S)", "win.save"));
+        header.pack_start(&icon_button("tab-new-symbolic", t!("New note (Ctrl+N)"), "win.new-note"));
+        header.pack_start(&icon_button("document-open-symbolic", t!("Open file (Ctrl+O)"), "win.open"));
+        header.pack_start(&icon_button("document-save-symbolic", t!("Save to file (Ctrl+S)"), "win.save"));
 
         let menu_btn = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
             .menu_model(&main_menu())
             .primary(true)
-            .tooltip_text("Main menu")
+            .tooltip_text(t!("Main menu"))
             .build();
         let tools_btn = gtk::MenuButton::builder()
             .icon_name("format-justify-left-symbolic")
             .menu_model(&tools_menu())
-            .tooltip_text("Format & tools")
+            .tooltip_text(t!("Format & tools"))
             .build();
-        let theme_btn = icon_button("weather-clear-symbolic", "Toggle dark/light theme", "win.dark");
+        let theme_btn = icon_button("weather-clear-symbolic", t!("Toggle dark/light theme"), "win.dark");
         let preview_btn = gtk::ToggleButton::builder()
             .icon_name("view-dual-symbolic")
-            .tooltip_text("Toggle preview (Ctrl+Shift+V)")
+            .tooltip_text(t!("Toggle preview (Ctrl+Shift+V)"))
             .action_name("win.preview")
             .build();
-        let find_btn = icon_button("edit-find-symbolic", "Find (Ctrl+F)", "win.find");
+        let find_btn = icon_button("edit-find-symbolic", t!("Find (Ctrl+F)"), "win.find");
         header.pack_end(&menu_btn);
         header.pack_end(&theme_btn);
         header.pack_end(&tools_btn);
@@ -187,10 +189,10 @@ impl Window {
         // ----- tabs ------------------------------------------------------
         let view = adw::TabView::new();
         let tab_menu = gio::Menu::new();
-        tab_menu.append(Some("Rename…"), Some("win.tab-rename"));
-        tab_menu.append(Some("Copy Path"), Some("win.tab-copy-path"));
-        tab_menu.append(Some("Close Other Tabs"), Some("win.tab-close-others"));
-        tab_menu.append(Some("Close"), Some("win.tab-close"));
+        tab_menu.append(Some(t!("Rename…")), Some("win.tab-rename"));
+        tab_menu.append(Some(t!("Copy Path")), Some("win.tab-copy-path"));
+        tab_menu.append(Some(t!("Close Other Tabs")), Some("win.tab-close-others"));
+        tab_menu.append(Some(t!("Close")), Some("win.tab-close"));
         view.set_menu_model(Some(&tab_menu));
         let tab_bar = adw::TabBar::builder().view(&view).autohide(false).build();
 
@@ -208,7 +210,7 @@ impl Window {
         let status_pos = gtk::Label::new(None);
         let zoom_btn = gtk::Button::builder()
             .label("12 pt")
-            .tooltip_text("Font size – Ctrl+wheel or Ctrl+/−, click to reset")
+            .tooltip_text(t!("Font size – Ctrl+wheel or Ctrl+/−, click to reset"))
             .action_name("win.zoom-reset")
             .build();
         zoom_btn.add_css_class("flat");
@@ -218,7 +220,7 @@ impl Window {
 
         let languages = langs::all();
         let mut lang_ids: Vec<Option<String>> = vec![None];
-        let mut names: Vec<String> = vec!["Plain Text".into()];
+        let mut names: Vec<String> = vec![t!("Plain Text").into()];
         for (id, name) in languages {
             lang_ids.push(Some(id));
             names.push(name);
@@ -232,7 +234,7 @@ impl Window {
             None::<&gtk::Expression>,
             "string",
         )));
-        lang_drop.set_tooltip_text(Some("Syntax"));
+        lang_drop.set_tooltip_text(Some(t!("Syntax")));
         lang_drop.add_css_class("flat");
         enter_picks_first_match(&lang_drop);
 
@@ -245,11 +247,11 @@ impl Window {
         // ----- layout ----------------------------------------------------
         let empty = adw::StatusPage::builder()
             .icon_name(APP_ID)
-            .title("No Open Notes")
-            .description("Create a note with Ctrl+N or open a file with Ctrl+O.\nFiles can also be dropped here.")
+            .title(t!("No Open Notes"))
+            .description(t!("Create a note with Ctrl+N or open a file with Ctrl+O.\nFiles can also be dropped here."))
             .build();
         let new_btn = gtk::Button::builder()
-            .label("New Note")
+            .label(t!("New Note"))
             .action_name("win.new-note")
             .halign(gtk::Align::Center)
             .build();
@@ -406,9 +408,9 @@ impl Window {
             match path {
                 Some(p) => {
                     w.win.clipboard().set_text(&p.to_string_lossy());
-                    w.toast("Path copied");
+                    w.toast(t!("Path copied"));
                 }
-                None => w.toast("This note has no file"),
+                None => w.toast(t!("This note has no file")),
             }
         });
         self.action("tab-close", &[], |w| {
@@ -445,7 +447,7 @@ impl Window {
                 .application_name("QuickNotes")
                 .application_icon(APP_ID)
                 .version(env!("CARGO_PKG_VERSION"))
-                .comments("A small tabbed notepad for text and code snippets.\nNotes are stored in ~/.local/share/quicknotes.")
+                .comments(t!("A small tabbed notepad for text and code snippets.\nNotes are stored in ~/.local/share/quicknotes."))
                 .license_type(gtk::License::MitX11)
                 .build();
             about.present(Some(&w.win));
@@ -463,6 +465,24 @@ impl Window {
                 w.mark_dirty(&t.id);
             }
         });
+        let language = gio::SimpleAction::new_stateful(
+            "language",
+            Some(glib::VariantTy::STRING),
+            &self.settings.borrow().language.to_variant(),
+        );
+        let weak = self.weak();
+        language.connect_activate(move |action, param| {
+            let (Some(this), Some(lang)) = (weak.upgrade(), param.and_then(|p| p.str())) else { return };
+            if this.settings.borrow().language == lang {
+                return;
+            }
+            action.set_state(&lang.to_variant());
+            this.settings.borrow_mut().language = lang.to_owned();
+            this.schedule_persist();
+            this.toast(t!("Restart QuickNotes to switch the language"));
+        });
+        self.win.add_action(&language);
+
         self.toggle_action("dark", &[], |w, on| w.set_dark(on));
         self.set_toggle("dark", true, self.settings.borrow().dark);
         self.toggle_action("ligatures", &[], |w, on| {
@@ -482,6 +502,16 @@ impl Window {
         self.win.add_action(&tool);
         app.set_accels_for_action("win.tool::beautify", &["<Control><Alt>b"]);
         app.set_accels_for_action("win.tool::minify", &["<Control><Alt>m"]);
+
+        let gc = gio::SimpleAction::new("gc", Some(glib::VariantTy::STRING));
+        let weak = self.weak();
+        gc.connect_activate(move |_, param| {
+            if let (Some(this), Some(id)) = (weak.upgrade(), param.and_then(|p| p.str())) {
+                this.gc_tool(id);
+            }
+        });
+        gc.set_enabled(false);
+        self.win.add_action(&gc);
 
         let quit = gio::SimpleAction::new("quit", None);
         let weak = self.weak();
@@ -712,7 +742,7 @@ impl Window {
             }
         }
         let Some((t, mark)) = insert_at else {
-            self.toast("Could not read the dropped files");
+            self.toast(t!("Could not read the dropped files"));
             return false;
         };
         let mut text = None;
@@ -732,7 +762,7 @@ impl Window {
             buffer.place_cursor(&iter);
             t.view.grab_focus();
         } else {
-            self.toast("Could not read the dropped text");
+            self.toast(t!("Could not read the dropped text"));
         }
         t.buffer.delete_mark(&mark);
         text.is_some()
@@ -805,6 +835,7 @@ impl Window {
 
     fn connect_text_tab(self: &Rc<Self>, t: &Rc<EditorTab>) {
         let id = t.id.clone();
+        t.view.set_extra_menu(Some(&geocaching_menu()));
         let weak = self.weak();
         let tab = Rc::downgrade(t);
         t.buffer.connect_changed(move |_| {
@@ -900,7 +931,7 @@ impl Window {
             .tab
             .path()
             .map(|p| markup_escape(&p.to_string_lossy()))
-            .unwrap_or_else(|| "Note – stored automatically".into());
+            .unwrap_or_else(|| t!("Note – stored automatically").into());
         entry.page.set_tooltip(&tooltip);
         if self.is_current(id) {
             self.update_window_title();
@@ -925,7 +956,7 @@ impl Window {
         self.sync_ui();
     }
 
-    /// Removes a tab from bookkeeping and remembers it for "Reopen Closed Tab".
+    /// Removes a tab from bookkeeping and remembers it for t!("Reopen Closed Tab").
     fn forget(self: &Rc<Self>, tab: &Tab) {
         let meta = tab.meta();
         let id = meta.id.clone();
@@ -943,8 +974,8 @@ impl Window {
                 }
                 if is_note && has_content {
                     let toast = adw::Toast::builder()
-                        .title(format!("“{}” closed", t.title()))
-                        .button_label("Undo")
+                        .title(t!("“{}” closed", t.title()))
+                        .button_label(t!("Undo"))
                         .action_name("win.reopen-closed")
                         .timeout(6)
                         .build();
@@ -958,10 +989,10 @@ impl Window {
 
     fn confirm_close(self: &Rc<Self>, view: adw::TabView, page: adw::TabPage, t: Rc<EditorTab>) {
         let dialog = adw::AlertDialog::new(
-            Some(&format!("Save changes to “{}”?", t.title())),
-            Some("The file has unsaved changes. They will be lost if you don't save them."),
+            Some(&t!("Save changes to “{}”?", t.title())),
+            Some(t!("The file has unsaved changes. They will be lost if you don't save them.")),
         );
-        dialog.add_responses(&[("cancel", "_Cancel"), ("discard", "_Discard"), ("save", "_Save")]);
+        dialog.add_responses(&[("cancel", t!("_Cancel")), ("discard", t!("_Discard")), ("save", t!("_Save"))]);
         dialog.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
         dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
         dialog.set_default_response(Some("save"));
@@ -975,7 +1006,7 @@ impl Window {
                     match path.map(|p| t.save_to(&p)) {
                         Some(Ok(())) => true,
                         Some(Err(e)) => {
-                            this.toast(&format!("Save failed: {e}"));
+                            this.toast(&t!("Save failed: {}", e));
                             false
                         }
                         None => false,
@@ -999,7 +1030,7 @@ impl Window {
                     self.view.set_selected_page(&page);
                 }
             }
-            None => self.toast("No closed tabs"),
+            None => self.toast(t!("No closed tabs")),
         }
     }
 
@@ -1029,7 +1060,7 @@ impl Window {
             return match ImageTab::new(meta.id, path.clone()) {
                 Ok(i) => Some(self.add_tab(Tab::Image(i), false)),
                 Err(e) => {
-                    self.toast(&format!("Cannot open {}: {e}", path.display()));
+                    self.toast(&t!("Cannot open {}: {}", path.display(), e));
                     None
                 }
             };
@@ -1037,7 +1068,7 @@ impl Window {
 
         if let (None, Some(p)) = (&content, &meta.path) {
             if !p.is_file() {
-                self.toast(&format!("File not found: {}", p.display()));
+                self.toast(&t!("File not found: {}", p.display()));
                 return None;
             }
         }
@@ -1104,7 +1135,7 @@ impl Window {
                 let text = t.text();
                 if let Err(e) = store::write_note(&id, &text) {
                     eprintln!("quicknotes: cannot store note {id}: {e}");
-                    self.toast(&format!("Cannot store note: {e}"));
+                    self.toast(&t!("Cannot store note: {}", e));
                 }
                 self.auto_detect_language(&t, &text);
             } else {
@@ -1175,7 +1206,7 @@ impl Window {
         self.persist_all();
         let date = local_time("%Y-%m-%d").unwrap_or_else(|| "backup".into());
         let dialog = gtk::FileDialog::builder()
-            .title("Back Up Notes")
+            .title(t!("Back Up Notes"))
             .modal(true)
             .initial_name(format!("quicknotes-backup-{date}.tar.gz"))
             .build();
@@ -1194,21 +1225,21 @@ impl Window {
                 .await
                 .unwrap_or_else(|_| Err("backup failed".into()));
             match result {
-                Ok(()) => this.toast(&format!("Backup of {} saved to {}", tabs_count(count), tilde(&path))),
-                Err(e) => this.toast(&format!("Backup failed: {e}")),
+                Ok(()) => this.toast(&t!("Backup of {} saved to {}", tabs_count(count), tilde(&path))),
+                Err(e) => this.toast(&t!("Backup failed: {}", e)),
             }
         });
     }
 
     fn restore_backup(self: &Rc<Self>) {
         let filter = gtk::FileFilter::new();
-        filter.set_name(Some("QuickNotes backups"));
+        filter.set_name(Some(t!("QuickNotes backups")));
         filter.add_pattern("*.tar.gz");
         filter.add_pattern("*.tgz");
         let filters = gio::ListStore::new::<gtk::FileFilter>();
         filters.append(&filter);
         let dialog = gtk::FileDialog::builder()
-            .title("Restore Backup")
+            .title(t!("Restore Backup"))
             .modal(true)
             .filters(&filters)
             .default_filter(&filter)
@@ -1223,23 +1254,21 @@ impl Window {
             let backup = match result {
                 Ok(b) => b,
                 Err(e) => {
-                    this.toast(&format!("Restore failed: {e}"));
+                    this.toast(&t!("Restore failed: {}", e));
                     return;
                 }
             };
             let created = backup.manifest.created.replace('T', " ");
             let created = created.get(..16).unwrap_or(&created);
             let dialog = adw::AlertDialog::new(
-                Some("Restore Backup?"),
-                Some(&format!(
-                    "Backup from {created} with {}.\n\n\
-                     Add: puts the tabs of the backup next to your current tabs.\n\n\
-                     Replace: closes all current tabs and restores the backup including its \
-                     settings. Your current notes are saved to an automatic backup first.",
+                Some(t!("Restore Backup?")),
+                Some(&t!(
+                    "Backup from {} with {}.\n\nAdd: puts the tabs of the backup next to your current tabs.\n\nReplace: closes all current tabs and restores the backup including its settings. Your current notes are saved to an automatic backup first.",
+                    created,
                     tabs_count(backup.session.tabs.len())
                 )),
             );
-            dialog.add_responses(&[("cancel", "_Cancel"), ("add", "_Add"), ("replace", "_Replace")]);
+            dialog.add_responses(&[("cancel", t!("_Cancel")), ("add", t!("_Add")), ("replace", t!("_Replace"))]);
             dialog.set_response_appearance("add", adw::ResponseAppearance::Suggested);
             dialog.set_response_appearance("replace", adw::ResponseAppearance::Destructive);
             dialog.set_default_response(Some("add"));
@@ -1298,11 +1327,11 @@ impl Window {
     fn import_add(self: &Rc<Self>, backup: crate::backup::Backup) {
         let (restored, missing) = self.import_tabs(&backup, true);
         let mut msg = match restored {
-            0 => "All tabs of the backup are already open".to_owned(),
-            n => format!("Added {} from the backup", tabs_count(n)),
+            0 => t!("All tabs of the backup are already open").to_owned(),
+            n => t!("Added {} from the backup", tabs_count(n)),
         };
         if missing > 0 {
-            msg.push_str(&format!(" – {} not found", files_count(missing)));
+            msg.push_str(&t!(" – {} not found", files_count(missing)));
         }
         self.toast(&msg);
         self.sync_ui();
@@ -1319,7 +1348,7 @@ impl Window {
             .map_err(|e| e.to_string())
             .and_then(|_| crate::backup::write(&safety, &iso_now(), &session, &notes))
         {
-            self.toast(&format!("Restore cancelled, the current notes could not be saved: {e}"));
+            self.toast(&t!("Restore cancelled, the current notes could not be saved: {}", e));
             return;
         }
 
@@ -1357,9 +1386,9 @@ impl Window {
         }
         self.persist_all();
         self.sync_ui();
-        let mut msg = format!("Restored {}. Previous notes saved to {}", tabs_count(count), tilde(&safety));
+        let mut msg = t!("Restored {}. Previous notes saved to {}", tabs_count(count), tilde(&safety));
         if missing > 0 {
-            msg.push_str(&format!(" – {} not found", files_count(missing)));
+            msg.push_str(&t!(" – {} not found", files_count(missing)));
         }
         let toast = adw::Toast::builder().title(markup_escape(&msg)).timeout(8).build();
         self.toasts.add_toast(toast);
@@ -1385,7 +1414,7 @@ impl Window {
             return;
         }
         if !path.is_file() {
-            self.toast(&format!("Not a file: {}", path.display()));
+            self.toast(&t!("Not a file: {}", path.display()));
             return;
         }
 
@@ -1401,7 +1430,7 @@ impl Window {
                     self.add_tab(Tab::Image(i), true);
                 }
                 Err(e) => {
-                    self.toast(&format!("Cannot open {}: {e}", path.display()));
+                    self.toast(&t!("Cannot open {}: {}", path.display(), e));
                     return;
                 }
             }
@@ -1419,7 +1448,7 @@ impl Window {
             }
             self.load_into(&t, path, CursorTarget::Start);
             if large {
-                self.toast("Large file – syntax highlighting and word wrap are off");
+                self.toast(t!("Large file – syntax highlighting and word wrap are off"));
             }
         }
 
@@ -1442,7 +1471,7 @@ impl Window {
                 p.set_loading(false);
             }
             if let Err(e) = result {
-                this.toast(&format!("Cannot open {}: {e}", path.display()));
+                this.toast(&t!("Cannot open {}: {}", path.display(), e));
             }
             this.refresh_title(&t.id);
             if this.is_current(&t.id) {
@@ -1452,7 +1481,7 @@ impl Window {
     }
 
     fn open_dialog(self: &Rc<Self>) {
-        let dialog = gtk::FileDialog::builder().title("Open Files").modal(true).build();
+        let dialog = gtk::FileDialog::builder().title(t!("Open Files")).modal(true).build();
         if let Some(dir) = self.current().and_then(|t| t.path()).and_then(|p| p.parent().map(Path::to_owned)) {
             dialog.set_initial_folder(Some(&gio::File::for_path(dir)));
         }
@@ -1474,10 +1503,10 @@ impl Window {
         match path {
             Some(p) => match t.save_to(&p) {
                 Ok(()) => {
-                    self.toast(&format!("Saved {}", p.display()));
+                    self.toast(&t!("Saved {}", p.display()));
                     self.mark_dirty(&t.id);
                 }
-                Err(e) => self.toast(&format!("Save failed: {e}")),
+                Err(e) => self.toast(&t!("Save failed: {}", e)),
             },
             None => self.save_as(),
         }
@@ -1487,7 +1516,7 @@ impl Window {
     fn export(self: &Rc<Self>, format: ExportFormat) {
         let Some(t) = self.current_text() else { return };
         let Some(body) = t.document_html() else {
-            self.toast("Export works for Markdown and reStructuredText");
+            self.toast(t!("Export works for Markdown and reStructuredText"));
             return;
         };
         let title = html::first_heading(&body).unwrap_or_else(|| t.title());
@@ -1503,7 +1532,7 @@ impl Window {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| file_name_for(&title));
         let dialog = gtk::FileDialog::builder()
-            .title(format!("Export as {}", ext.to_uppercase()))
+            .title(t!("Export as {}", ext.to_uppercase()))
             .modal(true)
             .initial_name(format!("{stem}.{ext}"))
             .build();
@@ -1522,7 +1551,7 @@ impl Window {
                     this.export_done(&path, result);
                 }
                 ExportFormat::Pdf => {
-                    this.toast("Exporting PDF…");
+                    this.toast(t!("Exporting PDF…"));
                     let weak = this.weak();
                     let target = path.clone();
                     crate::export::pdf(document, base_uri, path, move |result| {
@@ -1539,8 +1568,8 @@ impl Window {
         match result {
             Ok(()) => {
                 let toast = adw::Toast::builder()
-                    .title(markup_escape(&format!("Exported to {}", tilde(path))))
-                    .button_label("Open")
+                    .title(markup_escape(&t!("Exported to {}", tilde(path))))
+                    .button_label(t!("Open"))
                     .timeout(6)
                     .build();
                 let file = gio::File::for_path(path);
@@ -1550,13 +1579,13 @@ impl Window {
                 });
                 self.toasts.add_toast(toast);
             }
-            Err(e) => self.toast(&format!("Export failed: {e}")),
+            Err(e) => self.toast(&t!("Export failed: {}", e)),
         }
     }
 
     fn save_as(self: &Rc<Self>) {
         let Some(t) = self.current_text() else { return };
-        let dialog = gtk::FileDialog::builder().title("Save As").modal(true).build();
+        let dialog = gtk::FileDialog::builder().title(t!("Save As")).modal(true).build();
         let current_path = t.path.borrow().clone();
         match current_path {
             Some(p) => dialog.set_initial_file(Some(&gio::File::for_path(p))),
@@ -1585,12 +1614,12 @@ impl Window {
                             t.set_language(Some(&lang));
                         }
                     }
-                    this.toast(&format!("Saved {}", path.display()));
+                    this.toast(&t!("Saved {}", path.display()));
                     this.refresh_title(&t.id);
                     this.mark_dirty(&t.id);
                     this.sync_ui();
                 }
-                Err(e) => this.toast(&format!("Save failed: {e}")),
+                Err(e) => this.toast(&t!("Save failed: {}", e)),
             }
         });
     }
@@ -1598,7 +1627,7 @@ impl Window {
     fn reload(self: &Rc<Self>) {
         let Some(t) = self.current_text() else { return };
         let Some(path) = t.path.borrow().clone() else {
-            self.toast("This note has no file to reload");
+            self.toast(t!("This note has no file to reload"));
             return;
         };
         if !t.buffer.is_modified() {
@@ -1607,10 +1636,10 @@ impl Window {
             return;
         }
         let dialog = adw::AlertDialog::new(
-            Some("Discard Changes and Reload?"),
-            Some("Your unsaved changes to this file will be lost."),
+            Some(t!("Discard Changes and Reload?")),
+            Some(t!("Your unsaved changes to this file will be lost.")),
         );
-        dialog.add_responses(&[("cancel", "_Cancel"), ("reload", "_Reload")]);
+        dialog.add_responses(&[("cancel", t!("_Cancel")), ("reload", t!("_Reload"))]);
         dialog.set_response_appearance("reload", adw::ResponseAppearance::Destructive);
         dialog.set_close_response("cancel");
         let this = self.clone();
@@ -1623,7 +1652,7 @@ impl Window {
 
     fn rename(self: &Rc<Self>, page: &adw::TabPage) {
         let Some(Entry { tab: Tab::Text(t), .. }) = self.entry_for_page(page) else {
-            self.toast("Only text tabs can be renamed");
+            self.toast(t!("Only text tabs can be renamed"));
             return;
         };
         let entry = gtk::Entry::builder()
@@ -1631,11 +1660,11 @@ impl Window {
             .activates_default(true)
             .build();
         let dialog = adw::AlertDialog::new(
-            Some("Rename Tab"),
-            Some("Leave empty to name the tab after its first line or file."),
+            Some(t!("Rename Tab")),
+            Some(t!("Leave empty to name the tab after its first line or file.")),
         );
         dialog.set_extra_child(Some(&entry));
-        dialog.add_responses(&[("cancel", "_Cancel"), ("rename", "_Rename")]);
+        dialog.add_responses(&[("cancel", t!("_Cancel")), ("rename", t!("_Rename"))]);
         dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
         dialog.set_default_response(Some("rename"));
         dialog.set_close_response("cancel");
@@ -1667,7 +1696,7 @@ impl Window {
         match format::apply(tool, &input, lang.as_deref()) {
             Ok((output, out_lang)) => {
                 if output == input {
-                    self.toast("Nothing to change");
+                    self.toast(t!("Nothing to change"));
                     return;
                 }
                 let offset = start.offset();
@@ -1692,6 +1721,180 @@ impl Window {
             }
             Err(e) => self.toast(&e),
         }
+    }
+
+    // ===== geocaching tools ==============================================
+
+    fn gc_tool(self: &Rc<Self>, id: &str) {
+        let Some(tool) = geocaching::find(id) else { return };
+        let Some(t) = self.current_text() else { return };
+        let Some((start, end)) = t.buffer.selection_bounds() else {
+            self.toast(t!("Select some text first"));
+            return;
+        };
+        let input = t.buffer.text(&start, &end, true).to_string();
+        let mark = t.buffer.create_mark(None, &end, true);
+        if tool.fields.is_empty() {
+            match tool.run(&input, &Default::default()) {
+                Ok(out) => self.gc_insert(&t, &mark, &out),
+                Err(e) => self.toast(&e),
+            }
+            t.buffer.delete_mark(&mark);
+            return;
+        }
+        self.gc_dialog(tool, t, input, mark);
+    }
+
+    /// Options dialog with a live preview of the result.
+    fn gc_dialog(self: &Rc<Self>, tool: &'static geocaching::Tool, t: Rc<EditorTab>, input: String, mark: gtk::TextMark) {
+        let mut initial = self.settings.borrow().gc_options.get(tool.id).cloned().unwrap_or_default();
+        for f in tool.fields {
+            let v = f.value(&initial);
+            initial.insert(f.key().to_owned(), v);
+        }
+        let values = Rc::new(RefCell::new(initial));
+        let input = Rc::new(input);
+
+        let dialog = adw::AlertDialog::new(Some(crate::i18n::tr(tool.label)), None);
+        dialog.add_responses(&[("cancel", t!("_Cancel")), ("copy", t!("_Copy")), ("insert", t!("_Insert Below"))]);
+        dialog.set_response_appearance("insert", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("insert"));
+        dialog.set_close_response("cancel");
+
+        let preview = gtk::Label::builder()
+            .xalign(0.0)
+            .yalign(0.0)
+            .wrap(true)
+            .wrap_mode(gtk::pango::WrapMode::WordChar)
+            .selectable(true)
+            .margin_top(8)
+            .margin_bottom(8)
+            .margin_start(10)
+            .margin_end(10)
+            .build();
+        preview.add_css_class("monospace");
+        let refresh: Rc<dyn Fn()> = {
+            let (values, input, preview, dialog) = (values.clone(), input.clone(), preview.clone(), dialog.downgrade());
+            Rc::new(move || {
+                let result = tool.run(&input, &values.borrow());
+                let ok = result.is_ok();
+                preview.set_text(&result.unwrap_or_else(|e| e));
+                if ok {
+                    preview.remove_css_class("error");
+                } else {
+                    preview.add_css_class("error");
+                }
+                if let Some(d) = dialog.upgrade() {
+                    d.set_response_enabled("copy", ok);
+                    d.set_response_enabled("insert", ok);
+                }
+            })
+        };
+
+        let list = gtk::ListBox::builder().selection_mode(gtk::SelectionMode::None).build();
+        list.add_css_class("boxed-list");
+        for field in tool.fields {
+            let key = field.key().to_owned();
+            let current = values.borrow().get(&key).cloned().unwrap_or_default();
+            let (values, refresh) = (values.clone(), refresh.clone());
+            let row: gtk::Widget = match field {
+                Field::Choice { label, options, .. } => {
+                    let names: Vec<&str> = options.iter().map(|o| crate::i18n::tr(o.1)).collect();
+                    let row = adw::ComboRow::builder()
+                        .title(crate::i18n::tr(label))
+                        .use_markup(false)
+                        .model(&gtk::StringList::new(&names))
+                        .selected(options.iter().position(|o| o.0 == current).unwrap_or(0) as u32)
+                        .build();
+                    row.connect_selected_notify(move |r| {
+                        if let Some(o) = options.get(r.selected() as usize) {
+                            values.borrow_mut().insert(key.clone(), o.0.to_owned());
+                            refresh();
+                        }
+                    });
+                    row.upcast()
+                }
+                Field::Toggle { label, .. } => {
+                    let row = adw::SwitchRow::builder().title(crate::i18n::tr(label)).use_markup(false).active(current == "true").build();
+                    row.connect_active_notify(move |r| {
+                        values.borrow_mut().insert(key.clone(), r.is_active().to_string());
+                        refresh();
+                    });
+                    row.upcast()
+                }
+                Field::Number { label, min, max, .. } => {
+                    let row = adw::SpinRow::with_range(*min as f64, *max as f64, 1.0);
+                    row.set_title(crate::i18n::tr(label));
+                    row.set_use_markup(false);
+                    row.set_value(current.parse().unwrap_or(0.0));
+                    row.connect_value_notify(move |r| {
+                        values.borrow_mut().insert(key.clone(), (r.value() as i32).to_string());
+                        refresh();
+                    });
+                    row.upcast()
+                }
+            };
+            list.append(&row);
+        }
+
+        let heading = gtk::Label::builder().label(t!("Result")).xalign(0.0).build();
+        heading.add_css_class("heading");
+        let scrolled = gtk::ScrolledWindow::builder()
+            .child(&preview)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .max_content_height(260)
+            .build();
+        let frame = gtk::Frame::builder().child(&scrolled).build();
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        content.set_width_request(420);
+        content.append(&list);
+        content.append(&heading);
+        content.append(&frame);
+        dialog.set_extra_child(Some(&content));
+        refresh();
+
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let response = dialog.choose_future(&this.win).await;
+            if response == "insert" || response == "copy" {
+                let values = values.borrow().clone();
+                match tool.run(&input, &values) {
+                    Ok(out) if response == "copy" => {
+                        this.win.clipboard().set_text(&out);
+                        this.toast(t!("Result copied"));
+                    }
+                    Ok(out) => this.gc_insert(&t, &mark, &out),
+                    Err(e) => this.toast(&e),
+                }
+                this.settings.borrow_mut().gc_options.insert(tool.id.to_owned(), values);
+                this.schedule_persist();
+            }
+            t.buffer.delete_mark(&mark);
+        });
+    }
+
+    /// Inserts `out` on a new line below the line where `mark` (the end of
+    /// the selection) is, and selects it.
+    fn gc_insert(&self, t: &EditorTab, mark: &gtk::TextMark, out: &str) {
+        let buf = &t.buffer;
+        let mut pos = buf.iter_at_mark(mark);
+        let (text, skip) = if pos.starts_line() {
+            (format!("{out}\n"), 0)
+        } else {
+            if !pos.ends_line() {
+                pos.forward_to_line_end();
+            }
+            (format!("\n{out}"), 1)
+        };
+        let start = pos.offset() + skip;
+        buf.begin_user_action();
+        buf.insert(&mut pos, &text);
+        buf.end_user_action();
+        let s = buf.iter_at_offset(start);
+        let e = buf.iter_at_offset(start + out.chars().count() as i32);
+        buf.select_range(&s, &e);
+        t.view.scroll_mark_onscreen(&buf.selection_bound());
     }
 
     // ===== appearance =====================================================
@@ -1756,7 +1959,7 @@ impl Window {
         let dark = self.settings.borrow().dark;
         self.theme_btn.set_icon_name(if dark { "weather-clear-symbolic" } else { "weather-clear-night-symbolic" });
         self.theme_btn
-            .set_tooltip_text(Some(if dark { "Switch to light theme" } else { "Switch to dark theme" }));
+            .set_tooltip_text(Some(if dark { t!("Switch to light theme") } else { t!("Switch to dark theme") }));
     }
 
     fn toast(&self, text: &str) {
@@ -1790,6 +1993,7 @@ impl Window {
                 self.set_toggle("wrap", false, false);
                 self.set_enabled("export-html", false);
                 self.set_enabled("export-pdf", false);
+                self.set_enabled("gc", false);
             }
         }
         self.guard.set(false);
@@ -1830,11 +2034,11 @@ impl Window {
             Some(Tab::Text(t)) => {
                 let mut info = vec![match t.path.borrow().as_ref() {
                     Some(p) => tilde(p),
-                    None => "Note".into(),
+                    None => t!("Note").into(),
                 }];
-                info.push(format!("{} lines", t.buffer.line_count()));
+                info.push(t!("{} lines", t.buffer.line_count()));
                 if t.large.get() {
-                    info.push("large file, highlighting off".into());
+                    info.push(t!("large file, highlighting off").into());
                 }
                 self.status_info.set_text(&info.join("  ·  "));
                 self.update_position();
@@ -1854,9 +2058,10 @@ impl Window {
         let Some(t) = self.current_text() else { return };
         let buf = &t.buffer;
         let iter = buf.iter_at_mark(&buf.get_insert());
-        let mut text = format!("Ln {}, Col {}", iter.line() + 1, iter.line_offset() + 1);
+        let mut text = t!("Ln {}, Col {}", iter.line() + 1, iter.line_offset() + 1);
+        self.set_enabled("gc", buf.has_selection());
         if let Some((s, e)) = buf.selection_bounds() {
-            text.push_str(&format!("  ({} selected)", e.offset() - s.offset()));
+            text.push_str(&t!("  ({} selected)", e.offset() - s.offset()));
         }
         self.status_pos.set_text(&text);
         if self.search.revealer.reveals_child() {
@@ -2046,9 +2251,9 @@ impl Window {
         let ctx = self.ensure_search_context(&t);
         let count = ctx.occurrences_count();
         match ctx.replace_all(&self.search.replace.text()) {
-            Ok(_) if count > 0 => self.toast(&format!("Replaced {count} occurrences")),
-            Ok(_) => self.toast("Nothing replaced"),
-            Err(e) => self.toast(&format!("Replace failed: {e}")),
+            Ok(_) if count > 0 => self.toast(&t!("Replaced {} occurrences", count)),
+            Ok(_) => self.toast(t!("Nothing replaced")),
+            Err(e) => self.toast(&t!("Replace failed: {}", e)),
         }
     }
 
@@ -2067,11 +2272,11 @@ impl Window {
         let text = if total < 0 {
             "…".to_owned()
         } else if total == 0 {
-            "No matches".to_owned()
+            t!("No matches").to_owned()
         } else {
             match t.buffer.selection_bounds().map(|(s, e)| ctx.occurrence_position(&s, &e)) {
-                Some(pos) if pos > 0 => format!("{pos} of {total}"),
-                _ => format!("{total} matches"),
+                Some(pos) if pos > 0 => t!("{} of {}", pos, total),
+                _ => t!("{} matches", total),
             }
         };
         label.set_text(&text);
@@ -2177,8 +2382,8 @@ fn build_font_dropdown(widget: &impl IsA<gtk::Widget>, current: &str) -> gtk::Dr
     let (names, mono_count) = font_families(widget, current);
     let captions: Rc<HashMap<String, &'static str>> = Rc::new(
         [
-            names.first().map(|n| (n.clone(), "Monospace fonts")),
-            names.get(mono_count).map(|n| (n.clone(), "Other fonts")),
+            names.first().map(|n| (n.clone(), t!("Monospace fonts"))),
+            names.get(mono_count).map(|n| (n.clone(), t!("Other fonts"))),
         ]
         .into_iter()
         .flatten()
@@ -2221,7 +2426,7 @@ fn build_font_dropdown(widget: &impl IsA<gtk::Widget>, current: &str) -> gtk::Dr
             let group = if in_list { captions.get(family.as_str()).copied() } else { None };
             caption.set_text(group.unwrap_or_default());
             caption.set_visible(group.is_some());
-            if group == Some("Other fonts") {
+            if group == Some(t!("Other fonts")) {
                 row.add_css_class("font-group-start");
             } else {
                 row.remove_css_class("font-group-start");
@@ -2248,7 +2453,7 @@ fn build_font_dropdown(widget: &impl IsA<gtk::Widget>, current: &str) -> gtk::Dr
     drop.set_list_factory(Some(&factory(true)));
     drop.set_enable_search(true);
     drop.set_search_match_mode(gtk::StringFilterMatchMode::Substring);
-    drop.set_tooltip_text(Some("Editor font"));
+    drop.set_tooltip_text(Some(t!("Editor font")));
     drop.add_css_class("flat");
     enter_picks_first_match(&drop);
     drop
@@ -2288,11 +2493,11 @@ fn build_search_ui() -> SearchUi {
     settings.set_wrap_around(true);
 
     let find = gtk::SearchEntry::builder()
-        .placeholder_text("Find")
+        .placeholder_text(t!("Find"))
         .hexpand(true)
         .build();
     let replace = gtk::Entry::builder()
-        .placeholder_text("Replace with")
+        .placeholder_text(t!("Replace with"))
         .hexpand(true)
         .build();
 
@@ -2329,16 +2534,16 @@ fn build_search_ui() -> SearchUi {
     let find_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     find_row.append(&find);
     find_row.append(&nav);
-    find_row.append(&toggle("Aa", "Match case", "case-sensitive"));
-    find_row.append(&toggle("W", "Whole words", "at-word-boundaries"));
-    find_row.append(&toggle(".*", "Regular expression", "regex-enabled"));
+    find_row.append(&toggle("Aa", t!("Match case"), "case-sensitive"));
+    find_row.append(&toggle("W", t!("Whole words"), "at-word-boundaries"));
+    find_row.append(&toggle(".*", t!("Regular expression"), "regex-enabled"));
     find_row.append(&count);
     find_row.append(&close);
 
     let replace_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     replace_row.append(&replace);
-    replace_row.append(&named_button("replace", None, Some("Replace"), "Replace current match (Enter)"));
-    replace_row.append(&named_button("replace-all", None, Some("Replace All"), "Replace all matches"));
+    replace_row.append(&named_button("replace", None, Some(t!("Replace")), t!("Replace current match (Enter)")));
+    replace_row.append(&named_button("replace-all", None, Some(t!("Replace All")), t!("Replace all matches")));
     // Align the replace row with the find entry.
     replace_row.set_margin_end(0);
 
@@ -2368,50 +2573,74 @@ fn main_menu() -> gio::Menu {
     menu.append_section(
         None,
         &section(&[
-            ("New Note", "win.new-note"),
-            ("New Calculation", "win.new-calculation"),
-            ("Open File…", "win.open"),
-            ("Save", "win.save"),
-            ("Save As…", "win.save-as"),
-            ("Reload from Disk", "win.reload"),
+            (t!("New Note"), "win.new-note"),
+            (t!("New Calculation"), "win.new-calculation"),
+            (t!("Open File…"), "win.open"),
+            (t!("Save"), "win.save"),
+            (t!("Save As…"), "win.save-as"),
+            (t!("Reload from Disk"), "win.reload"),
         ]),
     );
     menu.append_section(
         None,
-        &section(&[("Export as HTML…", "win.export-html"), ("Export as PDF…", "win.export-pdf")]),
+        &section(&[(t!("Export as HTML…"), "win.export-html"), (t!("Export as PDF…"), "win.export-pdf")]),
     );
     menu.append_section(
         None,
         &section(&[
-            ("Find…", "win.find"),
-            ("Find and Replace…", "win.replace"),
-            ("Rename Tab…", "win.rename"),
-            ("Reopen Closed Tab", "win.reopen-closed"),
+            (t!("Find…"), "win.find"),
+            (t!("Find and Replace…"), "win.replace"),
+            (t!("Rename Tab…"), "win.rename"),
+            (t!("Reopen Closed Tab"), "win.reopen-closed"),
         ]),
     );
     menu.append_section(
         None,
-        &section(&[("Word Wrap", "win.wrap"), ("Preview", "win.preview"), ("Dark Theme", "win.dark")]),
-    );
-    menu.append_section(
-        None,
-        &section(&[
-            ("Larger Font", "win.zoom-in"),
-            ("Smaller Font", "win.zoom-out"),
-            ("Reset Font Size", "win.zoom-reset"),
-            ("Font Ligatures", "win.ligatures"),
-        ]),
+        &section(&[(t!("Word Wrap"), "win.wrap"), (t!("Preview"), "win.preview"), (t!("Dark Theme"), "win.dark")]),
     );
     menu.append_section(
         None,
         &section(&[
-            ("Back Up Notes…", "win.backup"),
-            ("Restore Backup…", "win.restore-backup"),
-            ("Open Notes Folder", "win.open-data-dir"),
+            (t!("Larger Font"), "win.zoom-in"),
+            (t!("Smaller Font"), "win.zoom-out"),
+            (t!("Reset Font Size"), "win.zoom-reset"),
+            (t!("Font Ligatures"), "win.ligatures"),
         ]),
     );
-    menu.append_section(None, &section(&[("Help", "win.help"), ("About QuickNotes", "win.about")]),
+    menu.append_section(
+        None,
+        &section(&[
+            (t!("Back Up Notes…"), "win.backup"),
+            (t!("Restore Backup…"), "win.restore-backup"),
+            (t!("Open Notes Folder"), "win.open-data-dir"),
+        ]),
     );
+    let language = gio::Menu::new();
+    language.append(Some(t!("System Default")), Some("win.language::system"));
+    language.append(Some("English"), Some("win.language::en"));
+    language.append(Some("Deutsch"), Some("win.language::de"));
+    let language_section = gio::Menu::new();
+    language_section.append_submenu(Some(t!("Language")), &language);
+    menu.append_section(None, &language_section);
+    menu.append_section(None, &section(&[(t!("Help"), "win.help"), (t!("About QuickNotes"), "win.about")]),
+    );
+    menu
+}
+
+/// "Geocaching" submenu for the editor's context menu.
+fn geocaching_menu() -> gio::Menu {
+    let sub = gio::Menu::new();
+    for section in geocaching::MENU {
+        let s = gio::Menu::new();
+        for tool in section.iter().filter_map(|id| geocaching::find(id)) {
+            let name = crate::i18n::tr(tool.label);
+            let label = if tool.fields.is_empty() { name.to_owned() } else { format!("{name}…") };
+            s.append(Some(&label), Some(&format!("win.gc::{}", tool.id)));
+        }
+        sub.append_section(None, &s);
+    }
+    let menu = gio::Menu::new();
+    menu.append_submenu(Some("Geocaching"), &sub);
     menu
 }
 
@@ -2425,48 +2654,48 @@ fn tools_menu() -> gio::Menu {
         m
     };
     menu.append_section(
-        Some("Applies to the selection or the whole tab"),
-        &items(&[("Beautify (auto-detect)", "beautify"), ("Minify (auto-detect)", "minify")]),
+        Some(t!("Applies to the selection or the whole tab")),
+        &items(&[(t!("Beautify (auto-detect)"), "beautify"), (t!("Minify (auto-detect)"), "minify")]),
     );
     let more = gio::Menu::new();
     more.append_submenu(
-        Some("Format"),
+        Some(t!("Format")),
         &items(&[
-            ("Pretty JSON", "json-pretty"),
-            ("Minify JSON", "json-minify"),
-            ("Pretty XML", "xml-pretty"),
-            ("Minify XML", "xml-minify"),
-            ("Pretty YAML", "yaml-pretty"),
-            ("Pretty SQL", "sql-pretty"),
+            (t!("Pretty JSON"), "json-pretty"),
+            (t!("Minify JSON"), "json-minify"),
+            (t!("Pretty XML"), "xml-pretty"),
+            (t!("Minify XML"), "xml-minify"),
+            (t!("Pretty YAML"), "yaml-pretty"),
+            (t!("Pretty SQL"), "sql-pretty"),
         ]),
     );
     more.append_submenu(
-        Some("Convert"),
+        Some(t!("Convert")),
         &items(&[("JSON → YAML", "json-to-yaml"), ("YAML → JSON", "yaml-to-json")]),
     );
     more.append_submenu(
-        Some("Lines"),
+        Some(t!("Lines")),
         &items(&[
-            ("Sort", "sort-lines"),
-            ("Sort (case-insensitive)", "sort-lines-ci"),
-            ("Reverse", "reverse-lines"),
-            ("Remove Duplicates", "unique-lines"),
-            ("Remove Empty Lines", "remove-empty-lines"),
-            ("Trim Trailing Whitespace", "trim-trailing"),
+            (t!("Sort"), "sort-lines"),
+            (t!("Sort (case-insensitive)"), "sort-lines-ci"),
+            (t!("Reverse"), "reverse-lines"),
+            (t!("Remove Duplicates"), "unique-lines"),
+            (t!("Remove Empty Lines"), "remove-empty-lines"),
+            (t!("Trim Trailing Whitespace"), "trim-trailing"),
         ]),
     );
     more.append_submenu(
-        Some("Encode / Decode"),
+        Some(t!("Encode / Decode")),
         &items(&[
-            ("Base64 Encode", "base64-encode"),
-            ("Base64 Decode", "base64-decode"),
-            ("URL Encode", "url-encode"),
-            ("URL Decode", "url-decode"),
-            ("JSON String Escape", "json-escape"),
-            ("JSON String Unescape", "json-unescape"),
+            (t!("Base64 Encode"), "base64-encode"),
+            (t!("Base64 Decode"), "base64-decode"),
+            (t!("URL Encode"), "url-encode"),
+            (t!("URL Decode"), "url-decode"),
+            (t!("JSON String Escape"), "json-escape"),
+            (t!("JSON String Unescape"), "json-unescape"),
         ]),
     );
-    more.append_submenu(Some("Case"), &items(&[("UPPERCASE", "upper"), ("lowercase", "lower")]));
+    more.append_submenu(Some(t!("Case")), &items(&[(t!("UPPERCASE"), "upper"), (t!("lowercase"), "lower")]));
     menu.append_section(None, &more);
     menu
 }
@@ -2485,11 +2714,11 @@ fn descendants(widget: &impl IsA<gtk::Widget>) -> Vec<gtk::Widget> {
 }
 
 fn tabs_count(n: usize) -> String {
-    if n == 1 { "1 tab".into() } else { format!("{n} tabs") }
+    if n == 1 { t!("{} tab", n) } else { t!("{} tabs", n) }
 }
 
 fn files_count(n: usize) -> String {
-    if n == 1 { "1 file".into() } else { format!("{n} files") }
+    if n == 1 { t!("{} file", n) } else { t!("{} files", n) }
 }
 
 /// Local time formatted with a `strftime`-like pattern.

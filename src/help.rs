@@ -5,11 +5,16 @@ use adw::prelude::*;
 use gtk::{gdk, gio};
 use webkit6::prelude::*;
 
-const HELP: &str = include_str!("../data/help.md");
+const HELP_EN: &str = include_str!("../data/help.md");
+const HELP_DE: &str = include_str!("../data/help.de.md");
 
 pub fn show(parent: &impl IsA<gtk::Window>, dark: bool, zoom: f64) {
-    let body = markdown::to_html(HELP);
-    let page = html::static_page("QuickNotes Help", &body, dark);
+    let help = match crate::i18n::lang() {
+        crate::i18n::Lang::De => HELP_DE,
+        crate::i18n::Lang::En => HELP_EN,
+    };
+    let body = markdown::to_html(help);
+    let page = html::static_page(t!("QuickNotes Help"), &body, dark);
 
     let webview = webkit6::WebView::new();
     webview.set_vexpand(true);
@@ -48,7 +53,7 @@ pub fn show(parent: &impl IsA<gtk::Window>, dark: bool, zoom: f64) {
     toolbar.add_top_bar(&adw::HeaderBar::new());
     toolbar.set_content(Some(&webview));
     let window = adw::Window::builder()
-        .title("QuickNotes Help")
+        .title(t!("QuickNotes Help"))
         .default_width(880)
         .default_height(780)
         .transient_for(parent)

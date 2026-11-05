@@ -59,7 +59,7 @@ impl ImageTab {
         root.set_child(Some(&scrolled));
         root.set_widget_name(&id);
 
-        let zoom_label = gtk::Label::new(Some("Fit"));
+        let zoom_label = gtk::Label::new(Some(t!("Fit")));
         zoom_label.set_width_chars(5);
 
         let tab = Rc::new(Self {
@@ -101,11 +101,11 @@ impl ImageTab {
             });
             b
         };
-        bar.append(&button("zoom-out-symbolic", "Zoom out", Box::new(|t| t.step(-1.0))));
+        bar.append(&button("zoom-out-symbolic", t!("Zoom out"), Box::new(|t| t.step(-1.0))));
         bar.append(&self.zoom_label);
-        bar.append(&button("zoom-in-symbolic", "Zoom in", Box::new(|t| t.step(1.0))));
-        bar.append(&button("zoom-original-symbolic", "Original size", Box::new(|t| t.set_zoom(Some(1.0)))));
-        bar.append(&button("zoom-fit-best-symbolic", "Fit to window", Box::new(|t| t.set_zoom(None))));
+        bar.append(&button("zoom-in-symbolic", t!("Zoom in"), Box::new(|t| t.step(1.0))));
+        bar.append(&button("zoom-original-symbolic", t!("Original size"), Box::new(|t| t.set_zoom(Some(1.0)))));
+        bar.append(&button("zoom-fit-best-symbolic", t!("Fit to window"), Box::new(|t| t.set_zoom(None))));
         self.root.add_overlay(&bar);
 
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
@@ -154,7 +154,7 @@ impl ImageTab {
                 self.picture.set_halign(gtk::Align::Fill);
                 self.picture.set_valign(gtk::Align::Fill);
                 self.picture.set_content_fit(gtk::ContentFit::ScaleDown);
-                self.zoom_label.set_text("Fit");
+                self.zoom_label.set_text(t!("Fit"));
             }
             Some(z) => {
                 let (w, h) = ((self.width as f64 * z) as i32, (self.height as f64 * z) as i32);
@@ -186,7 +186,7 @@ impl ImageTab {
         self.path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Image".into())
+            .unwrap_or_else(|| t!("Image").into())
     }
 
     pub fn info(&self) -> String {

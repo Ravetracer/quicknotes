@@ -54,11 +54,11 @@ pub fn pdf(html: String, base_uri: Option<String>, out: PathBuf, done: impl FnOn
     let finish_timeout = finish.clone();
     glib::timeout_add_local_once(Duration::from_secs(10), move || {
         if !started.get() {
-            finish_timeout(Err("GTK's \"Print to File\" printer is not available".into()));
+            finish_timeout(Err(t!("GTK's \"Print to File\" printer is not available").into()));
         }
     });
     let finish_overall = finish;
-    glib::timeout_add_local_once(TIMEOUT, move || finish_overall(Err("PDF export timed out".into())));
+    glib::timeout_add_local_once(TIMEOUT, move || finish_overall(Err(t!("PDF export timed out").into())));
 }
 
 fn is_file_printer(printer: &gtk::Printer) -> bool {

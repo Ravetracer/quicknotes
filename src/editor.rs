@@ -324,14 +324,14 @@ impl EditorTab {
             // Lines like "{" or "<" make poor titles; name data snippets by language.
             if !line.is_empty() {
                 if let Some(lang) = self.buffer.language() {
-                    return format!("{} snippet", lang.name());
+                    return t!("{} snippet", lang.name());
                 }
             }
             if !iter.forward_line() {
                 break;
             }
         }
-        "Untitled".into()
+        t!("Untitled").into()
     }
 
     pub fn set_large(&self, large: bool) {
@@ -413,7 +413,7 @@ impl EditorTab {
                 };
                 renderer.clipboard().set_text(&text);
                 if let Some(t) = weak.upgrade() {
-                    t.message(&format!("Copied “{text}”"));
+                    t.message(&t!("Copied “{}”", text));
                 }
             });
             // Text metrics are only final once the column is shown.

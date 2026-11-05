@@ -75,7 +75,7 @@ pub fn write(path: &Path, created: &str, session: &Session, notes: &[(String, St
 pub fn read(path: &Path) -> Result<Backup, String> {
     let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut archive = tar::Archive::new(GzDecoder::new(file));
-    let not_backup = || "This is not a QuickNotes backup (.tar.gz)".to_owned();
+    let not_backup = || t!("This is not a QuickNotes backup (.tar.gz)").to_owned();
     let mut manifest = None;
     let mut session = None;
     let mut notes = HashMap::new();
@@ -90,7 +90,7 @@ pub fn read(path: &Path) -> Result<Backup, String> {
         let size = entry.header().size().unwrap_or(0);
         total += size;
         if size > MAX_ENTRY || total > MAX_TOTAL {
-            return Err("The backup is unexpectedly large".into());
+            return Err(t!("The backup is unexpectedly large").into());
         }
         let mut data = Vec::with_capacity(size as usize);
         entry.by_ref().take(MAX_ENTRY).read_to_end(&mut data).map_err(|_| not_backup())?;
@@ -102,7 +102,7 @@ pub fn read(path: &Path) -> Result<Backup, String> {
             "session.json" => {
                 session = Some(
                     serde_json::from_slice::<Session>(&data)
-                        .map_err(|e| format!("The backup's session is damaged: {e}"))?,
+                        .map_err(|e| t!("The backup's session is damaged: {}", e))?,
                 );
             }
             n => {
@@ -117,7 +117,7 @@ pub fn read(path: &Path) -> Result<Backup, String> {
 
     let manifest = manifest.ok_or_else(not_backup)?;
     if manifest.format > FORMAT {
-        return Err("The backup was created by a newer QuickNotes version".into());
+        return Err(t!("The backup was created by a newer QuickNotes version").into());
     }
     let session = session.ok_or_else(not_backup)?;
     Ok(Backup { manifest, session, notes })

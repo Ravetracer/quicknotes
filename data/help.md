@@ -1,7 +1,8 @@
 # QuickNotes Help {#top}
 
 **Contents:** [Notes & tabs](#notes) · [Calculations](#calc) · [Templates](#templates) ·
-[Previews & export](#previews) · [Tools](#tools) · [Backup](#backup) · [Shortcuts](#shortcuts)
+[Previews & export](#previews) · [Tools](#tools) · [Geocaching](#geocaching) · [Backup](#backup) ·
+[Shortcuts](#shortcuts)
 
 ## Notes & tabs {#notes}
 
@@ -16,6 +17,8 @@ Every tab is either a **note** or an **opened file**.
 - The tab title is the first line of a note. *Rename Tab* (F2) sets a fixed title.
 - Syntax highlighting is chosen automatically and can be changed in the status bar.
 - The editor font and its size are set in the status bar (or with Ctrl+mouse wheel).
+- The interface language (English, Deutsch or the system language) is chosen in the main menu
+  under *Language* and applies after a restart.
 
 ## Calculations {#calc}
 
@@ -136,6 +139,41 @@ nothing is selected:
 - **Lines:** sort, reverse, remove duplicates or empty lines, trim trailing whitespace
 - **Encode / Decode:** Base64, URL, JSON strings
 - **Case:** UPPERCASE, lowercase
+
+## Geocaching tools {#geocaching}
+
+Select some text, right-click it and open the **Geocaching** submenu. The result is
+inserted on a new line **below the selection** and selected, so it can be copied, edited
+or run through the next tool right away. Undo (Ctrl+Z) removes it again.
+
+Tools with a `…` open a small dialog with their options and a live preview of the result.
+*Copy* puts the result on the clipboard instead of inserting it; parts of the result can also be
+selected with the mouse. The options are remembered for the next time.
+
+| Tool | What it does |
+|---|---|
+| ROT13, ROT5, ROT18, ROT47 | Quick rotations: letters, digits, letters + digits, all printable ASCII characters |
+| Caesar Rotation | Rotates letters by any shift (negative = back), or lists all 25 rotations |
+| Letter Value | A=1 … Z=26 (or reversed): values, word sums, sum, checksums and the single-digit checksum; also numbers → letters |
+| Letter Frequency | How often each letter occurs; optionally digits and the missing letters |
+| Scrabble Value | Letter values of German or English Scrabble with sum |
+| Prime Alphabet | A=2, B=3, C=5 … Z=101 and back |
+| Hexadecimal | Hex ↔ text (`47 45 4F` or `47454F` = GEO), hex ↔ decimal |
+| ASCII Codes | Character codes ↔ text (`71 69 79` = GEO, also without separators) |
+| Binary | Binary ↔ decimal, binary ↔ text (8 bits per character) |
+| Roman Numerals | Both directions, detected automatically; also IIII or IIX |
+| Morse Code | Both directions, detected automatically; `-` or `_` as dash |
+| Phone Keypad | Multi-tap (`4 33 666`), key + position (`41 32 63`) or key only (`436`) |
+
+**Notes**
+
+- Umlauts: *Letter Value* can count Ä, Ö, Ü, ß as AE, OE, UE, SS, as 27–30 or ignore them.
+  German Scrabble has its own tiles for Ä, Ö and Ü.
+- Words are separated by `|` in number results (`7 5 15 | 3 1 3 8 5`); `|` or `/` also
+  separate words when numbers are turned back into letters.
+- The checksum of 1432 is 10, the single-digit checksum is 1.
+- Roman numerals from 4000 on: a thousand-fold value is written with an overline (`X̄L̄` =
+  40000) or in brackets (`(XL)` = 40000). Both forms are read.
 
 ## Backup {#backup}
 

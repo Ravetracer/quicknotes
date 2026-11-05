@@ -1,0 +1,481 @@
+//! User interface translations (English, German).
+//!
+//! English strings are the keys: `t!("Save")` returns the translation for
+//! the active language, `t!("Saved {}", path)` fills `{}` placeholders in
+//! order. The language is chosen once at startup.
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::OnceLock;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Lang {
+    En,
+    De,
+}
+
+static LANG: AtomicU8 = AtomicU8::new(0);
+
+/// Sets the language from the setting: "en", "de" or anything else for the
+/// system language (`LC_ALL`, `LC_MESSAGES`, `LANG`).
+pub fn init(setting: &str) {
+    let lang = match setting {
+        "en" => Lang::En,
+        "de" => Lang::De,
+        _ => system_lang(),
+    };
+    LANG.store(lang as u8, Ordering::Relaxed);
+}
+
+fn system_lang() -> Lang {
+    let var = ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .find(|v| !v.is_empty())
+        .unwrap_or_default();
+    if var.starts_with("de") {
+        Lang::De
+    } else {
+        Lang::En
+    }
+}
+
+pub fn lang() -> Lang {
+    if LANG.load(Ordering::Relaxed) == Lang::De as u8 {
+        Lang::De
+    } else {
+        Lang::En
+    }
+}
+
+fn german() -> &'static HashMap<&'static str, &'static str> {
+    static MAP: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
+    MAP.get_or_init(|| DE.iter().copied().collect())
+}
+
+/// The translation of `s` (or `s` itself when there is none).
+pub fn tr(s: &'static str) -> &'static str {
+    match lang() {
+        Lang::En => s,
+        Lang::De => german().get(s).copied().unwrap_or(s),
+    }
+}
+
+/// Replaces the `{}` placeholders of `template` in order.
+pub fn fill(template: &str, args: &[&dyn std::fmt::Display]) -> String {
+    let mut out = String::with_capacity(template.len() + 16);
+    let mut args = args.iter();
+    let mut rest = template;
+    while let Some(i) = rest.find("{}") {
+        out.push_str(&rest[..i]);
+        if let Some(a) = args.next() {
+            out.push_str(&a.to_string());
+        }
+        rest = &rest[i + 2..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `t!("text")` → `&'static str`, `t!("text {}", arg)` → `String`.
+macro_rules! t {
+    ($s:literal) => {
+        $crate::i18n::tr($s)
+    };
+    ($s:literal, $($a:expr),+ $(,)?) => {
+        $crate::i18n::fill($crate::i18n::tr($s), &[$(&$a as &dyn std::fmt::Display),+])
+    };
+}
+
+const DE: &[(&str, &str)] = &[
+    ("New note (Ctrl+N)", "Neue Notiz (Strg+N)"),
+    ("Open file (Ctrl+O)", "Datei öffnen (Strg+O)"),
+    ("Save to file (Ctrl+S)", "In Datei speichern (Strg+S)"),
+    ("Main menu", "Hauptmenü"),
+    ("Format & tools", "Formatieren & Werkzeuge"),
+    ("Toggle dark/light theme", "Dunkles/helles Design umschalten"),
+    ("Toggle preview (Ctrl+Shift+V)", "Vorschau umschalten (Strg+Umschalt+V)"),
+    ("Find (Ctrl+F)", "Suchen (Strg+F)"),
+    ("Rename…", "Umbenennen…"),
+    ("Copy Path", "Pfad kopieren"),
+    ("Close Other Tabs", "Andere Tabs schließen"),
+    ("Close", "Schließen"),
+    ("Font size – Ctrl+wheel or Ctrl+/−, click to reset", "Schriftgröße – Strg+Mausrad oder Strg+/−, Klick setzt zurück"),
+    ("Plain Text", "Reiner Text"),
+    ("Syntax", "Syntax"),
+    ("No Open Notes", "Keine offenen Notizen"),
+    ("Create a note with Ctrl+N or open a file with Ctrl+O.\nFiles can also be dropped here.", "Mit Strg+N eine Notiz anlegen oder mit Strg+O eine Datei öffnen.\nDateien können auch hierher gezogen werden."),
+    ("New Note", "Neue Notiz"),
+    ("Path copied", "Pfad kopiert"),
+    ("This note has no file", "Diese Notiz hat keine Datei"),
+    ("A small tabbed notepad for text and code snippets.\nNotes are stored in ~/.local/share/quicknotes.", "Ein kleiner Notizblock mit Tabs für Texte und Code-Schnipsel.\nNotizen werden in ~/.local/share/quicknotes gespeichert."),
+    ("Restart QuickNotes to switch the language", "Die Sprache wird nach einem Neustart von QuickNotes umgestellt"),
+    ("Could not read the dropped files", "Die abgelegten Dateien konnten nicht gelesen werden"),
+    ("Could not read the dropped text", "Der abgelegte Text konnte nicht gelesen werden"),
+    ("Note – stored automatically", "Notiz – wird automatisch gespeichert"),
+    ("Reopen Closed Tab", "Geschlossenen Tab wiederherstellen"),
+    ("“{}” closed", "„{}“ geschlossen"),
+    ("Undo", "Rückgängig"),
+    ("Save changes to “{}”?", "Änderungen an „{}“ speichern?"),
+    ("The file has unsaved changes. They will be lost if you don't save them.", "Die Datei hat ungespeicherte Änderungen. Sie gehen verloren, wenn sie nicht gespeichert werden."),
+    ("_Cancel", "_Abbrechen"),
+    ("_Discard", "_Verwerfen"),
+    ("_Save", "_Speichern"),
+    ("Save failed: {}", "Speichern fehlgeschlagen: {}"),
+    ("No closed tabs", "Keine geschlossenen Tabs"),
+    ("Cannot open {}: {}", "{} kann nicht geöffnet werden: {}"),
+    ("File not found: {}", "Datei nicht gefunden: {}"),
+    ("Cannot store note: {}", "Notiz kann nicht gespeichert werden: {}"),
+    ("Back Up Notes", "Notizen sichern"),
+    ("Backup of {} saved to {}", "Sicherung von {} gespeichert unter {}"),
+    ("Backup failed: {}", "Sicherung fehlgeschlagen: {}"),
+    ("QuickNotes backups", "QuickNotes-Sicherungen"),
+    ("Restore Backup", "Sicherung wiederherstellen"),
+    ("Restore failed: {}", "Wiederherstellen fehlgeschlagen: {}"),
+    ("Restore Backup?", "Sicherung wiederherstellen?"),
+    ("Backup from {} with {}.\n\nAdd: puts the tabs of the backup next to your current tabs.\n\nReplace: closes all current tabs and restores the backup including its settings. Your current notes are saved to an automatic backup first.", "Sicherung vom {} mit {}.\n\nHinzufügen: öffnet die Tabs der Sicherung zusätzlich zu den aktuellen Tabs.\n\nErsetzen: schließt alle aktuellen Tabs und stellt die Sicherung samt Einstellungen wieder her. Die aktuellen Notizen werden vorher automatisch gesichert."),
+    ("_Add", "_Hinzufügen"),
+    ("_Replace", "_Ersetzen"),
+    ("All tabs of the backup are already open", "Alle Tabs der Sicherung sind bereits geöffnet"),
+    ("Added {} from the backup", "{} aus der Sicherung hinzugefügt"),
+    (" – {} not found", " – {} nicht gefunden"),
+    ("Restore cancelled, the current notes could not be saved: {}", "Wiederherstellen abgebrochen, die aktuellen Notizen konnten nicht gesichert werden: {}"),
+    ("Restored {}. Previous notes saved to {}", "{} wiederhergestellt. Bisherige Notizen gesichert unter {}"),
+    ("Not a file: {}", "Keine Datei: {}"),
+    ("Large file – syntax highlighting and word wrap are off", "Große Datei – Syntaxhervorhebung und Zeilenumbruch sind aus"),
+    ("Open Files", "Dateien öffnen"),
+    ("Saved {}", "{} gespeichert"),
+    ("Export works for Markdown and reStructuredText", "Export ist für Markdown und reStructuredText möglich"),
+    ("Export as {}", "Als {} exportieren"),
+    ("Exporting PDF…", "PDF wird exportiert…"),
+    ("Exported to {}", "Exportiert nach {}"),
+    ("Open", "Öffnen"),
+    ("Export failed: {}", "Export fehlgeschlagen: {}"),
+    ("Save As", "Speichern unter"),
+    ("This note has no file to reload", "Diese Notiz hat keine Datei zum Neuladen"),
+    ("Discard Changes and Reload?", "Änderungen verwerfen und neu laden?"),
+    ("Your unsaved changes to this file will be lost.", "Die ungespeicherten Änderungen an dieser Datei gehen verloren."),
+    ("_Reload", "_Neu laden"),
+    ("Only text tabs can be renamed", "Nur Text-Tabs können umbenannt werden"),
+    ("Rename Tab", "Tab umbenennen"),
+    ("Leave empty to name the tab after its first line or file.", "Leer lassen, um den Tab nach seiner ersten Zeile oder Datei zu benennen."),
+    ("_Rename", "_Umbenennen"),
+    ("Nothing to change", "Nichts zu ändern"),
+    ("Select some text first", "Bitte zuerst Text markieren"),
+    ("_Copy", "_Kopieren"),
+    ("_Insert Below", "_Darunter einfügen"),
+    ("Result", "Ergebnis"),
+    ("Result copied", "Ergebnis kopiert"),
+    ("Switch to light theme", "Zum hellen Design wechseln"),
+    ("Switch to dark theme", "Zum dunklen Design wechseln"),
+    ("Note", "Notiz"),
+    ("{} lines", "{} Zeilen"),
+    ("large file, highlighting off", "große Datei, Hervorhebung aus"),
+    ("Ln {}, Col {}", "Z. {}, Sp. {}"),
+    ("  ({} selected)", "  ({} markiert)"),
+    ("Replaced {} occurrences", "{} Treffer ersetzt"),
+    ("Nothing replaced", "Nichts ersetzt"),
+    ("Replace failed: {}", "Ersetzen fehlgeschlagen: {}"),
+    ("No matches", "Keine Treffer"),
+    ("{} of {}", "{} von {}"),
+    ("{} matches", "{} Treffer"),
+    ("Monospace fonts", "Schriften mit fester Breite"),
+    ("Other fonts", "Andere Schriften"),
+    ("Editor font", "Editor-Schrift"),
+    ("Find", "Suchen"),
+    ("Replace with", "Ersetzen durch"),
+    ("Match case", "Groß-/Kleinschreibung beachten"),
+    ("Whole words", "Ganze Wörter"),
+    ("Regular expression", "Regulärer Ausdruck"),
+    ("Replace", "Ersetzen"),
+    ("Replace current match (Enter)", "Aktuellen Treffer ersetzen (Eingabetaste)"),
+    ("Replace All", "Alle ersetzen"),
+    ("Replace all matches", "Alle Treffer ersetzen"),
+    ("New Calculation", "Neue Berechnung"),
+    ("Open File…", "Datei öffnen…"),
+    ("Save", "Speichern"),
+    ("Save As…", "Speichern unter…"),
+    ("Reload from Disk", "Neu von der Festplatte laden"),
+    ("Export as HTML…", "Als HTML exportieren…"),
+    ("Export as PDF…", "Als PDF exportieren…"),
+    ("Find…", "Suchen…"),
+    ("Find and Replace…", "Suchen und Ersetzen…"),
+    ("Rename Tab…", "Tab umbenennen…"),
+    ("Word Wrap", "Zeilenumbruch"),
+    ("Preview", "Vorschau"),
+    ("Dark Theme", "Dunkles Design"),
+    ("Larger Font", "Größere Schrift"),
+    ("Smaller Font", "Kleinere Schrift"),
+    ("Reset Font Size", "Schriftgröße zurücksetzen"),
+    ("Font Ligatures", "Schrift-Ligaturen"),
+    ("Back Up Notes…", "Notizen sichern…"),
+    ("Restore Backup…", "Sicherung wiederherstellen…"),
+    ("Open Notes Folder", "Notizen-Ordner öffnen"),
+    ("System Default", "Systemsprache"),
+    ("Language", "Sprache"),
+    ("Help", "Hilfe"),
+    ("About QuickNotes", "Über QuickNotes"),
+    ("Applies to the selection or the whole tab", "Wirkt auf die Auswahl oder den ganzen Tab"),
+    ("Beautify (auto-detect)", "Formatieren (automatisch erkannt)"),
+    ("Minify (auto-detect)", "Minimieren (automatisch erkannt)"),
+    ("Format", "Formatieren"),
+    ("Pretty JSON", "JSON formatieren"),
+    ("Minify JSON", "JSON minimieren"),
+    ("Pretty XML", "XML formatieren"),
+    ("Minify XML", "XML minimieren"),
+    ("Pretty YAML", "YAML formatieren"),
+    ("Pretty SQL", "SQL formatieren"),
+    ("Convert", "Umwandeln"),
+    ("Lines", "Zeilen"),
+    ("Sort", "Sortieren"),
+    ("Sort (case-insensitive)", "Sortieren (Groß-/Kleinschreibung ignorieren)"),
+    ("Reverse", "Umkehren"),
+    ("Remove Duplicates", "Duplikate entfernen"),
+    ("Remove Empty Lines", "Leere Zeilen entfernen"),
+    ("Trim Trailing Whitespace", "Leerzeichen am Zeilenende entfernen"),
+    ("Encode / Decode", "Kodieren / Dekodieren"),
+    ("Base64 Encode", "Base64 kodieren"),
+    ("Base64 Decode", "Base64 dekodieren"),
+    ("URL Encode", "URL kodieren"),
+    ("URL Decode", "URL dekodieren"),
+    ("JSON String Escape", "JSON-String maskieren"),
+    ("JSON String Unescape", "JSON-String demaskieren"),
+    ("Case", "Groß-/Kleinschreibung"),
+    ("UPPERCASE", "GROSSBUCHSTABEN"),
+    ("lowercase", "kleinbuchstaben"),
+    ("{} tab", "{} Tab"),
+    ("{} tabs", "{} Tabs"),
+    ("{} file", "{} Datei"),
+    ("{} files", "{} Dateien"),
+    ("{} snippet", "{}-Schnipsel"),
+    ("Untitled", "Unbenannt"),
+    ("Copied “{}”", "„{}“ kopiert"),
+    ("Fit", "Eingepasst"),
+    ("Zoom out", "Verkleinern"),
+    ("Zoom in", "Vergrößern"),
+    ("Original size", "Originalgröße"),
+    ("Fit to window", "An Fenster anpassen"),
+    ("Image", "Bild"),
+    ("Minify works for JSON and XML only.", "Minimieren ist nur für JSON und XML möglich."),
+    ("URL decode: {}", "URL-Dekodierung: {}"),
+    ("Invalid JSON: {}", "Ungültiges JSON: {}"),
+    ("Invalid XML at byte {}: {}", "Ungültiges XML bei Byte {}: {}"),
+    ("Invalid XML: unclosed element", "Ungültiges XML: nicht geschlossenes Element"),
+    ("Invalid YAML: {}", "Ungültiges YAML: {}"),
+    ("Not valid Base64", "Kein gültiges Base64"),
+    ("Decoded data is not UTF-8 text", "Die dekodierten Daten sind kein UTF-8-Text"),
+    ("Invalid JSON string: {}", "Ungültiger JSON-String: {}"),
+    ("invalid format \":{}\" (use e.g. :3, :.2 or :3.2)", "ungültiges Format \":{}\" (z. B. :3, :.2 oder :3.2)"),
+    ("invalid number \"{}\"", "ungültige Zahl \"{}\""),
+    ("unexpected \"{}\"", "unerwartetes \"{}\""),
+    ("empty expression", "leerer Ausdruck"),
+    ("unexpected {}", "unerwartetes {}"),
+    ("missing \")\"", "fehlende \")\""),
+    ("incomplete expression", "unvollständiger Ausdruck"),
+    ("unknown variable \"{}\"", "unbekannte Variable \"{}\""),
+    ("division by zero", "Division durch null"),
+    ("unknown operator \"{}\"", "unbekannter Operator \"{}\""),
+    ("result is not a finite number", "Ergebnis ist keine endliche Zahl"),
+    ("factorial needs a whole number from 0 to 170", "Fakultät braucht eine ganze Zahl von 0 bis 170"),
+    ("{}() takes one value", "{}() erwartet einen Wert"),
+    ("{}() needs at least one value", "{}() braucht mindestens einen Wert"),
+    ("square root of a negative number", "Wurzel aus einer negativen Zahl"),
+    ("round() takes a value and optional decimals", "round() erwartet einen Wert und optional die Nachkommastellen"),
+    ("unknown function \"{}\"", "unbekannte Funktion \"{}\""),
+    ("This is not a QuickNotes backup (.tar.gz)", "Das ist keine QuickNotes-Sicherung (.tar.gz)"),
+    ("The backup is unexpectedly large", "Die Sicherung ist unerwartet groß"),
+    ("The backup's session is damaged: {}", "Die Sitzung der Sicherung ist beschädigt: {}"),
+    ("The backup was created by a newer QuickNotes version", "Die Sicherung stammt von einer neueren QuickNotes-Version"),
+    ("GTK's \"Print to File\" printer is not available", "Der GTK-Drucker „In Datei drucken“ ist nicht verfügbar"),
+    ("PDF export timed out", "Zeitüberschreitung beim PDF-Export"),
+    ("Cannot start PlantUML ({}): {}", "PlantUML kann nicht gestartet werden ({}): {}"),
+    ("PlantUML failed: {}", "PlantUML fehlgeschlagen: {}"),
+    ("PlantUML produced no output", "PlantUML hat keine Ausgabe erzeugt"),
+    ("The reStructuredText renderer failed on this document.", "Der reStructuredText-Renderer ist an diesem Dokument gescheitert."),
+    ("QuickNotes Help", "QuickNotes-Hilfe"),
+    ("Values: {}", "Werte: {}"),
+    ("Word sums: {}", "Wortsummen: {}"),
+    ("Sum: {}", "Summe: {}"),
+    ("No numbers in the selection", "Keine Zahlen in der Auswahl"),
+    ("\"{}\" is not a valid binary number", "\"{}\" ist keine gültige Binärzahl"),
+    ("\"{}\" is not a valid hex number", "\"{}\" ist keine gültige Hexadezimalzahl"),
+    ("\"{}\" is not a valid decimal number", "\"{}\" ist keine gültige Dezimalzahl"),
+    ("{} is not a valid character code", "{} ist kein gültiger Zeichencode"),
+    ("No letters in the selection", "Keine Buchstaben in der Auswahl"),
+    ("Letter values: {}", "Buchstabenwerte: {}"),
+    ("Word values: {}", "Buchstabenwortwerte: {}"),
+    ("Sum of all letters: {}", "Summe aller Buchstaben (BWW): {}"),
+    ("Letter checksums: {}", "Quersummen der Buchstabenwerte: {}"),
+    ("Sum of letter checksums: {}", "Summe der Quersummen: {}"),
+    ("Checksum of the sum: {}", "Quersumme der Summe: {}"),
+    ("Single-digit checksum: {}", "Iterierte Quersumme: {}"),
+    ("Switch on at least one output", "Mindestens eine Ausgabe einschalten"),
+    ("Total: {}, different: {}", "Gesamt: {}, verschiedene: {}"),
+    ("Missing: {}", "Fehlend: {}"),
+    ("none", "keine"),
+    ("Nothing to convert in the selection", "Nichts zum Umwandeln in der Auswahl"),
+    ("Can't split \"{}\" into ASCII codes – please separate them", "\"{}\" lässt sich nicht in ASCII-Codes aufteilen – bitte mit Trennzeichen eingeben"),
+    ("0 has no Roman numeral", "0 hat keine römische Zahl"),
+    ("{} is too large for Roman numerals", "{} ist zu groß für römische Zahlen"),
+    ("No Roman numerals in the selection", "Keine römischen Zahlen in der Auswahl"),
+    ("No Morse code in the selection", "Kein Morsecode in der Auswahl"),
+    ("Key-only (T9) codes are ambiguous and can't be decoded – use multi-tap or key + position", "Codes nur mit Tasten (T9) sind mehrdeutig und können nicht dekodiert werden – Mehrfachtippen oder Taste + Position verwenden"),
+    ("\"{}\" is not a key sequence", "\"{}\" ist keine Tastenfolge"),
+    ("\"{}\" is not a list of key + position pairs", "\"{}\" ist keine Folge von Taste-+-Position-Paaren"),
+    ("ROT5 (digits)", "ROT5 (Ziffern)"),
+    ("ROT18 (letters + digits)", "ROT18 (Buchstaben + Ziffern)"),
+    ("Caesar Rotation", "Caesar-Verschiebung"),
+    ("Shift", "Verschiebung"),
+    ("Show all 25 rotations", "Alle 25 Verschiebungen anzeigen"),
+    ("Letter Value", "Buchstabenwert (BWW)"),
+    ("Direction", "Richtung"),
+    ("Alphabet", "Alphabet"),
+    ("Umlauts and ß", "Umlaute und ß"),
+    ("Value of each letter", "Wert jedes Buchstabens"),
+    ("Sum of each word", "Buchstabenwortwert jedes Wortes"),
+    ("Sum of all letters", "Summe aller Buchstaben"),
+    ("Checksum of each letter value", "Quersumme jedes Buchstabenwerts"),
+    ("Checksum of the sum", "Quersumme der Summe"),
+    ("Single-digit checksum of the sum", "Iterierte Quersumme der Summe"),
+    ("Letter Frequency", "Buchstabenhäufigkeit"),
+    ("Order", "Reihenfolge"),
+    ("Count digits too", "Ziffern mitzählen"),
+    ("List missing letters A–Z", "Fehlende Buchstaben A–Z auflisten"),
+    ("Scrabble Value", "Scrabble-Wert"),
+    ("Letter set", "Buchstabensatz"),
+    ("Prime Alphabet", "Primzahl-Alphabet"),
+    ("Sums", "Summen"),
+    ("Hexadecimal", "Hexadezimal"),
+    ("Conversion", "Umwandlung"),
+    ("ASCII Codes", "ASCII-Codes"),
+    ("Binary", "Binär"),
+    ("Pad numbers to full bytes", "Zahlen auf volle Bytes auffüllen"),
+    ("Roman Numerals", "Römische Zahlen"),
+    ("Thousands from 4000 on", "Tausender ab 4000"),
+    ("Morse Code", "Morsecode"),
+    ("Dash symbol", "Zeichen für Strich"),
+    ("Word separator", "Worttrenner"),
+    ("Phone Keypad", "Handycode (Tastatur)"),
+    ("Notation", "Schreibweise"),
+    ("A=1 … Z=26", "A=1 … Z=26"),
+    ("Z=1 … A=26 (reverse)", "Z=1 … A=26 (rückwärts)"),
+    ("As AE, OE, UE, SS", "Als AE, OE, UE, SS"),
+    ("Ä=27, Ö=28, Ü=29, ß=30", "Ä=27, Ö=28, Ü=29, ß=30"),
+    ("Ignore", "Ignorieren"),
+    ("Most frequent first", "Häufigste zuerst"),
+    ("Alphabetical", "Alphabetisch"),
+    ("German", "Deutsch"),
+    ("English", "Englisch"),
+    ("Hex → text", "Hex → Text"),
+    ("Hex → decimal", "Hex → Dezimal"),
+    ("Text → hex", "Text → Hex"),
+    ("Decimal → hex", "Dezimal → Hex"),
+    ("Codes → text", "Codes → Text"),
+    ("Text → codes", "Text → Codes"),
+    ("Binary → decimal", "Binär → Dezimal"),
+    ("Binary → text", "Binär → Text"),
+    ("Decimal → binary", "Dezimal → Binär"),
+    ("Text → binary", "Text → Binär"),
+    ("Detect", "Automatisch erkennen"),
+    ("Roman → Arabic", "Römisch → Arabisch"),
+    ("Arabic → Roman", "Arabisch → Römisch"),
+    ("Overline (X̄ = 10000)", "Überstrich (X̄ = 10000)"),
+    ("Brackets ((X) = 10000)", "Klammern ((X) = 10000)"),
+    ("Text → Morse", "Text → Morse"),
+    ("Morse → text", "Morse → Text"),
+    ("Minus  -", "Minus  -"),
+    ("Underscore  _", "Unterstrich  _"),
+    ("Slash  /", "Schrägstrich  /"),
+    ("Bar  |", "Senkrechter Strich  |"),
+    ("Three spaces", "Drei Leerzeichen"),
+    ("Text → keys", "Text → Tasten"),
+    ("Keys → text", "Tasten → Text"),
+    ("Multi-tap (GEO = 4 33 666)", "Mehrfachtippen (GEO = 4 33 666)"),
+    ("Key + position (GEO = 41 32 63)", "Taste + Position (GEO = 41 32 63)"),
+    ("Key only / T9 (GEO = 436)", "Nur Taste / T9 (GEO = 436)"),
+    ("Letters → numbers", "Buchstaben → Zahlen"),
+    ("Numbers → letters", "Zahlen → Buchstaben"),
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// String literals passed to `t!(…)` in the sources (escapes resolved).
+    fn used_keys() -> Vec<String> {
+        let sources = [
+            include_str!("window.rs"),
+            include_str!("editor.rs"),
+            include_str!("image_tab.rs"),
+            include_str!("format.rs"),
+            include_str!("calc.rs"),
+            include_str!("backup.rs"),
+            include_str!("export.rs"),
+            include_str!("plantuml.rs"),
+            include_str!("rst.rs"),
+            include_str!("help.rs"),
+            include_str!("geocaching.rs"),
+        ];
+        let mut keys = Vec::new();
+        for src in sources {
+            let parts: Vec<&str> = src.split("t!(\"").collect();
+            for (prev, part) in parts.iter().zip(parts.iter().skip(1)) {
+                // Skip `format!(` and other macros ending in "t".
+                if prev.ends_with(|c: char| c.is_alphanumeric() || c == '_') {
+                    continue;
+                }
+                let mut key = String::new();
+                let mut chars = part.chars();
+                while let Some(c) = chars.next() {
+                    match c {
+                        '"' => break,
+                        '\\' => match chars.next() {
+                            Some('n') => key.push('\n'),
+                            Some('\n') => panic!("no line continuations in t!() strings"),
+                            Some(c) => key.push(c),
+                            None => {}
+                        },
+                        c => key.push(c),
+                    }
+                }
+                keys.push(key);
+            }
+        }
+        keys
+    }
+
+    #[test]
+    fn every_used_string_is_translated() {
+        let missing: Vec<String> = used_keys().into_iter().filter(|k| !german().contains_key(k.as_str())).collect();
+        assert!(missing.is_empty(), "missing German translations: {missing:#?}");
+    }
+
+    #[test]
+    fn geocaching_labels_are_translated() {
+        for tool in crate::geocaching::TOOLS {
+            let mut labels = vec![tool.label];
+            for field in tool.fields {
+                labels.extend(field.labels());
+            }
+            for label in labels.into_iter().filter(|l| !l.starts_with("ROT") || l.contains('(')) {
+                assert!(german().contains_key(label), "missing German translation: {label}");
+            }
+        }
+    }
+
+    #[test]
+    fn placeholders_match() {
+        for (en, de) in DE {
+            assert_eq!(en.matches("{}").count(), de.matches("{}").count(), "{en}");
+        }
+        let mut seen = std::collections::HashSet::new();
+        for (en, _) in DE {
+            assert!(seen.insert(en), "duplicate key {en}");
+        }
+    }
+
+    #[test]
+    fn fills_placeholders() {
+        assert_eq!(fill("{} of {}", &[&1, &"x"]), "1 of x");
+    }
+}
