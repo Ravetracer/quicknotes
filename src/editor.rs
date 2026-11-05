@@ -2,6 +2,7 @@
 //! (Markdown or PlantUML) in a split pane.
 
 use crate::store::{TabKind, TabMeta};
+use crate::calc::{self, LineResult};
 use crate::{html, langs, markdown, plantuml, rst};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -79,6 +80,16 @@ struct Preview {
 }
 
 pub type WidgetHook = Box<dyn Fn(&gtk::Widget)>;
+pub type MessageHook = Box<dyn Fn(&str)>;
+
+/// Result column of a calculation sheet (right gutter).
+struct CalcColumn {
+    renderer: sourceview5::GutterRendererText,
+    results: Rc<RefCell<Vec<LineResult>>>,
+}
+
+const CALC_LANGUAGE: &str = "calc";
+const CALC_PAD: i32 = 14;
 
 pub struct EditorTab {
     pub id: String,
@@ -100,6 +111,10 @@ pub struct EditorTab {
     search: RefCell<Option<sourceview5::SearchContext>>,
     /// Called with the preview widget when it is created (used to add drop targets).
     pub webview_hook: RefCell<Option<WidgetHook>>,
+    /// Shows a short message to the user (e.g. "Copied …").
+    pub message_hook: RefCell<Option<MessageHook>>,
+    calc: RefCell<Option<CalcColumn>>,
+    calc_timer: RefCell<Option<glib::SourceId>>,
 }
 
 impl EditorTab {
@@ -153,6 +168,9 @@ impl EditorTab {
             rerender: Cell::new(false),
             search: RefCell::new(None),
             webview_hook: RefCell::new(None),
+            message_hook: RefCell::new(None),
+            calc: RefCell::new(None),
+            calc_timer: RefCell::new(None),
         });
 
         let weak = Rc::downgrade(&tab);
@@ -161,6 +179,9 @@ impl EditorTab {
                 if !t.loading.get() {
                     if let Some(kind) = t.preview_kind() {
                         t.schedule_render(kind.render_delay_ms());
+                    }
+                    if t.is_calc() {
+                        t.schedule_calc();
                     }
                 }
             }
@@ -195,6 +216,7 @@ impl EditorTab {
         self.buffer.set_text(text);
         self.buffer.end_irreversible_action();
         self.loading.set(was_loading);
+        self.recalc();
     }
 
     pub fn is_empty(&self) -> bool {
@@ -268,6 +290,7 @@ impl EditorTab {
         self.loading.set(false);
         self.place_cursor(cursor);
         self.schedule_render(0);
+        self.recalc();
         Ok(())
     }
 
@@ -335,6 +358,117 @@ impl EditorTab {
     pub fn set_language(self: &Rc<Self>, lang: Option<&sourceview5::Language>) {
         self.buffer.set_language(lang);
         self.sync_preview();
+        self.sync_calc();
+    }
+
+    // ----- calculations --------------------------------------------------
+
+    pub fn is_calc(&self) -> bool {
+        self.language_id().as_deref() == Some(CALC_LANGUAGE)
+    }
+
+    fn message(&self, text: &str) {
+        if let Some(hook) = self.message_hook.borrow().as_ref() {
+            hook(text);
+        }
+    }
+
+    /// Shows or hides the result column depending on the language. The
+    /// column is created once and only hidden afterwards: removing a gutter
+    /// renderer releases it twice in GtkSourceView 5.12.
+    fn sync_calc(self: &Rc<Self>) {
+        let gutter = sourceview5::prelude::ViewExt::gutter(&self.view, gtk::TextWindowType::Right);
+        if !self.is_calc() {
+            if let Some(column) = self.calc.borrow().as_ref() {
+                column.results.borrow_mut().clear();
+                column.renderer.set_visible(false);
+            }
+            return;
+        }
+        if let Some(column) = self.calc.borrow().as_ref() {
+            column.renderer.set_visible(true);
+        }
+        if self.calc.borrow().is_none() {
+            let results: Rc<RefCell<Vec<LineResult>>> = Rc::default();
+            let renderer = sourceview5::GutterRendererText::new();
+            renderer.set_xpad(CALC_PAD);
+            renderer.set_alignment_mode(sourceview5::GutterRendererAlignmentMode::First);
+            renderer.add_css_class("calc-results");
+
+            let r = results.clone();
+            renderer.connect_query_data(move |renderer, _lines, line| {
+                let markup = r.borrow().get(line as usize).map(result_markup).unwrap_or_default();
+                renderer.set_markup(&markup);
+            });
+            let r = results.clone();
+            renderer.connect_query_activatable(move |_, iter, _| {
+                r.borrow().get(iter.line() as usize).and_then(LineResult::display).is_some()
+            });
+            // Click on a result copies it.
+            let r = results.clone();
+            let weak = Rc::downgrade(self);
+            renderer.connect_activate(move |renderer, iter, _, _, _, _| {
+                let Some(text) = r.borrow().get(iter.line() as usize).and_then(LineResult::display) else {
+                    return;
+                };
+                renderer.clipboard().set_text(&text);
+                if let Some(t) = weak.upgrade() {
+                    t.message(&format!("Copied “{text}”"));
+                }
+            });
+            // Text metrics are only final once the column is shown.
+            let weak = Rc::downgrade(self);
+            renderer.connect_map(move |_| {
+                if let Some(t) = weak.upgrade() {
+                    t.fit_calc_column();
+                }
+            });
+            gutter.insert(&renderer, 0);
+            *self.calc.borrow_mut() = Some(CalcColumn { renderer, results });
+        }
+        self.recalc();
+    }
+
+    fn schedule_calc(self: &Rc<Self>) {
+        if let Some(id) = self.calc_timer.borrow_mut().take() {
+            id.remove();
+        }
+        let weak = Rc::downgrade(self);
+        let id = glib::timeout_add_local_once(Duration::from_millis(120), move || {
+            if let Some(t) = weak.upgrade() {
+                t.calc_timer.borrow_mut().take();
+                t.recalc();
+            }
+        });
+        *self.calc_timer.borrow_mut() = Some(id);
+    }
+
+    fn recalc(&self) {
+        if !self.is_calc() {
+            return;
+        }
+        let calc = self.calc.borrow();
+        let Some(column) = calc.as_ref() else { return };
+        *column.results.borrow_mut() = calc::evaluate(&self.text());
+        drop(calc);
+        self.fit_calc_column();
+    }
+
+    /// Sizes the result column to the widest result.
+    fn fit_calc_column(&self) {
+        let calc = self.calc.borrow();
+        let Some(column) = calc.as_ref() else { return };
+        let width = column
+            .results
+            .borrow()
+            .iter()
+            .filter(|r| !matches!(r, LineResult::Empty))
+            .map(|r| column.renderer.measure_markup(&result_markup(r)).0)
+            .max()
+            .map_or(0, |w| (w + 2 * CALC_PAD).min(900));
+        column.renderer.set_size_request(width, -1);
+        column.renderer.queue_resize();
+        column.renderer.queue_draw();
     }
 
     pub fn set_language_id(self: &Rc<Self>, id: Option<&str>) {
@@ -361,10 +495,18 @@ impl EditorTab {
         }
     }
 
-    pub fn apply_zoom(&self) {
+    /// Called after the editor font or its size changed.
+    pub fn apply_zoom(self: &Rc<Self>) {
         if let Some(p) = self.preview.borrow().as_ref() {
             p.webview.set_zoom_level(self.shared.zoom.get());
         }
+        // The new font is applied with the next style update.
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local_once(Duration::from_millis(150), move || {
+            if let Some(t) = weak.upgrade() {
+                t.fit_calc_column();
+            }
+        });
     }
 
     // ----- search --------------------------------------------------------
@@ -670,6 +812,16 @@ impl EditorTab {
             preview: self.preview_on.get(),
             cursor: self.buffer.cursor_position(),
         }
+    }
+}
+
+fn result_markup(result: &LineResult) -> String {
+    let esc = |s: &str| glib::markup_escape_text(s).to_string();
+    match result {
+        LineResult::Empty => String::new(),
+        LineResult::Value(v) => format!("<span alpha=\"70%\">= {}</span>", esc(&calc::format_number(*v))),
+        LineResult::Text(t) => format!("<b>{}</b>", esc(&truncate(t, 80))),
+        LineResult::Error(e) => format!("<span foreground=\"#e5534b\">⚠ {}</span>", esc(&truncate(e, 60))),
     }
 }
 

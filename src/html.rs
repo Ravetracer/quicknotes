@@ -145,6 +145,25 @@ pub fn standalone(title: &str, body: &str) -> String {
     )
 }
 
+/// A static themed page (e.g. the help).
+pub fn static_page(title: &str, body: &str, dark: bool) -> String {
+    let theme = if dark { "dark" } else { "light" };
+    let title = escape(title);
+    format!(
+        r#"<!DOCTYPE html>
+<html data-theme="{theme}">
+<head>
+<meta charset="utf-8">
+<title>{title}</title>
+<style>{DOC_CSS}</style>
+</head>
+<body><main id="content">
+{body}
+</main></body>
+</html>"#
+    )
+}
+
 /// Text of the first heading (h1–h3) in an HTML fragment, used as document title.
 pub fn first_heading(body: &str) -> Option<String> {
     let start = ["<h1", "<h2", "<h3"].iter().filter_map(|t| body.find(t)).min()?;

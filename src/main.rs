@@ -1,7 +1,9 @@
 mod backup;
+mod calc;
 mod editor;
 mod export;
 mod format;
+mod help;
 mod html;
 mod icons;
 mod image_tab;
@@ -31,6 +33,8 @@ const APP_CSS: &str = r#"
     padding: 6px 8px;
     border-bottom: 1px solid alpha(currentColor, 0.12);
 }
+.calc-results { border-left: 1px solid alpha(currentColor, 0.12); }
+.font-group-start { border-top: 1px solid alpha(currentColor, 0.15); padding-top: 8px; margin-top: 4px; }
 .image-canvas { background-color: alpha(currentColor, 0.04); }
 .image-controls { border-radius: 10px; }
 .image-controls label { padding: 0 4px; }

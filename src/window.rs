@@ -79,7 +79,8 @@ pub struct Window {
     status_info: gtk::Label,
     status_pos: gtk::Label,
     zoom_btn: gtk::Button,
-    font_btn: gtk::FontDialogButton,
+    font_drop: gtk::DropDown,
+    font_guard: Cell<bool>,
     lang_drop: gtk::DropDown,
     lang_ids: Vec<Option<String>>,
     theme_btn: gtk::Button,
@@ -213,16 +214,7 @@ impl Window {
         zoom_btn.add_css_class("flat");
 
         // Editor font family (the size is handled by the zoom above).
-        let font_dialog = gtk::FontDialog::builder().title("Editor Font").modal(true).build();
-        let font_btn = gtk::FontDialogButton::builder()
-            .dialog(&font_dialog)
-            .level(gtk::FontLevel::Family)
-            .use_font(true)
-            .use_size(false)
-            .tooltip_text("Editor font")
-            .build();
-        font_btn.add_css_class("flat");
-        font_btn.set_font_desc(&gtk::pango::FontDescription::from_string(&settings.font_family));
+        let font_drop = build_font_dropdown(&zoom_btn, &settings.font_family);
 
         let languages = langs::all();
         let mut lang_ids: Vec<Option<String>> = vec![None];
@@ -242,10 +234,11 @@ impl Window {
         )));
         lang_drop.set_tooltip_text(Some("Syntax"));
         lang_drop.add_css_class("flat");
+        enter_picks_first_match(&lang_drop);
 
         status.append(&status_info);
         status.append(&status_pos);
-        status.append(&font_btn);
+        status.append(&font_drop);
         status.append(&zoom_btn);
         status.append(&lang_drop);
 
@@ -305,7 +298,8 @@ impl Window {
             status_info,
             status_pos,
             zoom_btn,
-            font_btn,
+            font_drop,
+            font_guard: Cell::new(false),
             lang_drop,
             lang_ids,
             theme_btn,
@@ -381,6 +375,11 @@ impl Window {
     fn setup_actions(self: &Rc<Self>, app: &adw::Application) {
         self.action("new-note", &["<Control>n", "<Control>t"], |w| {
             w.new_note();
+        });
+        self.action("new-calculation", &["<Control><Shift>n"], |w| w.new_calculation());
+        self.action("help", &["F1"], |w| {
+            let (dark, zoom) = (w.settings.borrow().dark, w.shared.zoom.get());
+            crate::help::show(&w.win, dark, zoom);
         });
         self.action("open", &["<Control>o"], |w| w.open_dialog());
         self.action("save", &["<Control>s"], |w| w.save());
@@ -496,10 +495,17 @@ impl Window {
     }
 
     fn setup_signals(self: &Rc<Self>, toolbar: &adw::ToolbarView) {
+        let family = self.settings.borrow().font_family.clone();
+        self.select_font(&family);
         let weak = self.weak();
-        self.font_btn.connect_font_desc_notify(move |btn| {
+        self.font_drop.connect_selected_item_notify(move |drop| {
             let Some(this) = weak.upgrade() else { return };
-            let Some(family) = btn.font_desc().and_then(|d| d.family()) else { return };
+            if this.font_guard.get() {
+                return;
+            }
+            let Some(family) = drop.selected_item().and_downcast::<gtk::StringObject>().map(|s| s.string()) else {
+                return;
+            };
             if this.settings.borrow().font_family == family.as_str() {
                 return;
             }
@@ -866,6 +872,12 @@ impl Window {
             }
         });
         let weak = self.weak();
+        *t.message_hook.borrow_mut() = Some(Box::new(move |text: &str| {
+            if let Some(this) = weak.upgrade() {
+                this.toast(text);
+            }
+        }));
+        let weak = self.weak();
         *t.webview_hook.borrow_mut() = Some(Box::new(move |webview: &gtk::Widget| {
             if let Some(this) = weak.upgrade() {
                 this.install_drop_target(webview, DropKind::Files, &DropSlot::default());
@@ -902,6 +914,15 @@ impl Window {
         t.view.grab_focus();
         self.mark_dirty(&t.id);
         t
+    }
+
+    /// A new calculation sheet (see `calc.rs`).
+    fn new_calculation(self: &Rc<Self>) {
+        let t = self.new_note();
+        t.language_locked.set(true);
+        t.set_language_id(Some("calc"));
+        self.mark_dirty(&t.id);
+        self.sync_ui();
     }
 
     /// Removes a tab from bookkeeping and remembers it for "Reopen Closed Tab".
@@ -1324,8 +1345,7 @@ impl Window {
         self.set_dark(restored.dark);
         self.set_toggle("dark", true, restored.dark);
         self.set_toggle("ligatures", true, restored.ligatures);
-        self.font_btn
-            .set_font_desc(&gtk::pango::FontDescription::from_string(&restored.font_family));
+        self.select_font(&restored.font_family);
         self.apply_font();
 
         let (count, missing) = self.import_tabs(&backup, false);
@@ -1683,6 +1703,22 @@ impl Window {
         }
         self.apply_font();
         self.schedule_persist();
+    }
+
+    /// Shows `family` as selected in the font selector (without side effects).
+    fn select_font(&self, family: &str) {
+        let Some(model) = self.font_drop.model() else { return };
+        let position = (0..model.n_items()).find(|&i| {
+            model
+                .item(i)
+                .and_downcast::<gtk::StringObject>()
+                .is_some_and(|s| s.string().eq_ignore_ascii_case(family))
+        });
+        if let Some(position) = position {
+            self.font_guard.set(true);
+            self.font_drop.set_selected(position);
+            self.font_guard.set(false);
+        }
     }
 
     fn apply_font(&self) {
@@ -2103,6 +2139,150 @@ fn parse_uri_list(list: &str) -> Vec<PathBuf> {
 
 // ===== construction helpers ==============================================
 
+/// Font families for the editor font selector: the system default
+/// "Monospace", other monospace fonts, then all remaining fonts.
+/// Returns the names and how many belong to the monospace group.
+fn font_families(widget: &impl IsA<gtk::Widget>, current: &str) -> (Vec<String>, usize) {
+    let (mut mono, mut other): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    for family in widget.pango_context().list_families() {
+        let name = family.name().to_string();
+        if family.is_monospace() {
+            mono.push(name);
+        } else {
+            other.push(name);
+        }
+    }
+    for list in [&mut mono, &mut other] {
+        list.sort_by_key(|n| n.to_lowercase());
+        list.dedup();
+        list.retain(|n| !n.eq_ignore_ascii_case("Monospace"));
+    }
+    let mut names = vec!["Monospace".to_owned()];
+    names.extend(mono);
+    // A configured font that is not installed (anymore) stays selectable.
+    let known = names.iter().chain(&other).any(|n| n.eq_ignore_ascii_case(current));
+    if !known && !current.is_empty() {
+        names.insert(1, current.to_owned());
+    }
+    let mono_count = names.len();
+    names.extend(other);
+    (names, mono_count)
+}
+
+/// Searchable font selector. Unlike GtkFontDialog (GTK 4.14), it shows the
+/// current font as selected, so Enter keeps it. Each name is rendered in
+/// its own font; monospace fonts come first. Group captions live inside the
+/// rows because GtkDropDown drops list sections when search is enabled.
+fn build_font_dropdown(widget: &impl IsA<gtk::Widget>, current: &str) -> gtk::DropDown {
+    let (names, mono_count) = font_families(widget, current);
+    let captions: Rc<HashMap<String, &'static str>> = Rc::new(
+        [
+            names.first().map(|n| (n.clone(), "Monospace fonts")),
+            names.get(mono_count).map(|n| (n.clone(), "Other fonts")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    );
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let list = gtk::StringList::new(&refs);
+
+    // Rows: optional group caption above the font name.
+    let factory = |in_list: bool| {
+        let f = gtk::SignalListItemFactory::new();
+        f.connect_setup(move |_, item| {
+            let Some(item) = item.downcast_ref::<gtk::ListItem>() else { return };
+            let row = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            let caption = gtk::Label::builder().xalign(0.0).visible(false).build();
+            caption.add_css_class("caption-heading");
+            caption.add_css_class("dim-label");
+            let name = gtk::Label::builder().xalign(0.0).build();
+            if !in_list {
+                name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                name.set_max_width_chars(16);
+            }
+            row.append(&caption);
+            row.append(&name);
+            item.set_child(Some(&row));
+        });
+        let captions = captions.clone();
+        f.connect_bind(move |_, item| {
+            let Some(item) = item.downcast_ref::<gtk::ListItem>() else { return };
+            let Some(row) = item.child().and_downcast::<gtk::Box>() else { return };
+            let Some(family) = item.item().and_downcast::<gtk::StringObject>().map(|s| s.string()) else {
+                return;
+            };
+            let (Some(caption), Some(name)) = (
+                row.first_child().and_downcast::<gtk::Label>(),
+                row.last_child().and_downcast::<gtk::Label>(),
+            ) else {
+                return;
+            };
+            let group = if in_list { captions.get(family.as_str()).copied() } else { None };
+            caption.set_text(group.unwrap_or_default());
+            caption.set_visible(group.is_some());
+            if group == Some("Other fonts") {
+                row.add_css_class("font-group-start");
+            } else {
+                row.remove_css_class("font-group-start");
+            }
+            let mut desc = gtk::pango::FontDescription::new();
+            desc.set_family(&family);
+            let attrs = gtk::pango::AttrList::new();
+            attrs.insert(gtk::pango::AttrFontDesc::new(&desc));
+            name.set_attributes(Some(&attrs));
+            name.set_text(&family);
+        });
+        f
+    };
+
+    let drop = gtk::DropDown::new(
+        Some(list),
+        Some(gtk::PropertyExpression::new(
+            gtk::StringObject::static_type(),
+            None::<&gtk::Expression>,
+            "string",
+        )),
+    );
+    drop.set_factory(Some(&factory(false)));
+    drop.set_list_factory(Some(&factory(true)));
+    drop.set_enable_search(true);
+    drop.set_search_match_mode(gtk::StringFilterMatchMode::Substring);
+    drop.set_tooltip_text(Some("Editor font"));
+    drop.add_css_class("flat");
+    enter_picks_first_match(&drop);
+    drop
+}
+
+/// GtkDropDown ignores Enter in its search field. Make Enter pick the first
+/// match of the search, or keep the current item when nothing was typed.
+fn enter_picks_first_match(drop: &gtk::DropDown) {
+    let Some(entry) = descendants(drop).into_iter().find_map(|w| w.downcast::<gtk::SearchEntry>().ok()) else {
+        return;
+    };
+    let drop = drop.downgrade();
+    entry.connect_activate(move |entry| {
+        let Some(drop) = drop.upgrade() else { return };
+        let query = entry.text().to_lowercase();
+        if !query.is_empty() {
+            if let Some(model) = drop.model() {
+                let first = (0..model.n_items()).find(|&i| {
+                    model
+                        .item(i)
+                        .and_downcast::<gtk::StringObject>()
+                        .is_some_and(|s| s.string().to_lowercase().contains(&query))
+                });
+                if let Some(position) = first {
+                    drop.set_selected(position);
+                }
+            }
+        }
+        if let Some(popover) = entry.ancestor(gtk::Popover::static_type()).and_downcast::<gtk::Popover>() {
+            popover.popdown();
+        }
+    });
+}
+
 fn build_search_ui() -> SearchUi {
     let settings = sourceview5::SearchSettings::new();
     settings.set_wrap_around(true);
@@ -2189,6 +2369,7 @@ fn main_menu() -> gio::Menu {
         None,
         &section(&[
             ("New Note", "win.new-note"),
+            ("New Calculation", "win.new-calculation"),
             ("Open File…", "win.open"),
             ("Save", "win.save"),
             ("Save As…", "win.save-as"),
@@ -2229,7 +2410,7 @@ fn main_menu() -> gio::Menu {
             ("Open Notes Folder", "win.open-data-dir"),
         ]),
     );
-    menu.append_section(None, &section(&[("About QuickNotes", "win.about")]),
+    menu.append_section(None, &section(&[("Help", "win.help"), ("About QuickNotes", "win.about")]),
     );
     menu
 }

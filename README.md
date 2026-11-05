@@ -22,6 +22,9 @@ after a restart.
 - Drag & drop: files open in new tabs, dropped text (e.g. from a browser) is inserted into the note
 - Dark and light theme
 - Font size via Ctrl+mouse wheel or Ctrl +/−/0 (the preview follows)
+- **Calculation sheets**: variables, operators, functions and live results per line;
+  templates like `> N ab° cd.{e*3:3}` fill in calculated values (e.g. Geocaching coordinates)
+- Built-in help (F1) explaining all features, especially calculations and templates
 - Backup of all notes into a single `.tar.gz` and restore (add to or replace the current tabs)
 - Editor font selectable in the status bar (e.g. fonts with ligatures like Fira Code); ligatures can be switched off in the main menu
 
@@ -30,6 +33,7 @@ after a restart.
 | Shortcut | Action |
 |---|---|
 | Ctrl+N / Ctrl+T | New note |
+| Ctrl+Shift+N | New calculation sheet |
 | Ctrl+O | Open file(s) — or drop files onto the window |
 | Ctrl+S / Ctrl+Shift+S | Save to file / Save as |
 | Ctrl+W | Close tab (notes can be restored via the *Undo* toast) |
@@ -45,9 +49,13 @@ after a restart.
 | Alt+Z | Toggle word wrap |
 | Ctrl+wheel, Ctrl +/−, Ctrl+0 | Font size |
 | Ctrl+Tab, Ctrl+PgUp/PgDn, Alt+1…9 | Switch tabs |
+| F1 | Help |
 | Ctrl+Q | Quit |
 
 Tools act on the selection, or on the whole tab when nothing is selected.
+
+The complete user documentation is built into the app (F1); its source is
+[`data/help.md`](data/help.md).
 
 ## Build
 

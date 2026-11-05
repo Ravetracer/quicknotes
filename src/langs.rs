@@ -5,15 +5,21 @@ use gtk::gio;
 use sourceview5::{Language, LanguageManager};
 use std::path::Path;
 
-const PLANTUML_LANG: &str = include_str!("../data/plantuml.lang");
+/// Bundled language definitions: (file name, content).
+const BUNDLED: &[(&str, &str)] = &[
+    ("plantuml.lang", include_str!("../data/plantuml.lang")),
+    ("calc.lang", include_str!("../data/calc.lang")),
+];
 
 /// Registers bundled language definitions. Must run before any language is used.
 pub fn register() {
     let dir = store::data_dir().join("language-specs");
-    let file = dir.join("plantuml.lang");
-    if std::fs::read_to_string(&file).ok().as_deref() != Some(PLANTUML_LANG) {
-        let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::write(&file, PLANTUML_LANG);
+    for (name, content) in BUNDLED {
+        let file = dir.join(name);
+        if std::fs::read_to_string(&file).ok().as_deref() != Some(*content) {
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = std::fs::write(&file, content);
+        }
     }
     let lm = LanguageManager::default();
     let mut paths: Vec<String> = lm.search_path().iter().map(|s| s.to_string()).collect();
