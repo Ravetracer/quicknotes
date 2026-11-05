@@ -22,6 +22,7 @@ after a restart.
 - Drag & drop: files open in new tabs, dropped text (e.g. from a browser) is inserted into the note
 - Dark and light theme
 - Font size via Ctrl+mouse wheel or Ctrl +/−/0 (the preview follows)
+- Backup of all notes into a single `.tar.gz` and restore (add to or replace the current tabs)
 - Editor font selectable in the status bar (e.g. fonts with ligatures like Fira Code); ligatures can be switched off in the main menu
 
 ## Keyboard shortcuts
@@ -86,6 +87,22 @@ first match wins:
 3. `plantuml*.jar` in `~/bin`, `~/.local/bin`, `~/.local/share/plantuml`, `/usr/share/plantuml`, `/opt/plantuml` (run with `java -jar`)
 4. a `plantuml` executable on `$PATH`
 
+## Backup and restore
+
+*Main menu → Back Up Notes…* writes one `.tar.gz` with all tabs, note contents
+(including unsaved changes of opened files) and settings. Opened files themselves
+are not included – their tabs only keep the path.
+
+*Main menu → Restore Backup…* offers two modes:
+
+- **Add** – puts the backup's tabs next to the current ones; tabs that are already
+  open with the same content are skipped.
+- **Replace** – closes all tabs and restores the backup including its settings
+  (window size stays). The current state is saved to
+  `~/.local/share/quicknotes/backups/before-restore-<time>.tar.gz` first.
+
+Tabs of files that don't exist on this computer are skipped.
+
 ## Storage
 
 ```
@@ -93,7 +110,8 @@ first match wins:
 ├── session.json      # open tabs, settings (font size, theme, window size, …)
 ├── notes/<id>.txt    # note contents and unsaved changes of opened files
 ├── language-specs/   # bundled syntax definitions (PlantUML)
-└── icons/            # bundled application icon (for the window/About dialog)
+├── icons/            # bundled application icon (for the window/About dialog)
+└── backups/          # automatic backups taken before "Restore → Replace"
 ```
 
 ## Notes on X11 drag and drop

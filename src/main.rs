@@ -1,3 +1,4 @@
+mod backup;
 mod editor;
 mod export;
 mod format;

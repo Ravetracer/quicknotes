@@ -23,6 +23,8 @@ sqlformat = "0.2"
 base64 = "0.22"
 urlencoding = "2"
 dirs = "5"
+tar = "0.4"
+flate2 = "1"
 
 [profile.release]
 opt-level = 3

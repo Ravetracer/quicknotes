@@ -90,6 +90,8 @@ pub struct Window {
     save_pending: Cell<bool>,
     scroll_acc: Cell<f64>,
     menu_page: RefCell<Option<adw::TabPage>>,
+    /// Closing all tabs for a restore: no confirmations, no undo.
+    bulk_close: Cell<bool>,
 }
 
 thread_local! {
@@ -314,6 +316,7 @@ impl Window {
             save_pending: Cell::new(false),
             scroll_acc: Cell::new(0.0),
             menu_page: RefCell::new(None),
+            bulk_close: Cell::new(false),
         });
 
         this.setup_actions(app);
@@ -432,6 +435,8 @@ impl Window {
         });
         self.action("export-html", &["<Control><Shift>e"], |w| w.export(ExportFormat::Html));
         self.action("export-pdf", &["<Control><Shift>p"], |w| w.export(ExportFormat::Pdf));
+        self.action("backup", &[], |w| w.backup());
+        self.action("restore-backup", &[], |w| w.restore_backup());
         self.action("open-data-dir", &[], |w| {
             let launcher = gtk::FileLauncher::new(Some(&gio::File::for_path(store::data_dir())));
             launcher.launch(Some(&w.win), None::<&gio::Cancellable>, |_| {});
@@ -524,6 +529,15 @@ impl Window {
             let Some(this) = weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
+            if this.bulk_close.get() {
+                if let Some(entry) = this.entry_for_page(page) {
+                    let id = entry.page.child().widget_name().to_string();
+                    this.tabs.borrow_mut().remove(&id);
+                    this.dirty.borrow_mut().remove(&id);
+                    store::delete_note(&id);
+                }
+                return glib::Propagation::Proceed;
+            }
             match this.entry_for_page(page).map(|e| e.tab) {
                 Some(Tab::Text(t)) if t.path.borrow().is_some() && t.buffer.is_modified() => {
                     this.confirm_close(view.clone(), page.clone(), t);
@@ -1120,6 +1134,215 @@ impl Window {
             settings.height = h;
         }
         Session { version: 1, active, tabs, settings }
+    }
+
+    // ===== backup =========================================================
+
+    /// Current session and note contents, straight from the editors.
+    fn backup_contents(&self) -> (Session, Vec<(String, String)>) {
+        let session = self.snapshot();
+        let notes = self
+            .text_tabs()
+            .into_iter()
+            .filter(|t| t.needs_note_file())
+            .map(|t| (t.id.clone(), t.text()))
+            .collect();
+        (session, notes)
+    }
+
+    fn backup(self: &Rc<Self>) {
+        self.persist_all();
+        let date = local_time("%Y-%m-%d").unwrap_or_else(|| "backup".into());
+        let dialog = gtk::FileDialog::builder()
+            .title("Back Up Notes")
+            .modal(true)
+            .initial_name(format!("quicknotes-backup-{date}.tar.gz"))
+            .build();
+        if let Some(home) = dirs::home_dir() {
+            dialog.set_initial_folder(Some(&gio::File::for_path(home)));
+        }
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let Ok(file) = dialog.save_future(Some(&this.win)).await else { return };
+            let Some(path) = file.path() else { return };
+            let (session, notes) = this.backup_contents();
+            let count = session.tabs.len();
+            let created = iso_now();
+            let target = path.clone();
+            let result = gio::spawn_blocking(move || crate::backup::write(&target, &created, &session, &notes))
+                .await
+                .unwrap_or_else(|_| Err("backup failed".into()));
+            match result {
+                Ok(()) => this.toast(&format!("Backup of {} saved to {}", tabs_count(count), tilde(&path))),
+                Err(e) => this.toast(&format!("Backup failed: {e}")),
+            }
+        });
+    }
+
+    fn restore_backup(self: &Rc<Self>) {
+        let filter = gtk::FileFilter::new();
+        filter.set_name(Some("QuickNotes backups"));
+        filter.add_pattern("*.tar.gz");
+        filter.add_pattern("*.tgz");
+        let filters = gio::ListStore::new::<gtk::FileFilter>();
+        filters.append(&filter);
+        let dialog = gtk::FileDialog::builder()
+            .title("Restore Backup")
+            .modal(true)
+            .filters(&filters)
+            .default_filter(&filter)
+            .build();
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let Ok(file) = dialog.open_future(Some(&this.win)).await else { return };
+            let Some(path) = file.path() else { return };
+            let result = gio::spawn_blocking(move || crate::backup::read(&path))
+                .await
+                .unwrap_or_else(|_| Err("cannot read the backup".into()));
+            let backup = match result {
+                Ok(b) => b,
+                Err(e) => {
+                    this.toast(&format!("Restore failed: {e}"));
+                    return;
+                }
+            };
+            let created = backup.manifest.created.replace('T', " ");
+            let created = created.get(..16).unwrap_or(&created);
+            let dialog = adw::AlertDialog::new(
+                Some("Restore Backup?"),
+                Some(&format!(
+                    "Backup from {created} with {}.\n\n\
+                     Add: puts the tabs of the backup next to your current tabs.\n\n\
+                     Replace: closes all current tabs and restores the backup including its \
+                     settings. Your current notes are saved to an automatic backup first.",
+                    tabs_count(backup.session.tabs.len())
+                )),
+            );
+            dialog.add_responses(&[("cancel", "_Cancel"), ("add", "_Add"), ("replace", "_Replace")]);
+            dialog.set_response_appearance("add", adw::ResponseAppearance::Suggested);
+            dialog.set_response_appearance("replace", adw::ResponseAppearance::Destructive);
+            dialog.set_default_response(Some("add"));
+            dialog.set_close_response("cancel");
+            match dialog.choose_future(&this.win).await.as_str() {
+                "add" => this.import_add(backup),
+                "replace" => this.import_replace(backup),
+                _ => {}
+            }
+        });
+    }
+
+    /// Restores the tabs of a backup. Returns (restored, missing files).
+    fn import_tabs(self: &Rc<Self>, backup: &crate::backup::Backup, merge: bool) -> (usize, usize) {
+        let (mut restored, mut missing) = (0, 0);
+        for meta in &backup.session.tabs {
+            let content = backup.notes.get(&meta.id).cloned();
+            if content.is_none() {
+                match &meta.path {
+                    // Notes without content (empty notes) are not worth restoring.
+                    None => continue,
+                    Some(p) if !p.exists() => {
+                        missing += 1;
+                        continue;
+                    }
+                    Some(_) => {}
+                }
+            }
+            let mut meta = meta.clone();
+            if merge {
+                if self.already_open(&meta, content.as_deref()) {
+                    continue;
+                }
+                if self.tabs.borrow().contains_key(&meta.id) {
+                    meta.id = store::new_id();
+                }
+            }
+            let id = meta.id.clone();
+            if self.restore_tab(meta, content).is_some() {
+                restored += 1;
+                self.mark_dirty(&id);
+            }
+        }
+        (restored, missing)
+    }
+
+    /// The tab of a backup is already open with the same content.
+    fn already_open(&self, meta: &TabMeta, content: Option<&str>) -> bool {
+        self.tabs.borrow().values().any(|e| match (&e.tab, content) {
+            (Tab::Text(t), Some(c)) => *t.path.borrow() == meta.path && t.text() == c,
+            (tab, None) => tab.path().is_some() && tab.path() == meta.path,
+            _ => false,
+        })
+    }
+
+    fn import_add(self: &Rc<Self>, backup: crate::backup::Backup) {
+        let (restored, missing) = self.import_tabs(&backup, true);
+        let mut msg = match restored {
+            0 => "All tabs of the backup are already open".to_owned(),
+            n => format!("Added {} from the backup", tabs_count(n)),
+        };
+        if missing > 0 {
+            msg.push_str(&format!(" – {} not found", files_count(missing)));
+        }
+        self.toast(&msg);
+        self.sync_ui();
+    }
+
+    fn import_replace(self: &Rc<Self>, backup: crate::backup::Backup) {
+        // Safety net: the current state goes into an automatic backup first.
+        self.persist_all();
+        let dir = store::data_dir().join("backups");
+        let stamp = local_time("%Y-%m-%d_%H-%M-%S").unwrap_or_else(store::new_id);
+        let safety = dir.join(format!("before-restore-{stamp}.tar.gz"));
+        let (session, notes) = self.backup_contents();
+        if let Err(e) = std::fs::create_dir_all(&dir)
+            .map_err(|e| e.to_string())
+            .and_then(|_| crate::backup::write(&safety, &iso_now(), &session, &notes))
+        {
+            self.toast(&format!("Restore cancelled, the current notes could not be saved: {e}"));
+            return;
+        }
+
+        self.bulk_close.set(true);
+        for _ in 0..self.view.n_pages() {
+            if self.view.n_pages() == 0 {
+                break;
+            }
+            self.view.close_page(&self.view.nth_page(0));
+        }
+        self.bulk_close.set(false);
+        self.closed.borrow_mut().clear();
+
+        // Settings from the backup, but keep this computer's window geometry.
+        let restored = backup.session.settings.clone();
+        {
+            let mut s = self.settings.borrow_mut();
+            let (w, h, m) = (s.width, s.height, s.maximized);
+            *s = restored.clone();
+            (s.width, s.height, s.maximized) = (w, h, m);
+        }
+        *self.shared.plantuml_command.borrow_mut() = restored.plantuml_command.clone();
+        self.set_dark(restored.dark);
+        self.set_toggle("dark", true, restored.dark);
+        self.set_toggle("ligatures", true, restored.ligatures);
+        self.font_btn
+            .set_font_desc(&gtk::pango::FontDescription::from_string(&restored.font_family));
+        self.apply_font();
+
+        let (count, missing) = self.import_tabs(&backup, false);
+        if self.view.n_pages() == 0 {
+            self.new_note();
+        } else {
+            let idx = (backup.session.active as i32).clamp(0, self.view.n_pages() - 1);
+            self.view.set_selected_page(&self.view.nth_page(idx));
+        }
+        self.persist_all();
+        self.sync_ui();
+        let mut msg = format!("Restored {}. Previous notes saved to {}", tabs_count(count), tilde(&safety));
+        if missing > 0 {
+            msg.push_str(&format!(" – {} not found", files_count(missing)));
+        }
+        let toast = adw::Toast::builder().title(markup_escape(&msg)).timeout(8).build();
+        self.toasts.add_toast(toast);
     }
 
     // ===== files ==========================================================
@@ -2000,7 +2223,13 @@ fn main_menu() -> gio::Menu {
     );
     menu.append_section(
         None,
-        &section(&[("Open Notes Folder", "win.open-data-dir"), ("About QuickNotes", "win.about")]),
+        &section(&[
+            ("Back Up Notes…", "win.backup"),
+            ("Restore Backup…", "win.restore-backup"),
+            ("Open Notes Folder", "win.open-data-dir"),
+        ]),
+    );
+    menu.append_section(None, &section(&[("About QuickNotes", "win.about")]),
     );
     menu
 }
@@ -2072,6 +2301,27 @@ fn descendants(widget: &impl IsA<gtk::Widget>) -> Vec<gtk::Widget> {
         out.push(c);
     }
     out
+}
+
+fn tabs_count(n: usize) -> String {
+    if n == 1 { "1 tab".into() } else { format!("{n} tabs") }
+}
+
+fn files_count(n: usize) -> String {
+    if n == 1 { "1 file".into() } else { format!("{n} files") }
+}
+
+/// Local time formatted with a `strftime`-like pattern.
+fn local_time(pattern: &str) -> Option<String> {
+    glib::DateTime::now_local().ok()?.format(pattern).ok().map(String::from)
+}
+
+fn iso_now() -> String {
+    glib::DateTime::now_local()
+        .ok()
+        .and_then(|d| d.format_iso8601().ok())
+        .map(String::from)
+        .unwrap_or_default()
 }
 
 #[derive(Clone, Copy)]
