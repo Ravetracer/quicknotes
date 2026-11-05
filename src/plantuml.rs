@@ -7,7 +7,16 @@ use std::path::{Path, PathBuf};
 /// Finds a usable PlantUML command line. Order: setting, `$QUICKNOTES_PLANTUML`,
 /// `plantuml` on `$PATH` (plus common user bin dirs), then a `plantuml.jar`.
 pub fn command(configured: Option<&str>) -> Option<Vec<String>> {
-    let split = |s: &str| s.split_whitespace().map(str::to_owned).collect::<Vec<_>>();
+    // An existing file is a program (paths may contain spaces), anything
+    // else a command line like `java -jar /opt/plantuml.jar`.
+    let split = |s: &str| {
+        let s = s.trim();
+        if Path::new(s).is_file() {
+            vec![s.to_owned()]
+        } else {
+            s.split_whitespace().map(str::to_owned).collect::<Vec<_>>()
+        }
+    };
     if let Some(c) = configured.filter(|c| !c.trim().is_empty()) {
         return Some(split(c));
     }

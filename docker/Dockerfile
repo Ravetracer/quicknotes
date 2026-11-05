@@ -10,6 +10,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgtk-4-dev libadwaita-1-dev libgtksourceview-5-dev libwebkitgtk-6.0-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Everything bundled into the AppImage (./dev.sh appimage): Java and Graphviz
+# for PlantUML, icons, image loaders, TLS for WebKit, packaging tools.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        openjdk-21-jre-headless graphviz \
+        adwaita-icon-theme librsvg2-common webp-pixbuf-loader libgdk-pixbuf2.0-bin \
+        glib-networking libglib2.0-bin \
+        file desktop-file-utils perl \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH

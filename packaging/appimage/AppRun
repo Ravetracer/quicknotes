@@ -1,0 +1,46 @@
+#!/bin/sh
+# Start script of the QuickNotes AppImage: points GTK, WebKit, GdkPixbuf and
+# PlantUML at the bundled files, then starts QuickNotes.
+HERE="$(dirname "$(readlink -f "$0")")"
+
+# File arguments relative to the caller's directory become absolute, because
+# the working directory changes below.
+for arg do
+    shift
+    case "$arg" in
+        -*|/*|*://*) ;;
+        *) [ -e "$arg" ] && arg="$PWD/$arg" ;;
+    esac
+    set -- "$@" "$arg"
+done
+
+export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export XDG_DATA_DIRS="$HERE/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+export GSETTINGS_SCHEMA_DIR="$HERE/usr/share/glib-2.0/schemas"
+export GTK_PATH="$HERE/usr/lib/gtk-4.0"
+export GIO_EXTRA_MODULES="$HERE/usr/lib/gio/modules"
+
+# GdkPixbuf needs absolute paths in its loader cache.
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/quicknotes-appimage"
+mkdir -p "$CACHE_DIR"
+sed "s|@APPDIR@|$HERE|g" "$HERE/usr/lib/gdk-pixbuf-2.0/loaders.cache.in" > "$CACHE_DIR/loaders.cache"
+export GDK_PIXBUF_MODULEDIR="$HERE/usr/lib/gdk-pixbuf-2.0/loaders"
+export GDK_PIXBUF_MODULE_FILE="$CACHE_DIR/loaders.cache"
+
+# Bundled PlantUML (Java + Graphviz), unless configured otherwise.
+export QUICKNOTES_PLANTUML="${QUICKNOTES_PLANTUML:-$HERE/usr/bin/plantuml}"
+
+# WebKit runs web content in a bubblewrap sandbox and aborts the whole app if
+# that is impossible (no bwrap/xdg-dbus-proxy, or no user namespaces). Only
+# then the sandbox is switched off.
+if [ -z "${WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS:-}" ]; then
+    if [ ! -x /usr/bin/bwrap ] || [ ! -x /usr/bin/xdg-dbus-proxy ] ||
+        ! /usr/bin/bwrap --ro-bind / / --dev /dev true >/dev/null 2>&1; then
+        export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+    fi
+fi
+
+# WebKit's helper processes and its injected bundle are looked up via the
+# relative path ././/lib/x86_64-linux-gnu/webkitgtk-6.0 (patched at build time).
+cd "$HERE/usr" || exit 1
+exec "$HERE/usr/bin/quicknotes" "$@"

@@ -1,0 +1,45 @@
+# Libraries that are NOT bundled: present on every desktop system and tied to
+# the system (C library, graphics drivers, display server, font setup). The
+# host versions are newer than the build system's (Ubuntu 24.04), which is
+# what these libraries need. One regular expression per line.
+
+# glibc
+^ld-linux
+^libc\.so
+^libm\.so
+^libdl\.so
+^libpthread\.so
+^librt\.so
+^libresolv\.so
+^libutil\.so
+^libanl\.so
+^libmvec\.so
+^libnsl\.so
+^libnss_
+^libthread_db
+# compiler runtime (must not be older than the one of the graphics drivers)
+^libstdc\+\+\.so
+^libgcc_s\.so
+# graphics drivers
+^libGL\.so
+^libGLX
+^libGLdispatch
+^libOpenGL
+^libEGL\.so
+^libGLESv2
+^libgbm\.so
+^libdrm\.so
+# libvulkan (loader) is bundled: ABI-stable, finds the system drivers itself
+# display server
+^libX11\.so
+^libX11-xcb
+^libxcb
+^libwayland-
+# fonts (configuration format belongs to the system)
+^libfontconfig\.so
+^libfreetype\.so
+# system integration
+^libz\.so
+^libudev\.so
+^libsystemd\.so
+^libasound\.so

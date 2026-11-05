@@ -74,6 +74,31 @@ that ship with an Ubuntu 24.04 desktop.
 Runtime libraries used (all part of Ubuntu 24.04): GTK 4.14, libadwaita 1.5,
 GtkSourceView 5.12, WebKitGTK 6.0.
 
+## AppImage (other distributions)
+
+```sh
+./dev.sh appimage         # -> target/QuickNotes-<version>-x86_64.AppImage
+```
+
+The AppImage is self-contained: GTK 4, libadwaita, GtkSourceView, WebKitGTK, a Java
+runtime, PlantUML (MIT edition) and Graphviz are bundled, so previews, PDF export and
+PlantUML work without installing anything. It was tested on Fedora 42 (the base of
+Bazzite) without any of these packages.
+
+What the target system needs – present on every desktop:
+
+- glibc 2.39 or newer (built on Ubuntu 24.04)
+- graphics drivers (Mesa: EGL/GLES/GL), X11 and Wayland client libraries, fontconfig
+- FUSE to mount the AppImage (otherwise start it with `--appimage-extract-and-run`)
+
+Usage: make it executable (`chmod +x QuickNotes-*.AppImage`) and start it. On Bazzite,
+*Gear Lever* adds it to the application menu. Notes are stored in the same place as with
+the native build (`~/.local/share/quicknotes`), so both can be used alternately.
+
+WebKit runs web content in a bubblewrap sandbox. If the system cannot provide one (no
+`bwrap`/`xdg-dbus-proxy` or no user namespaces), the AppImage starts without it instead
+of failing. Build details: `packaging/appimage/`.
+
 ## Previews and export
 
 - **Markdown** is rendered with pulldown-cmark (tables, task lists, footnotes, strikethrough).
