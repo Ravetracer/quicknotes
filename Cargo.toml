@@ -1,0 +1,29 @@
+[package]
+name = "quicknotes"
+version = "0.1.0"
+edition = "2021"
+description = "A small tabbed notepad for text and code snippets"
+license = "MIT"
+repository = "https://github.com/Ravetracer/quicknotes"
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.9", features = ["v4_14"] }
+adw = { package = "libadwaita", version = "0.7", features = ["v1_5"] }
+sourceview5 = "0.9"
+webkit6 = "0.4"
+gdk4-x11 = "0.9"
+x11rb = "0.13"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml = "0.9"
+quick-xml = "0.37"
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
+sqlformat = "0.2"
+base64 = "0.22"
+urlencoding = "2"
+dirs = "5"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Minimal PlantUML syntax definition for GtkSourceView 5. -->
+<language id="plantuml" name="PlantUML" version="2.0" section="Markup">
+  <metadata>
+    <property name="globs">*.puml;*.plantuml;*.pu;*.iuml;*.wsd</property>
+    <property name="line-comment-start">'</property>
+    <property name="block-comment-start">/'</property>
+    <property name="block-comment-end">'/</property>
+  </metadata>
+
+  <styles>
+    <style id="comment" name="Comment" map-to="def:comment"/>
+    <style id="directive" name="Directive" map-to="def:preprocessor"/>
+    <style id="keyword" name="Keyword" map-to="def:keyword"/>
+    <style id="string" name="String" map-to="def:string"/>
+    <style id="arrow" name="Arrow" map-to="def:operator"/>
+    <style id="color" name="Color" map-to="def:constant"/>
+    <style id="stereotype" name="Stereotype" map-to="def:type"/>
+  </styles>
+
+  <definitions>
+    <context id="plantuml">
+      <include>
+        <context id="block-comment" style-ref="comment" class="comment">
+          <start>/'</start>
+          <end>'/</end>
+        </context>
+        <context id="line-comment" style-ref="comment" end-at-line-end="true" class="comment">
+          <start>^\s*'</start>
+        </context>
+        <context id="string" style-ref="string" end-at-line-end="true">
+          <start>"</start>
+          <end>"</end>
+        </context>
+        <context id="directive" style-ref="directive">
+          <match>^\s*(@start\w+|@end\w+|![a-z_]+)</match>
+        </context>
+        <context id="stereotype" style-ref="stereotype">
+          <match>&lt;&lt;[^&gt;]*&gt;&gt;</match>
+        </context>
+        <context id="color" style-ref="color">
+          <match>#[0-9A-Za-z]+\b</match>
+        </context>
+        <context id="arrow" style-ref="arrow">
+          <match>&lt;?[-.=]{2,}&gt;?|&lt;[-.=]+|[-.=]+&gt;|\|&gt;|&lt;\|</match>
+        </context>
+        <context id="keywords" style-ref="keyword">
+          <keyword>abstract</keyword><keyword>activate</keyword><keyword>actor</keyword>
+          <keyword>agent</keyword><keyword>alt</keyword><keyword>annotation</keyword>
+          <keyword>artifact</keyword><keyword>as</keyword><keyword>autonumber</keyword>
+          <keyword>bottom</keyword><keyword>boundary</keyword><keyword>box</keyword>
+          <keyword>break</keyword><keyword>caption</keyword><keyword>card</keyword>
+          <keyword>class</keyword><keyword>cloud</keyword><keyword>collections</keyword>
+          <keyword>component</keyword><keyword>control</keyword><keyword>critical</keyword>
+          <keyword>database</keyword><keyword>deactivate</keyword><keyword>destroy</keyword>
+          <keyword>detach</keyword><keyword>else</keyword><keyword>elseif</keyword>
+          <keyword>end</keyword><keyword>endif</keyword><keyword>endfork</keyword>
+          <keyword>endlegend</keyword><keyword>endwhile</keyword><keyword>entity</keyword>
+          <keyword>enum</keyword><keyword>file</keyword><keyword>folder</keyword>
+          <keyword>footer</keyword><keyword>fork</keyword><keyword>frame</keyword>
+          <keyword>group</keyword><keyword>header</keyword><keyword>hexagon</keyword>
+          <keyword>hide</keyword><keyword>if</keyword><keyword>interface</keyword>
+          <keyword>kill</keyword><keyword>left</keyword><keyword>legend</keyword>
+          <keyword>loop</keyword><keyword>map</keyword><keyword>namespace</keyword>
+          <keyword>newpage</keyword><keyword>node</keyword><keyword>note</keyword>
+          <keyword>object</keyword><keyword>of</keyword><keyword>opt</keyword>
+          <keyword>over</keyword><keyword>package</keyword><keyword>par</keyword>
+          <keyword>participant</keyword><keyword>partition</keyword><keyword>person</keyword>
+          <keyword>queue</keyword><keyword>rectangle</keyword><keyword>ref</keyword>
+          <keyword>repeat</keyword><keyword>return</keyword><keyword>right</keyword>
+          <keyword>scale</keyword><keyword>show</keyword><keyword>skinparam</keyword>
+          <keyword>split</keyword><keyword>stack</keyword><keyword>start</keyword>
+          <keyword>state</keyword><keyword>stop</keyword><keyword>storage</keyword>
+          <keyword>then</keyword><keyword>title</keyword><keyword>top</keyword>
+          <keyword>usecase</keyword><keyword>while</keyword>
+        </context>
+      </include>
+    </context>
+  </definitions>
+</language>
