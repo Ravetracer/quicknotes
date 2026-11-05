@@ -1,10 +1,13 @@
 mod editor;
+mod export;
 mod format;
+mod html;
 mod icons;
 mod image_tab;
 mod langs;
 mod markdown;
 mod plantuml;
+mod rst;
 mod store;
 mod window;
 mod xdnd;
@@ -33,6 +36,15 @@ const APP_CSS: &str = r#"
 "#;
 
 fn main() -> glib::ExitCode {
+    // Desktops like KDE set gtk-application-prefer-dark-theme for GTK apps.
+    // libadwaita ignores it (the theme is set via AdwStyleManager) but warns
+    // at startup; reset it for this process before libadwaita initializes.
+    if gtk::init().is_ok() {
+        if let Some(settings) = gtk::Settings::default() {
+            settings.set_gtk_application_prefer_dark_theme(false);
+        }
+    }
+
     let app = adw::Application::builder()
         .application_id(APP_ID)
         .flags(gio::ApplicationFlags::HANDLES_OPEN)

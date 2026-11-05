@@ -1,10 +1,10 @@
 //! Main window: tab management, actions, menus, search bar, status bar and
 //! session persistence.
 
-use crate::editor::{CursorTarget, EditorTab, Shared};
+use crate::editor::{CursorTarget, EditorTab, PreviewKind, Shared};
 use crate::image_tab::{self, ImageTab};
 use crate::store::{self, Session, Settings, TabKind, TabMeta};
-use crate::{format, langs, APP_ID};
+use crate::{format, html, langs, APP_ID};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use sourceview5::prelude::*;
@@ -79,6 +79,7 @@ pub struct Window {
     status_info: gtk::Label,
     status_pos: gtk::Label,
     zoom_btn: gtk::Button,
+    font_btn: gtk::FontDialogButton,
     lang_drop: gtk::DropDown,
     lang_ids: Vec<Option<String>>,
     theme_btn: gtk::Button,
@@ -209,6 +210,18 @@ impl Window {
             .build();
         zoom_btn.add_css_class("flat");
 
+        // Editor font family (the size is handled by the zoom above).
+        let font_dialog = gtk::FontDialog::builder().title("Editor Font").modal(true).build();
+        let font_btn = gtk::FontDialogButton::builder()
+            .dialog(&font_dialog)
+            .level(gtk::FontLevel::Family)
+            .use_font(true)
+            .use_size(false)
+            .tooltip_text("Editor font")
+            .build();
+        font_btn.add_css_class("flat");
+        font_btn.set_font_desc(&gtk::pango::FontDescription::from_string(&settings.font_family));
+
         let languages = langs::all();
         let mut lang_ids: Vec<Option<String>> = vec![None];
         let mut names: Vec<String> = vec!["Plain Text".into()];
@@ -230,6 +243,7 @@ impl Window {
 
         status.append(&status_info);
         status.append(&status_pos);
+        status.append(&font_btn);
         status.append(&zoom_btn);
         status.append(&lang_drop);
 
@@ -289,6 +303,7 @@ impl Window {
             status_info,
             status_pos,
             zoom_btn,
+            font_btn,
             lang_drop,
             lang_ids,
             theme_btn,
@@ -344,6 +359,12 @@ impl Window {
         self.win.add_action(&action);
         if let Some(app) = self.win.application() {
             app.set_accels_for_action(&format!("win.{name}"), accels);
+        }
+    }
+
+    fn set_enabled(&self, name: &str, enabled: bool) {
+        if let Some(a) = self.win.lookup_action(name).and_downcast::<gio::SimpleAction>() {
+            a.set_enabled(enabled);
         }
     }
 
@@ -409,6 +430,8 @@ impl Window {
             w.apply_font();
             w.schedule_persist();
         });
+        self.action("export-html", &["<Control><Shift>e"], |w| w.export(ExportFormat::Html));
+        self.action("export-pdf", &["<Control><Shift>p"], |w| w.export(ExportFormat::Pdf));
         self.action("open-data-dir", &[], |w| {
             let launcher = gtk::FileLauncher::new(Some(&gio::File::for_path(store::data_dir())));
             launcher.launch(Some(&w.win), None::<&gio::Cancellable>, |_| {});
@@ -438,6 +461,12 @@ impl Window {
         });
         self.toggle_action("dark", &[], |w, on| w.set_dark(on));
         self.set_toggle("dark", true, self.settings.borrow().dark);
+        self.toggle_action("ligatures", &[], |w, on| {
+            w.settings.borrow_mut().ligatures = on;
+            w.apply_font();
+            w.schedule_persist();
+        });
+        self.set_toggle("ligatures", true, self.settings.borrow().ligatures);
 
         let tool = gio::SimpleAction::new("tool", Some(glib::VariantTy::STRING));
         let weak = self.weak();
@@ -462,6 +491,22 @@ impl Window {
     }
 
     fn setup_signals(self: &Rc<Self>, toolbar: &adw::ToolbarView) {
+        let weak = self.weak();
+        self.font_btn.connect_font_desc_notify(move |btn| {
+            let Some(this) = weak.upgrade() else { return };
+            let Some(family) = btn.font_desc().and_then(|d| d.family()) else { return };
+            if this.settings.borrow().font_family == family.as_str() {
+                return;
+            }
+            this.settings.borrow_mut().font_family = family.to_string();
+            this.apply_font();
+            this.schedule_persist();
+            // Back to the text, so typing continues right away.
+            if let Some(t) = this.current_text() {
+                t.view.grab_focus();
+            }
+        });
+
         let weak = self.weak();
         self.view.connect_selected_page_notify(move |_| {
             if let Some(this) = weak.upgrade() {
@@ -1125,7 +1170,7 @@ impl Window {
             t.set_wrap(false);
             t.set_language(langs::guess(Some(&path), &read_head(&path)).as_ref());
             self.add_tab(Tab::Text(t.clone()), true);
-            if t.preview_kind().is_some() && !large {
+            if t.preview_kind().is_some_and(PreviewKind::auto_preview) && !large {
                 t.set_preview(true);
                 self.sync_ui();
             }
@@ -1192,6 +1237,77 @@ impl Window {
                 Err(e) => self.toast(&format!("Save failed: {e}")),
             },
             None => self.save_as(),
+        }
+    }
+
+    /// Exports the current Markdown/reStructuredText document.
+    fn export(self: &Rc<Self>, format: ExportFormat) {
+        let Some(t) = self.current_text() else { return };
+        let Some(body) = t.document_html() else {
+            self.toast("Export works for Markdown and reStructuredText");
+            return;
+        };
+        let title = html::first_heading(&body).unwrap_or_else(|| t.title());
+        let ext = match format {
+            ExportFormat::Html => "html",
+            ExportFormat::Pdf => "pdf",
+        };
+        let stem = t
+            .path
+            .borrow()
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| file_name_for(&title));
+        let dialog = gtk::FileDialog::builder()
+            .title(format!("Export as {}", ext.to_uppercase()))
+            .modal(true)
+            .initial_name(format!("{stem}.{ext}"))
+            .build();
+        if let Some(dir) = t.base_dir() {
+            dialog.set_initial_folder(Some(&gio::File::for_path(dir)));
+        }
+        let document = html::standalone(&title, &body);
+        let base_uri = t.base_uri();
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let Ok(file) = dialog.save_future(Some(&this.win)).await else { return };
+            let Some(path) = file.path() else { return };
+            match format {
+                ExportFormat::Html => {
+                    let result = std::fs::write(&path, document).map_err(|e| e.to_string());
+                    this.export_done(&path, result);
+                }
+                ExportFormat::Pdf => {
+                    this.toast("Exporting PDF…");
+                    let weak = this.weak();
+                    let target = path.clone();
+                    crate::export::pdf(document, base_uri, path, move |result| {
+                        if let Some(this) = weak.upgrade() {
+                            this.export_done(&target, result);
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    fn export_done(self: &Rc<Self>, path: &Path, result: Result<(), String>) {
+        match result {
+            Ok(()) => {
+                let toast = adw::Toast::builder()
+                    .title(markup_escape(&format!("Exported to {}", tilde(path))))
+                    .button_label("Open")
+                    .timeout(6)
+                    .build();
+                let file = gio::File::for_path(path);
+                let win = self.win.clone();
+                toast.connect_button_clicked(move |_| {
+                    gtk::FileLauncher::new(Some(&file)).launch(Some(&win), None::<&gio::Cancellable>, |_| {});
+                });
+                self.toasts.add_toast(toast);
+            }
+            Err(e) => self.toast(&format!("Export failed: {e}")),
         }
     }
 
@@ -1349,8 +1465,9 @@ impl Window {
     fn apply_font(&self) {
         let s = self.settings.borrow();
         let family = s.font_family.replace(['"', '\\', ';', '}'], "");
+        let features = if s.ligatures { "normal" } else { "\"liga\" 0, \"calt\" 0, \"dlig\" 0" };
         self.editor_css.load_from_string(&format!(
-            ".editor-view {{ font-family: \"{family}\"; font-size: {}pt; }}",
+            ".editor-view {{ font-family: \"{family}\", monospace; font-size: {}pt; font-feature-settings: {features}; }}",
             s.font_size
         ));
         self.shared.zoom.set(s.font_size / BASE_FONT);
@@ -1404,11 +1521,16 @@ impl Window {
                 self.lang_drop.set_visible(true);
                 self.set_toggle("preview", t.preview_kind().is_some(), t.preview_visible());
                 self.set_toggle("wrap", true, t.wrap());
+                let exportable = t.preview_kind().is_some_and(PreviewKind::is_document);
+                self.set_enabled("export-html", exportable);
+                self.set_enabled("export-pdf", exportable);
             }
             _ => {
                 self.lang_drop.set_visible(false);
                 self.set_toggle("preview", false, false);
                 self.set_toggle("wrap", false, false);
+                self.set_enabled("export-html", false);
+                self.set_enabled("export-pdf", false);
             }
         }
         self.guard.set(false);
@@ -1852,6 +1974,10 @@ fn main_menu() -> gio::Menu {
     );
     menu.append_section(
         None,
+        &section(&[("Export as HTML…", "win.export-html"), ("Export as PDF…", "win.export-pdf")]),
+    );
+    menu.append_section(
+        None,
         &section(&[
             ("Find…", "win.find"),
             ("Find and Replace…", "win.replace"),
@@ -1869,6 +1995,7 @@ fn main_menu() -> gio::Menu {
             ("Larger Font", "win.zoom-in"),
             ("Smaller Font", "win.zoom-out"),
             ("Reset Font Size", "win.zoom-reset"),
+            ("Font Ligatures", "win.ligatures"),
         ]),
     );
     menu.append_section(
@@ -1945,6 +2072,22 @@ fn descendants(widget: &impl IsA<gtk::Widget>) -> Vec<gtk::Widget> {
         out.push(c);
     }
     out
+}
+
+#[derive(Clone, Copy)]
+enum ExportFormat {
+    Html,
+    Pdf,
+}
+
+/// A file name (without extension) derived from a document title.
+fn file_name_for(title: &str) -> String {
+    let name: String = title
+        .chars()
+        .map(|c| if c.is_alphanumeric() || "-_ .".contains(c) { c } else { '_' })
+        .collect();
+    let name = name.trim().trim_end_matches('…').trim().to_owned();
+    if name.is_empty() { "document".into() } else { name }
 }
 
 fn read_head(path: &Path) -> String {

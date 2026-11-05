@@ -16,6 +16,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct Settings {
     pub font_size: f64,
     pub font_family: String,
+    /// OpenType ligatures (e.g. `!=` as `≠` in Fira Code).
+    pub ligatures: bool,
     pub dark: bool,
     pub width: i32,
     pub height: i32,
@@ -32,6 +34,7 @@ impl Default for Settings {
         Self {
             font_size: 12.0,
             font_family: "Monospace".into(),
+            ligatures: true,
             dark: true,
             width: 1100,
             height: 750,

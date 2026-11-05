@@ -81,6 +81,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "docutils-core"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b275f5e95229d172283db2f32aaa47d9437f093b811c9af249e411e46115f4f8"
+
+[[package]]
 name = "equivalent"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -695,6 +701,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "dirs",
+ "docutils-core",
  "gdk4-x11",
  "gtk4",
  "libadwaita",

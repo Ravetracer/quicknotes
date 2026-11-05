@@ -2,7 +2,7 @@
 //! (Markdown or PlantUML) in a split pane.
 
 use crate::store::{TabKind, TabMeta};
-use crate::{langs, markdown, plantuml};
+use crate::{html, langs, markdown, plantuml, rst};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use sourceview5::prelude::*;
@@ -25,6 +25,8 @@ pub struct Shared {
 pub enum PreviewKind {
     Markdown,
     PlantUml,
+    Rst,
+    Html,
 }
 
 impl PreviewKind {
@@ -32,7 +34,28 @@ impl PreviewKind {
         match id {
             Some("markdown") => Some(Self::Markdown),
             Some("plantuml") => Some(Self::PlantUml),
+            Some("rst") => Some(Self::Rst),
+            Some("html") => Some(Self::Html),
             _ => None,
+        }
+    }
+
+    /// Documents that can be exported to HTML/PDF.
+    pub fn is_document(self) -> bool {
+        matches!(self, Self::Markdown | Self::Rst)
+    }
+
+    /// Shown automatically when such a file is opened (HTML files are often
+    /// edited as code, so their preview is opt-in).
+    pub fn auto_preview(self) -> bool {
+        self != Self::Html
+    }
+
+    fn render_delay_ms(self) -> u64 {
+        match self {
+            Self::PlantUml => 700,
+            Self::Html => 400,
+            Self::Markdown | Self::Rst => 250,
         }
     }
 }
@@ -47,7 +70,11 @@ pub enum CursorTarget {
 
 struct Preview {
     webview: webkit6::WebView,
+    /// The current page finished loading (navigations are blocked from then on).
     loaded: Cell<bool>,
+    /// The current page is our document shell (vs. a user HTML document).
+    shell: Cell<bool>,
+    /// JavaScript to run once the current page has loaded.
     pending: RefCell<Option<String>>,
 }
 
@@ -132,11 +159,9 @@ impl EditorTab {
         tab.buffer.connect_changed(move |_| {
             if let Some(t) = weak.upgrade() {
                 if !t.loading.get() {
-                    let delay = match t.preview_kind() {
-                        Some(PreviewKind::PlantUml) => 700,
-                        _ => 250,
-                    };
-                    t.schedule_render(delay);
+                    if let Some(kind) = t.preview_kind() {
+                        t.schedule_render(kind.render_delay_ms());
+                    }
                 }
             }
         });
@@ -188,10 +213,14 @@ impl EditorTab {
             CursorTarget::Offset(o) => self.buffer.iter_at_offset(o),
         };
         self.buffer.place_cursor(&iter);
+        if iter.is_start() {
+            return;
+        }
+        // Scroll only as far as needed to make the cursor visible.
         let view = self.view.clone();
         let buffer = self.buffer.clone();
         glib::idle_add_local_once(move || {
-            view.scroll_to_mark(&buffer.get_insert(), 0.1, false, 0.0, 0.0);
+            view.scroll_to_mark(&buffer.get_insert(), 0.0, false, 0.0, 0.0);
         });
     }
 
@@ -322,10 +351,12 @@ impl EditorTab {
         };
         self.buffer.set_style_scheme(scheme.as_ref());
         if let Some(p) = self.preview.borrow().as_ref() {
-            p.webview.set_background_color(&preview_bg(dark));
-            let js = format!("setTheme('{}')", if dark { "dark" } else { "light" });
-            if p.loaded.get() {
-                p.webview.evaluate_javascript(&js, None, None, None::<&gio::Cancellable>, |_| {});
+            if p.shell.get() {
+                p.webview.set_background_color(&preview_bg(dark));
+                let js = format!("setTheme('{}')", if dark { "dark" } else { "light" });
+                if p.loaded.get() {
+                    p.webview.evaluate_javascript(&js, None, None, None::<&gio::Cancellable>, |_| {});
+                }
             }
         }
     }
@@ -468,20 +499,40 @@ impl EditorTab {
             hook(webview.upcast_ref());
         }
 
-        let base = self
-            .path
-            .borrow()
-            .as_ref()
-            .and_then(|p| p.parent())
-            .map(|d| format!("{}/", gio::File::for_path(d).uri()));
-        webview.load_html(&markdown::page(dark), base.as_deref());
-
         *self.preview.borrow_mut() = Some(Preview {
             webview: webview.clone(),
             loaded: Cell::new(false),
+            shell: Cell::new(false),
             pending: RefCell::new(None),
         });
         webview
+    }
+
+    /// Directory of the backing file (for relative links, images, includes).
+    pub fn base_dir(&self) -> Option<PathBuf> {
+        self.path.borrow().as_ref().and_then(|p| p.parent()).map(Path::to_path_buf)
+    }
+
+    pub fn base_uri(&self) -> Option<String> {
+        self.base_dir().map(|d| format!("{}/", gio::File::for_path(d).uri()))
+    }
+
+    /// Loads a page into the preview; `shell` = our document shell.
+    fn load_page(&self, p: &Preview, page: &str, shell: bool) {
+        p.loaded.set(false);
+        p.shell.set(shell);
+        let bg = if shell { preview_bg(self.shared.dark.get()) } else { gdk::RGBA::WHITE };
+        p.webview.set_background_color(&bg);
+        p.webview.load_html(page, self.base_uri().as_deref());
+    }
+
+    /// The rendered document body (Markdown, reStructuredText), for export.
+    pub fn document_html(&self) -> Option<String> {
+        match self.preview_kind()? {
+            PreviewKind::Markdown => Some(markdown::to_html(&self.text())),
+            PreviewKind::Rst => Some(rst::to_html(&self.text(), self.base_dir().as_deref())),
+            PreviewKind::PlantUml | PreviewKind::Html => None,
+        }
     }
 
     /// WebKitGTK does not paint a web view that was added to an already
@@ -496,16 +547,50 @@ impl EditorTab {
         glib::timeout_add_local_once(Duration::from_millis(60), move || root.set_position(pos));
     }
 
+    /// Shows `html` in the document shell (loading the shell first if needed).
     fn set_preview_html(&self, html: &str) {
-        let Some(p) = self.preview.borrow().as_ref().map(|p| (p.webview.clone(), p.loaded.get())) else {
-            return;
-        };
+        let preview = self.preview.borrow();
+        let Some(p) = preview.as_ref() else { return };
         let js = format!("setContent({})", serde_json::to_string(html).unwrap_or_default());
-        if p.1 {
-            p.0.evaluate_javascript(&js, None, None, None::<&gio::Cancellable>, |_| {});
-        } else if let Some(preview) = self.preview.borrow().as_ref() {
-            *preview.pending.borrow_mut() = Some(js);
+        if !p.shell.get() {
+            self.load_page(p, &html::preview_shell(self.shared.dark.get()), true);
+            *p.pending.borrow_mut() = Some(js);
+        } else if p.loaded.get() {
+            p.webview.evaluate_javascript(&js, None, None, None::<&gio::Cancellable>, |_| {});
+        } else {
+            *p.pending.borrow_mut() = Some(js);
         }
+    }
+
+    /// Shows the buffer as an HTML page, keeping the scroll position.
+    fn render_html_page(self: &Rc<Self>) {
+        let preview = self.preview.borrow();
+        let Some(p) = preview.as_ref() else { return };
+        if p.loaded.get() && !p.shell.get() {
+            let weak = Rc::downgrade(self);
+            p.webview.evaluate_javascript(
+                "window.scrollY",
+                None,
+                None,
+                None::<&gio::Cancellable>,
+                move |result| {
+                    let y = result.map(|v| v.to_double()).unwrap_or(0.0);
+                    if let Some(t) = weak.upgrade() {
+                        t.load_html_document(y);
+                    }
+                },
+            );
+        } else {
+            drop(preview);
+            self.load_html_document(0.0);
+        }
+    }
+
+    fn load_html_document(&self, scroll_y: f64) {
+        let preview = self.preview.borrow();
+        let Some(p) = preview.as_ref() else { return };
+        self.load_page(p, &self.text(), false);
+        *p.pending.borrow_mut() = (scroll_y > 0.0).then(|| format!("window.scrollTo(0, {scroll_y})"));
     }
 
     pub fn schedule_render(self: &Rc<Self>, delay_ms: u64) {
@@ -528,7 +613,9 @@ impl EditorTab {
     fn render(self: &Rc<Self>) {
         match self.preview_kind() {
             Some(PreviewKind::Markdown) => self.set_preview_html(&markdown::to_html(&self.text())),
+            Some(PreviewKind::Rst) => self.set_preview_html(&rst::to_html(&self.text(), self.base_dir().as_deref())),
             Some(PreviewKind::PlantUml) => self.render_plantuml(),
+            Some(PreviewKind::Html) => self.render_html_page(),
             None => {}
         }
     }
@@ -559,7 +646,7 @@ impl EditorTab {
             t.rendering.set(false);
             match result {
                 Ok(svg) => t.set_preview_html(&format!("<div class=\"diagram\"><div class=\"card\">{svg}</div></div>")),
-                Err(e) => t.set_preview_html(&format!("<p class=\"message error\">{}</p>", markdown::escape(&e))),
+                Err(e) => t.set_preview_html(&format!("<p class=\"message error\">{}</p>", html::escape(&e))),
             }
             if t.rerender.replace(false) {
                 t.schedule_render(0);

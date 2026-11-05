@@ -13,7 +13,8 @@ after a restart.
 - Tabs for notes and opened files; restored on startup (content, cursor, syntax, preview)
 - Autosave of notes and of unsaved changes to opened files to `~/.local/share/quicknotes/`
 - Syntax highlighting (GtkSourceView, ~150 languages), auto-detected for pasted snippets
-- Live preview side-by-side for **Markdown** and **PlantUML**
+- Live preview side-by-side for **Markdown**, **reStructuredText**, **PlantUML** and **HTML**
+- Export of Markdown and reStructuredText documents to **HTML** and **PDF**
 - Image viewer (PNG, JPEG, GIF, WebP, SVG, BMP, ICO, TIFF, …) with zoom
 - Large files (logs): loaded asynchronously; highlighting and wrapping are switched off above 8 MB
 - Beautify/minify JSON, XML, YAML, SQL; JSON ↔ YAML; line tools; Base64/URL/JSON-string encode/decode
@@ -21,6 +22,7 @@ after a restart.
 - Drag & drop: files open in new tabs, dropped text (e.g. from a browser) is inserted into the note
 - Dark and light theme
 - Font size via Ctrl+mouse wheel or Ctrl +/−/0 (the preview follows)
+- Editor font selectable in the status bar (e.g. fonts with ligatures like Fira Code); ligatures can be switched off in the main menu
 
 ## Keyboard shortcuts
 
@@ -37,7 +39,8 @@ after a restart.
 | F3 / Shift+F3 | Next / previous match |
 | Ctrl+Alt+B | Beautify (JSON/XML/YAML/SQL, auto-detected) |
 | Ctrl+Alt+M | Minify (JSON/XML) |
-| Ctrl+Shift+V | Toggle preview (Markdown, PlantUML) |
+| Ctrl+Shift+V | Toggle preview (Markdown, reStructuredText, PlantUML, HTML) |
+| Ctrl+Shift+E / Ctrl+Shift+P | Export as HTML / PDF (Markdown, reStructuredText) |
 | Alt+Z | Toggle word wrap |
 | Ctrl+wheel, Ctrl +/−, Ctrl+0 | Font size |
 | Ctrl+Tab, Ctrl+PgUp/PgDn, Alt+1…9 | Switch tabs |
@@ -61,6 +64,17 @@ that ship with an Ubuntu 24.04 desktop.
 
 Runtime libraries used (all part of Ubuntu 24.04): GTK 4.14, libadwaita 1.5,
 GtkSourceView 5.12, WebKitGTK 6.0.
+
+## Previews and export
+
+- **Markdown** is rendered with pulldown-cmark (tables, task lists, footnotes, strikethrough).
+- **reStructuredText** is rendered with [docutils-core](https://crates.io/crates/docutils-core),
+  a Rust port of docutils – no Python needed. `include` and images resolve relative to the file.
+  Problems from level ERROR upwards are shown in the preview.
+- **HTML** files are shown as they are (including their CSS and JavaScript). The preview is
+  opt-in for HTML (Ctrl+Shift+V) since HTML files are often edited as code.
+- **Export** writes a self-contained HTML file or an A4 PDF (via WebKit printing to GTK's
+  "Print to File" printer). Relative images are resolved from the document's folder.
 
 ## PlantUML
 

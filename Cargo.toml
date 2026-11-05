@@ -17,6 +17,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
 quick-xml = "0.37"
+docutils-core = "0.1"
 pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 sqlformat = "0.2"
 base64 = "0.22"
