@@ -147,7 +147,11 @@ html[data-mode="presenter"] { --ui-bg: #17171a; --ui-fg: #f2f2f2; --ui-muted: #9
   0% { opacity: 0; transform: translateY(-300px); } 55% { opacity: 1; transform: translateY(0); }
   72% { transform: translateY(-30px); } 86% { transform: translateY(0); } 93% { transform: translateY(-8px); } 100% { opacity: 1; transform: none; }
 }
-@keyframes qs-wipe { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+/* The negative left inset keeps list markers (drawn outside the box) visible. */
+@keyframes qs-wipe {
+  from { clip-path: inset(-.5em calc(100% + 4em) -.5em -4em); }
+  to { clip-path: inset(-.5em -.5em -.5em -4em); }
+}
 
 /* ----- slide transitions ------------------------------------------------- */
 .qn-enter, .qn-leave { animation-duration: var(--qn-tms, 500ms); animation-timing-function: cubic-bezier(.45, .05, .25, 1); animation-fill-mode: both; }
