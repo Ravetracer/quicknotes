@@ -152,6 +152,9 @@ impl EditorTab {
         view.set_left_margin(6);
         view.set_right_margin(12);
         view.add_css_class("editor-view");
+        let completion = view.completion();
+        completion.set_show_icons(false);
+        completion.add_provider(&crate::completion::SlidesProvider::default());
 
         let scrolled = gtk::ScrolledWindow::builder()
             .child(&view)

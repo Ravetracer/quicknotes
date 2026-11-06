@@ -17,6 +17,9 @@ Jeder Tab ist entweder eine **Notiz** oder eine **geöffnete Datei**.
   *Geschlossenen Tab wiederherstellen* (Strg+Umschalt+T) zurückholen.
 - Der Tab-Titel ist die erste Zeile einer Notiz. *Tab umbenennen* (F2) legt einen festen Titel fest.
 - Die Syntaxhervorhebung wird automatisch gewählt und kann in der Statusleiste geändert werden.
+- Tabs sind je nach Art eingefärbt: Code, Dokumente (Markdown, reStructuredText),
+  Präsentationen, Berechnungen und Bilder haben jeweils eine eigene Farbe; einfache Notizen
+  behalten das normale Aussehen.
 - Schriftart und -größe des Editors werden in der Statusleiste eingestellt (oder mit
   Strg+Mausrad).
 - Die Sprache der Oberfläche (English, Deutsch oder Systemsprache) wird im Hauptmenü unter
@@ -129,7 +132,8 @@ leitet das Format ein).
 
 Markdown-, reStructuredText-, PlantUML- und HTML-Dateien lassen sich mit einer Live-Vorschau
 neben dem Text anzeigen (Strg+Umschalt+V). Markdown und reStructuredText können über das
-Hauptmenü als **HTML** (Strg+Umschalt+E) oder **PDF** (Strg+Umschalt+P) exportiert werden.
+Hauptmenü oder das Kontextmenü des Editors (rechte Maustaste) als **HTML**
+(Strg+Umschalt+E) oder **PDF** (Strg+Umschalt+P) exportiert werden.
 Relative Bilder werden aus dem Ordner des Dokuments geladen.
 
 PlantUML benötigt eine lokale PlantUML-Installation (Befehl `plantuml` oder eine
@@ -145,6 +149,11 @@ umstellen.
 
 Die Vorschau zeigt die Folie am Cursor mit ihren Notizen; **‹ ›** springen im Text zur
 vorherigen/nächsten Folie, **►** spielt die Animationen der Folie ab.
+
+Beim Tippen schlägt QuickNotes vor, was an der Schreibmarke passt – nach `::: `, im Front
+Matter, in `<!-- … -->`-Einstellungen und in Bild-Optionen `![…]` –, jeweils mit kurzer
+Erklärung (Strg+Leertaste zeigt die Liste jederzeit). **Umschalt+F1** (oder *Syntax-Hilfe* im
+Kontextmenü) öffnet eine Übersicht aller Optionen an der Schreibmarke.
 
 ### Folien und Einstellungen
 
@@ -293,8 +302,8 @@ pro Folie mit allen Schritten.
 
 ## Werkzeuge {#tools}
 
-Das Menü *Formatieren & Werkzeuge* (Kopfleiste) arbeitet auf der Auswahl oder, wenn nichts
-ausgewählt ist, auf dem ganzen Tab:
+Das Menü *Formatieren & Werkzeuge* (Kopfleiste) und das Kontextmenü des Editors (rechte
+Maustaste) arbeiten auf der Auswahl oder, wenn nichts ausgewählt ist, auf dem ganzen Tab:
 
 - **Formatieren / Minimieren** von JSON, XML, YAML und SQL (Strg+Alt+B / Strg+Alt+M erkennen
   das Format)
@@ -368,6 +377,7 @@ automatischen Sicherung abgelegt).
 | Strg+Mausrad, Strg +/−/0 | Schriftgröße |
 | Strg+Tab, Strg+Bild↑/Bild↓, Alt+1…9 | Tab wechseln |
 | F1 | Diese Hilfe |
+| Umschalt+F1 | Syntax-Hilfe an der Schreibmarke (Präsentationen) |
 | Strg+Q | Beenden |
 
 [Zurück nach oben](#top)

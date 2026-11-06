@@ -39,7 +39,7 @@ pub const STEP_ANIMATIONS: &[&str] = &[
     "bounce", "drop", "wipe",
 ];
 
-const THEMES: &[&str] = &["default", "dark", "ocean", "sunset"];
+pub const THEMES: &[&str] = &["default", "dark", "ocean", "sunset"];
 
 /// An animation with its duration.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]

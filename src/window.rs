@@ -97,6 +97,12 @@ pub struct Window {
     bulk_close: Cell<bool>,
     present_btn: adw::SplitButton,
     presentation: RefCell<Option<Rc<Presentation>>>,
+    tab_bar: adw::TabBar,
+    /// The header bar's main menu; rebuilt when the menu context changes.
+    main_menu: gio::Menu,
+    menu_context: Cell<Option<MenuContext>>,
+    /// Style each text tab's context menu was last built for.
+    tab_styles: RefCell<HashMap<String, TabStyle>>,
 }
 
 thread_local! {
@@ -165,9 +171,11 @@ impl Window {
         header.pack_start(&icon_button("document-open-symbolic", t!("Open file (Ctrl+O)"), "win.open"));
         header.pack_start(&icon_button("document-save-symbolic", t!("Save to file (Ctrl+S)"), "win.save"));
 
+        let main_menu = gio::Menu::new();
+        fill_main_menu(&main_menu, MenuContext { style: None, has_file: false });
         let menu_btn = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
-            .menu_model(&main_menu())
+            .menu_model(&main_menu)
             .primary(true)
             .tooltip_text(t!("Main menu"))
             .build();
@@ -230,6 +238,15 @@ impl Window {
             .action_name("win.zoom-reset")
             .build();
         zoom_btn.add_css_class("flat");
+        let zoom_step = |label: &str, tip: &str, action: &str| {
+            let b = gtk::Button::builder().label(label).tooltip_text(tip).action_name(action).build();
+            b.add_css_class("flat");
+            b
+        };
+        let zoom_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        zoom_box.append(&zoom_step("−", t!("Smaller font (Ctrl+−)"), "win.zoom-out"));
+        zoom_box.append(&zoom_btn);
+        zoom_box.append(&zoom_step("+", t!("Larger font (Ctrl++)"), "win.zoom-in"));
 
         // Editor font family (the size is handled by the zoom above).
         let font_drop = build_font_dropdown(&zoom_btn, &settings.font_family);
@@ -257,7 +274,7 @@ impl Window {
         status.append(&status_info);
         status.append(&status_pos);
         status.append(&font_drop);
-        status.append(&zoom_btn);
+        status.append(&zoom_box);
         status.append(&lang_drop);
 
         // ----- layout ----------------------------------------------------
@@ -331,6 +348,10 @@ impl Window {
             bulk_close: Cell::new(false),
             present_btn,
             presentation: RefCell::new(None),
+            tab_bar,
+            main_menu,
+            menu_context: Cell::new(None),
+            tab_styles: RefCell::new(HashMap::new()),
         });
 
         this.setup_actions(app);
@@ -401,6 +422,7 @@ impl Window {
         self.action("present", &["<Control>F5"], |w| w.present(false, presenter::Layout::Fullscreen));
         self.action("present-current", &["<Shift>F5"], |w| w.present(true, presenter::Layout::Fullscreen));
         self.action("present-window", &["<Control><Shift>F5"], |w| w.present(true, presenter::Layout::Window));
+        self.action("syntax-help", &["<Shift>F1"], |w| w.show_syntax_help());
         self.action("help", &["F1"], |w| {
             let (dark, zoom) = (w.settings.borrow().dark, w.shared.zoom.get());
             crate::help::show(&w.win, dark, zoom);
@@ -857,7 +879,6 @@ impl Window {
 
     fn connect_text_tab(self: &Rc<Self>, t: &Rc<EditorTab>) {
         let id = t.id.clone();
-        t.view.set_extra_menu(Some(&geocaching_menu()));
         let weak = self.weak();
         let tab = Rc::downgrade(t);
         t.buffer.connect_changed(move |_| {
@@ -2121,6 +2142,7 @@ impl Window {
             }
         }
         self.guard.set(false);
+        self.sync_menus();
 
         // Search highlighting only in the visible tab.
         let searching = self.search.revealer.reveals_child();
@@ -2137,8 +2159,117 @@ impl Window {
         self.update_status();
     }
 
+    /// Rebuilds the main menu and the editors' context menus for the current
+    /// tab types, and tags each tab in the tab bar with its type.
+    fn sync_menus(&self) {
+        let current = self.current();
+        let context = MenuContext {
+            style: current.as_ref().map(TabStyle::of),
+            has_file: matches!(&current, Some(Tab::Text(t)) if t.path.borrow().is_some()),
+        };
+        if self.menu_context.get() != Some(context) {
+            self.menu_context.set(Some(context));
+            fill_main_menu(&self.main_menu, context);
+        }
+
+        let tabs = self.tabs.borrow();
+        let mut styles = self.tab_styles.borrow_mut();
+        styles.retain(|id, _| tabs.contains_key(id));
+        for (id, entry) in tabs.iter() {
+            let Tab::Text(t) = &entry.tab else { continue };
+            let style = TabStyle::of(&entry.tab);
+            if styles.get(id) != Some(&style) {
+                t.view.set_extra_menu(Some(&editor_context_menu(style)));
+                styles.insert(id.clone(), style);
+            }
+        }
+
+        // AdwTabBar has no per-page styling API; its tab widgets expose the
+        // page they show, so the type class is set on them directly.
+        for widget in descendants(&self.tab_bar) {
+            if widget.css_name() != "tab" {
+                continue;
+            }
+            let has_page = widget
+                .find_property("page")
+                .is_some_and(|p| p.value_type() == adw::TabPage::static_type());
+            if !has_page {
+                continue;
+            }
+            let page = widget.property::<Option<adw::TabPage>>("page");
+            let style = page
+                .and_then(|p| tabs.values().find(|e| e.page == p).map(|e| TabStyle::of(&e.tab)));
+            for s in TabStyle::ALL {
+                widget.remove_css_class(s.css_class());
+            }
+            if let Some(s) = style {
+                widget.add_css_class(s.css_class());
+            }
+        }
+    }
+
+    /// Popover at the cursor listing what can be written there.
+    fn show_syntax_help(&self) {
+        let Some(t) = self.current_text() else { return };
+        if t.preview_kind() != Some(PreviewKind::Slides) {
+            return;
+        }
+        let (title, rows) = crate::completion::cheat_sheet_at(t.buffer.upcast_ref());
+
+        let grid = gtk::Grid::builder().row_spacing(6).column_spacing(16).build();
+        for (row, (syntax, info)) in rows.iter().enumerate() {
+            let syntax = gtk::Label::builder()
+                .label(syntax)
+                .xalign(0.0)
+                .yalign(0.0)
+                .wrap(true)
+                .max_width_chars(34)
+                .selectable(true)
+                .build();
+            syntax.add_css_class("monospace");
+            let info = gtk::Label::builder().label(info).xalign(0.0).yalign(0.0).wrap(true).max_width_chars(42).build();
+            info.add_css_class("dim-label");
+            grid.attach(&syntax, 0, row as i32, 1, 1);
+            grid.attach(&info, 1, row as i32, 1, 1);
+        }
+        let heading = gtk::Label::builder().label(&title).xalign(0.0).build();
+        heading.add_css_class("heading");
+        let hint = gtk::Label::builder()
+            .label(t!("Ctrl+Space lists the options at the cursor"))
+            .xalign(0.0)
+            .build();
+        hint.add_css_class("dim-label");
+        hint.add_css_class("caption");
+        let scrolled = gtk::ScrolledWindow::builder()
+            .child(&grid)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .max_content_height(420)
+            .build();
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        content.set_margin_top(6);
+        content.set_margin_bottom(6);
+        content.set_margin_start(6);
+        content.set_margin_end(6);
+        content.append(&heading);
+        content.append(&scrolled);
+        content.append(&hint);
+
+        let popover = gtk::Popover::builder().child(&content).position(gtk::PositionType::Bottom).build();
+        popover.set_parent(&t.view);
+        let iter = t.buffer.iter_at_mark(&t.buffer.get_insert());
+        let rect = t.view.iter_location(&iter);
+        let (x, y) = t.view.buffer_to_window_coords(gtk::TextWindowType::Widget, rect.x(), rect.y());
+        popover.set_pointing_to(Some(&gdk::Rectangle::new(x, y, 1, rect.height())));
+        popover.connect_closed(|p| {
+            let p = p.clone();
+            glib::idle_add_local_once(move || p.unparent());
+        });
+        popover.popup();
+    }
+
     fn set_presentable(&self, on: bool) {
-        for name in ["present", "present-current", "present-window"] {
+        for name in ["present", "present-current", "present-window", "syntax-help"] {
             self.set_enabled(name, on);
         }
         self.present_btn.set_visible(on);
@@ -2699,64 +2830,127 @@ fn build_search_ui() -> SearchUi {
     SearchUi { revealer, find, replace, replace_row, count, settings }
 }
 
-fn main_menu() -> gio::Menu {
-    let menu = gio::Menu::new();
-    let section = |items: &[(&str, &str)]| {
-        let s = gio::Menu::new();
-        for (label, action) in items {
-            s.append(Some(label), Some(action));
+/// Kind of tab, used for the tab colour and the context-dependent menus.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TabStyle {
+    Note,
+    Code,
+    Document,
+    Slides,
+    Calc,
+    Image,
+}
+
+impl TabStyle {
+    const ALL: [Self; 6] = [Self::Note, Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Image];
+
+    fn of(tab: &Tab) -> Self {
+        let Tab::Text(t) = tab else { return Self::Image };
+        match t.preview_kind() {
+            Some(PreviewKind::Slides) => Self::Slides,
+            Some(kind) if kind.is_document() => Self::Document,
+            _ if t.is_calc() => Self::Calc,
+            _ if t.language_id().is_none() => Self::Note,
+            _ => Self::Code,
         }
-        s
-    };
+    }
+
+    fn css_class(self) -> &'static str {
+        match self {
+            Self::Note => "tab-note",
+            Self::Code => "tab-code",
+            Self::Document => "tab-document",
+            Self::Slides => "tab-slides",
+            Self::Calc => "tab-calc",
+            Self::Image => "tab-image",
+        }
+    }
+
+    fn is_text(self) -> bool {
+        self != Self::Image
+    }
+
+    fn exportable(self) -> bool {
+        matches!(self, Self::Document | Self::Slides)
+    }
+}
+
+/// What the main menu depends on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct MenuContext {
+    style: Option<TabStyle>,
+    has_file: bool,
+}
+
+fn menu_section(items: &[(&str, &str)]) -> gio::Menu {
+    let s = gio::Menu::new();
+    for (label, action) in items {
+        s.append(Some(label), Some(action));
+    }
+    s
+}
+
+fn export_section() -> gio::Menu {
+    menu_section(&[(t!("Export as HTML…"), "win.export-html"), (t!("Export as PDF…"), "win.export-pdf")])
+}
+
+fn presentation_section() -> gio::Menu {
+    menu_section(&[
+        (t!("Syntax Help"), "win.syntax-help"),
+        (t!("Start Presentation"), "win.present"),
+        (t!("Present from Current Slide"), "win.present-current"),
+        (t!("Present in a Window"), "win.present-window"),
+    ])
+}
+
+/// Fills the main menu with the entries that apply to the current tab.
+fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
+    menu.remove_all();
+    let text = context.style.is_some_and(TabStyle::is_text);
+
+    let mut file: Vec<(&str, &str)> = vec![
+        (t!("New Note"), "win.new-note"),
+        (t!("New Calculation"), "win.new-calculation"),
+        (t!("New Presentation"), "win.new-presentation"),
+        (t!("Open File…"), "win.open"),
+    ];
+    if text {
+        file.extend([(t!("Save"), "win.save"), (t!("Save As…"), "win.save-as")]);
+    }
+    if context.has_file {
+        file.push((t!("Reload from Disk"), "win.reload"));
+    }
+    menu.append_section(None, &menu_section(&file));
+
+    if let Some(style) = context.style {
+        if style.exportable() {
+            menu.append_section(None, &export_section());
+        }
+        if style == TabStyle::Slides {
+            menu.append_section(None, &presentation_section());
+        }
+    }
+
+    let mut edit: Vec<(&str, &str)> = Vec::new();
+    if text {
+        edit.extend([(t!("Find…"), "win.find"), (t!("Find and Replace…"), "win.replace")]);
+    }
+    if context.style.is_some() {
+        edit.push((t!("Rename Tab…"), "win.rename"));
+    }
+    edit.push((t!("Reopen Closed Tab"), "win.reopen-closed"));
+    menu.append_section(None, &menu_section(&edit));
+
+    let mut view: Vec<(&str, &str)> = Vec::new();
+    if text {
+        view.push((t!("Word Wrap"), "win.wrap"));
+    }
+    view.push((t!("Font Ligatures"), "win.ligatures"));
+    menu.append_section(None, &menu_section(&view));
+
     menu.append_section(
         None,
-        &section(&[
-            (t!("New Note"), "win.new-note"),
-            (t!("New Calculation"), "win.new-calculation"),
-            (t!("New Presentation"), "win.new-presentation"),
-            (t!("Open File…"), "win.open"),
-            (t!("Save"), "win.save"),
-            (t!("Save As…"), "win.save-as"),
-            (t!("Reload from Disk"), "win.reload"),
-        ]),
-    );
-    menu.append_section(
-        None,
-        &section(&[(t!("Export as HTML…"), "win.export-html"), (t!("Export as PDF…"), "win.export-pdf")]),
-    );
-    menu.append_section(
-        None,
-        &section(&[
-            (t!("Start Presentation"), "win.present"),
-            (t!("Present from Current Slide"), "win.present-current"),
-            (t!("Present in a Window"), "win.present-window"),
-        ]),
-    );
-    menu.append_section(
-        None,
-        &section(&[
-            (t!("Find…"), "win.find"),
-            (t!("Find and Replace…"), "win.replace"),
-            (t!("Rename Tab…"), "win.rename"),
-            (t!("Reopen Closed Tab"), "win.reopen-closed"),
-        ]),
-    );
-    menu.append_section(
-        None,
-        &section(&[(t!("Word Wrap"), "win.wrap"), (t!("Preview"), "win.preview"), (t!("Dark Theme"), "win.dark")]),
-    );
-    menu.append_section(
-        None,
-        &section(&[
-            (t!("Larger Font"), "win.zoom-in"),
-            (t!("Smaller Font"), "win.zoom-out"),
-            (t!("Reset Font Size"), "win.zoom-reset"),
-            (t!("Font Ligatures"), "win.ligatures"),
-        ]),
-    );
-    menu.append_section(
-        None,
-        &section(&[
+        &menu_section(&[
             (t!("Back Up Notes…"), "win.backup"),
             (t!("Restore Backup…"), "win.restore-backup"),
             (t!("Open Notes Folder"), "win.open-data-dir"),
@@ -2769,8 +2963,21 @@ fn main_menu() -> gio::Menu {
     let language_section = gio::Menu::new();
     language_section.append_submenu(Some(t!("Language")), &language);
     menu.append_section(None, &language_section);
-    menu.append_section(None, &section(&[(t!("Help"), "win.help"), (t!("About QuickNotes"), "win.about")]),
-    );
+    menu.append_section(None, &menu_section(&[(t!("Help"), "win.help"), (t!("About QuickNotes"), "win.about")]));
+}
+
+/// Extra entries for an editor's right-click menu.
+fn editor_context_menu(style: TabStyle) -> gio::Menu {
+    let menu = gio::Menu::new();
+    menu.append_section(None, &quick_tools());
+    menu.append_section(None, &tool_submenus());
+    if style.exportable() {
+        menu.append_section(None, &export_section());
+    }
+    if style == TabStyle::Slides {
+        menu.append_section(None, &presentation_section());
+    }
+    menu.append_section(None, &geocaching_menu());
     menu
 }
 
@@ -2791,19 +2998,27 @@ fn geocaching_menu() -> gio::Menu {
     menu
 }
 
+fn tool_items(list: &[(&str, &str)]) -> gio::Menu {
+    let m = gio::Menu::new();
+    for (label, tool) in list {
+        m.append(Some(label), Some(&format!("win.tool::{tool}")));
+    }
+    m
+}
+
+fn quick_tools() -> gio::Menu {
+    tool_items(&[(t!("Beautify (auto-detect)"), "beautify"), (t!("Minify (auto-detect)"), "minify")])
+}
+
 fn tools_menu() -> gio::Menu {
     let menu = gio::Menu::new();
-    let items = |list: &[(&str, &str)]| {
-        let m = gio::Menu::new();
-        for (label, tool) in list {
-            m.append(Some(label), Some(&format!("win.tool::{tool}")));
-        }
-        m
-    };
-    menu.append_section(
-        Some(t!("Applies to the selection or the whole tab")),
-        &items(&[(t!("Beautify (auto-detect)"), "beautify"), (t!("Minify (auto-detect)"), "minify")]),
-    );
+    menu.append_section(Some(t!("Applies to the selection or the whole tab")), &quick_tools());
+    menu.append_section(None, &tool_submenus());
+    menu
+}
+
+fn tool_submenus() -> gio::Menu {
+    let items = tool_items;
     let more = gio::Menu::new();
     more.append_submenu(
         Some(t!("Format")),
@@ -2843,8 +3058,7 @@ fn tools_menu() -> gio::Menu {
         ]),
     );
     more.append_submenu(Some(t!("Case")), &items(&[(t!("UPPERCASE"), "upper"), (t!("lowercase"), "lower")]));
-    menu.append_section(None, &more);
-    menu
+    more
 }
 
 // ===== small helpers =====================================================

@@ -16,6 +16,8 @@ Every tab is either a **note** or an **opened file**.
   (Ctrl+Shift+T).
 - The tab title is the first line of a note. *Rename Tab* (F2) sets a fixed title.
 - Syntax highlighting is chosen automatically and can be changed in the status bar.
+- Tabs are tinted by type: code, documents (Markdown, reStructuredText), presentations,
+  calculations and images each have their own colour; plain notes keep the default look.
 - The editor font and its size are set in the status bar (or with Ctrl+mouse wheel).
 - The interface language (English, Deutsch or the system language) is chosen in the main menu
   under *Language* and applies after a restart.
@@ -123,8 +125,8 @@ Minutes in coordinates usually need two digits and three decimals, e.g.
 
 Markdown, reStructuredText, PlantUML and HTML files can be shown with a live preview next to
 the text (Ctrl+Shift+V). Markdown and reStructuredText can be exported as **HTML**
-(Ctrl+Shift+E) or **PDF** (Ctrl+Shift+P) from the main menu. Relative images are taken from
-the folder of the document.
+(Ctrl+Shift+E) or **PDF** (Ctrl+Shift+P) from the main menu or the editor's right-click
+menu. Relative images are taken from the folder of the document.
 
 PlantUML needs a local PlantUML installation (`plantuml` command or a `plantuml*.jar` in
 `~/bin`).
@@ -138,6 +140,11 @@ be switched to *Presentation* in the status bar.
 
 The preview shows the slide at the cursor together with its notes; **‹ ›** jump to the
 previous/next slide in the text, **►** plays the slide's animations.
+
+While typing, QuickNotes suggests what fits at the cursor – after `::: `, in the front matter,
+in `<!-- … -->` settings and in image options `![…]` – each with a short explanation
+(Ctrl+Space shows the list on demand). **Shift+F1** (or *Syntax Help* in the right-click menu)
+opens a cheat sheet of all options for the cursor position.
 
 ### Slides and settings
 
@@ -283,8 +290,8 @@ shown.
 
 ## Tools {#tools}
 
-The *Format & tools* menu (header bar) works on the selection, or on the whole tab when
-nothing is selected:
+The *Format & tools* menu (header bar) and the editor's right-click menu work on the
+selection, or on the whole tab when nothing is selected:
 
 - **Beautify / Minify** JSON, XML, YAML and SQL (Ctrl+Alt+B / Ctrl+Alt+M detect the format)
 - **Convert** JSON ↔ YAML
@@ -353,6 +360,7 @@ file. *Restore Backup…* either **adds** the tabs of a backup to the current on
 | Ctrl+mouse wheel, Ctrl +/−/0 | Font size |
 | Ctrl+Tab, Ctrl+PgUp/PgDn, Alt+1…9 | Switch tabs |
 | F1 | This help |
+| Shift+F1 | Syntax help at the cursor (presentations) |
 | Ctrl+Q | Quit |
 
 [Back to top](#top)

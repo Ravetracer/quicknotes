@@ -2,6 +2,7 @@
 mod i18n;
 mod backup;
 mod calc;
+mod completion;
 mod editor;
 mod export;
 mod format;
@@ -16,6 +17,7 @@ mod plantuml;
 mod presenter;
 mod rst;
 mod slides;
+mod slides_assist;
 mod store;
 mod window;
 mod xdnd;
@@ -43,6 +45,24 @@ const APP_CSS: &str = r#"
 .image-canvas { background-color: alpha(currentColor, 0.04); }
 .image-controls { border-radius: 10px; }
 .image-controls label { padding: 0 4px; }
+
+/* GtkSourceView hides the completion rows when a list runs empty and only
+   refreshes them on the next frame; reopening it would then measure zero
+   width, fail to present and leave stale pixels behind. */
+GtkSourceAssistant.completion list { min-width: 240px; min-height: 24px; }
+
+/* Tab colours by type (plain notes keep the default look). */
+@define-color tab_code_color #2190a4;
+tabbar tab.tab-code     { background-color: alpha(@tab_code_color, 0.14); }
+tabbar tab.tab-document { background-color: alpha(@blue_3, 0.16); }
+tabbar tab.tab-slides   { background-color: alpha(@purple_3, 0.16); }
+tabbar tab.tab-calc     { background-color: alpha(@green_3, 0.16); }
+tabbar tab.tab-image    { background-color: alpha(@orange_3, 0.16); }
+tabbar tab.tab-code:selected     { background-color: alpha(@tab_code_color, 0.32); box-shadow: inset 0 -2px @tab_code_color; }
+tabbar tab.tab-document:selected { background-color: alpha(@blue_3, 0.34); box-shadow: inset 0 -2px @blue_3; }
+tabbar tab.tab-slides:selected   { background-color: alpha(@purple_3, 0.34); box-shadow: inset 0 -2px @purple_3; }
+tabbar tab.tab-calc:selected     { background-color: alpha(@green_3, 0.34); box-shadow: inset 0 -2px @green_3; }
+tabbar tab.tab-image:selected    { background-color: alpha(@orange_3, 0.34); box-shadow: inset 0 -2px @orange_3; }
 "#;
 
 fn main() -> glib::ExitCode {
