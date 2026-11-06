@@ -12,6 +12,7 @@ mod html;
 mod icons;
 mod image_tab;
 mod langs;
+mod mongo;
 mod markdown;
 mod plantuml;
 mod presenter;

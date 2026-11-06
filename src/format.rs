@@ -10,7 +10,10 @@ pub type FmtResult = Result<String, String>;
 /// Language id (GtkSourceView) that fits the output of a tool, if any.
 pub fn output_language(tool: &str) -> Option<&'static str> {
     match tool {
-        "json-pretty" | "json-minify" | "yaml-to-json" => Some("json"),
+        "json-pretty" | "json-minify" | "yaml-to-json" | "mongo-to-ejson" | "mongo-to-ejson-canonical" => Some("json"),
+        "mongo-pretty" | "mongo-minify" | "ejson-to-mongo" | "php-to-mongo" => Some(crate::mongo::LANGUAGE),
+        "php-to-ejson" => Some("json"),
+        "to-php" => Some("php"),
         "xml-pretty" | "xml-minify" => Some("xml"),
         "yaml-pretty" | "json-to-yaml" => Some("yaml"),
         "sql-pretty" => Some("sql"),
@@ -25,6 +28,7 @@ pub fn apply(tool: &str, input: &str, language: Option<&str>) -> Result<(String,
         "beautify" => detect(input, language)
             .map(|f| match f {
                 Format::Json => "json-pretty",
+                Format::Mongo => "mongo-pretty",
                 Format::Xml => "xml-pretty",
                 Format::Yaml => "yaml-pretty",
                 Format::Sql => "sql-pretty",
@@ -32,14 +36,23 @@ pub fn apply(tool: &str, input: &str, language: Option<&str>) -> Result<(String,
             .ok_or("Couldn't detect the format. Pick one in the Format menu.")?,
         "minify" => match detect(input, language) {
             Some(Format::Json) => "json-minify",
+            Some(Format::Mongo) => "mongo-minify",
             Some(Format::Xml) => "xml-minify",
-            _ => return Err(t!("Minify works for JSON and XML only.").into()),
+            _ => return Err(t!("Minify works for JSON, MongoDB / JSON5 and XML only.").into()),
         },
         t => t,
     };
     let out = match tool {
         "json-pretty" => json_reformat(input, Some(4)),
         "json-minify" => json_reformat(input, None),
+        "mongo-pretty" => crate::mongo::reformat(input, true),
+        "mongo-minify" => crate::mongo::reformat(input, false),
+        "mongo-to-ejson" => crate::mongo::to_extended_json(input, false),
+        "mongo-to-ejson-canonical" => crate::mongo::to_extended_json(input, true),
+        "ejson-to-mongo" => crate::mongo::from_extended_json(input),
+        "php-to-ejson" => crate::mongo::php_to_extended_json(input),
+        "php-to-mongo" => crate::mongo::php_to_shell(input),
+        "to-php" => crate::mongo::to_php(input),
         "xml-pretty" => xml_reformat(input, true),
         "xml-minify" => xml_reformat(input, false),
         "yaml-pretty" => yaml_pretty(input),
@@ -77,6 +90,7 @@ pub fn apply(tool: &str, input: &str, language: Option<&str>) -> Result<(String,
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Format {
     Json,
+    Mongo,
     Xml,
     Yaml,
     Sql,
@@ -85,6 +99,7 @@ pub enum Format {
 pub fn detect(input: &str, language: Option<&str>) -> Option<Format> {
     match language {
         Some("json") => return Some(Format::Json),
+        Some(crate::mongo::LANGUAGE) => return Some(Format::Mongo),
         Some("xml") | Some("xslt") | Some("svg") => return Some(Format::Xml),
         Some("yaml") => return Some(Format::Yaml),
         Some("sql") => return Some(Format::Sql),
@@ -92,7 +107,11 @@ pub fn detect(input: &str, language: Option<&str>) -> Option<Format> {
     }
     let t = input.trim_start();
     if t.starts_with('{') || t.starts_with('[') {
-        Some(Format::Json)
+        // Strict JSON first; shell syntax / JSON5 only when that fails.
+        let strict = serde_json::from_str::<serde::de::IgnoredAny>(input).is_ok();
+        Some(if !strict && crate::mongo::sniff(input) { Format::Mongo } else { Format::Json })
+    } else if crate::mongo::sniff(input) {
+        Some(Format::Mongo)
     } else if t.starts_with('<') {
         Some(Format::Xml)
     } else {
@@ -337,6 +356,10 @@ mod tests {
         assert_eq!(out, "[\n    1,\n    2\n]\n");
         assert_eq!(lang, Some("json"));
         assert!(apply("beautify", "hello", None).is_err());
+        let (out, lang) = apply("beautify", "{a:1,b:'x',}", None).unwrap();
+        assert_eq!(out, "{ a: 1, b: 'x' }\n");
+        assert_eq!(lang, Some("mongodb"));
+        assert_eq!(apply("minify", "db.c.find({ a: 1 })", None).unwrap().0, "db.c.find({a:1})");
     }
 
     #[test]

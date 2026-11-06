@@ -10,6 +10,7 @@ const BUNDLED: &[(&str, &str)] = &[
     ("plantuml.lang", include_str!("../data/plantuml.lang")),
     ("calc.lang", include_str!("../data/calc.lang")),
     ("slides.lang", include_str!("../data/slides.lang")),
+    ("mongodb.lang", include_str!("../data/mongodb.lang")),
 ];
 
 /// Registers bundled language definitions. Must run before any language is used.
@@ -63,6 +64,9 @@ pub fn guess(path: Option<&Path>, content: &str) -> Option<Language> {
         if name.ends_with(".slides.md") {
             return by_id(crate::slides::LANGUAGE);
         }
+        if name.ends_with(".mongodb.js") {
+            return by_id(crate::mongo::LANGUAGE);
+        }
         let head = &content.as_bytes()[..content.len().min(4096)];
         let (content_type, _) = gio::content_type_guess(Some(path), head);
         if let Some(l) = lm.guess_language(Some(path), Some(&content_type)) {
@@ -78,6 +82,15 @@ pub fn guess(path: Option<&Path>, content: &str) -> Option<Language> {
     sniff(content).and_then(by_id)
 }
 
+/// The first MiB of `t` (cut at a character boundary).
+fn sample_of(t: &str) -> &str {
+    let mut end = t.len().min(1 << 20);
+    while !t.is_char_boundary(end) {
+        end -= 1;
+    }
+    &t[..end]
+}
+
 /// Content-based detection for snippets without a file name.
 pub fn sniff(content: &str) -> Option<&'static str> {
     let t = content.trim_start();
@@ -88,10 +101,13 @@ pub fn sniff(content: &str) -> Option<&'static str> {
         return Some("plantuml");
     }
     if t.starts_with('{') || t.starts_with('[') {
-        let sample = &t[..t.len().min(1 << 20)];
+        let sample = sample_of(t);
         if serde_json::from_str::<serde::de::IgnoredAny>(sample).is_ok() {
             return Some("json");
         }
+    }
+    if crate::mongo::sniff(sample_of(t)) {
+        return Some(crate::mongo::LANGUAGE);
     }
     if t.starts_with("<?xml") {
         return Some("xml");
@@ -144,6 +160,9 @@ mod tests {
     fn sniffs_common_formats() {
         assert_eq!(sniff("  {\"a\": 1}"), Some("json"));
         assert_eq!(sniff("{ not json"), None);
+        assert_eq!(sniff("{ a: 1, b: 'x' }"), Some("mongodb"));
+        assert_eq!(sniff("// orders\ndb.orders.find({})"), Some("mongodb"));
+        assert_eq!(sniff("{\"$oid\": \"x\"}"), Some("json"));
         assert_eq!(sniff("<?xml version=\"1.0\"?><a/>"), Some("xml"));
         assert_eq!(sniff("@startuml\nA -> B\n@enduml"), Some("plantuml"));
         assert_eq!(sniff("# Title\n\ntext"), Some("markdown"));
@@ -151,5 +170,28 @@ mod tests {
         assert_eq!(sniff("just a note"), None);
         assert_eq!(sniff("---\npresentation: true\n---\n# Hi"), Some("slides"));
         assert_eq!(sniff("---\nkey: value\n"), Some("yaml"));
+    }
+}
+
+#[cfg(test)]
+mod lang_file_check {
+    use gtk::glib::translate::{from_glib_full, ToGlibPtr};
+    use sourceview5::prelude::*;
+
+    /// Compiles all regular expressions of `data/mongodb.lang` by highlighting a
+    /// sample. Uses the FFI constructors: the safe ones need a display.
+    #[test]
+    fn mongodb_lang_compiles() {
+        gtk::glib::log_set_always_fatal(gtk::glib::LogLevels::LEVEL_WARNING | gtk::glib::LogLevels::LEVEL_CRITICAL);
+        let lm: sourceview5::LanguageManager = unsafe { from_glib_full(sourceview5::ffi::gtk_source_language_manager_new()) };
+        let mut paths: Vec<String> = lm.search_path().iter().map(|s| s.to_string()).collect();
+        paths.insert(0, concat!(env!("CARGO_MANIFEST_DIR"), "/data").into());
+        lm.set_search_path(&paths.iter().map(String::as_str).collect::<Vec<_>>());
+        let lang = lm.language("mongodb").expect("language loads");
+        let buf: sourceview5::Buffer =
+            unsafe { from_glib_full(sourceview5::ffi::gtk_source_buffer_new_with_language(lang.to_glib_none().0)) };
+        buf.set_text("// c\ndb.o.aggregate([{ $match: { 'a': /x\\/y/i, b: \"$f\", n: -1.5e3, id: ObjectId(\"x\") } }]) /* b */");
+        let (s, e) = buf.bounds();
+        buf.ensure_highlight(&s, &e);
     }
 }

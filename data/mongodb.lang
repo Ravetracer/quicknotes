@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- QuickNotes: MongoDB shell (mongosh) queries and JSON5 (see src/mongo.rs). -->
+<language id="mongodb" name="MongoDB / JSON5" version="2.0" section="Other">
+  <metadata>
+    <property name="globs">*.json5;*.mongodb</property>
+    <property name="line-comment-start">//</property>
+    <property name="block-comment-start">/*</property>
+    <property name="block-comment-end">*/</property>
+  </metadata>
+
+  <styles>
+    <style id="comment" name="Comment" map-to="def:comment"/>
+    <style id="string" name="String" map-to="def:string"/>
+    <style id="escape" name="Escaped Character" map-to="def:special-char"/>
+    <style id="field-path" name="Field Path" map-to="def:preprocessor"/>
+    <style id="key" name="Key" map-to="def:constant"/>
+    <style id="operator-key" name="Query Operator" map-to="def:keyword"/>
+    <style id="constructor" name="Type Constructor" map-to="def:type"/>
+    <style id="keyword" name="Keyword" map-to="def:keyword"/>
+    <style id="builtin" name="Built-in" map-to="def:builtin"/>
+    <style id="boolean" name="Boolean" map-to="def:boolean"/>
+    <style id="null" name="Null" map-to="def:special-constant"/>
+    <style id="number" name="Number" map-to="def:number"/>
+    <style id="regex" name="Regular Expression" map-to="def:string"/>
+  </styles>
+
+  <definitions>
+    <context id="escape" style-ref="escape">
+      <match>\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|u\{[0-9A-Fa-f]+\}|.)</match>
+    </context>
+
+    <context id="mongodb">
+      <include>
+        <context id="line-comment" style-ref="comment" end-at-line-end="true" class="comment" class-disabled="no-spell-check">
+          <start>//</start>
+          <include>
+            <context ref="def:in-comment"/>
+          </include>
+        </context>
+        <context id="block-comment" style-ref="comment" class="comment" class-disabled="no-spell-check">
+          <start>/\*</start>
+          <end>\*/</end>
+          <include>
+            <context ref="def:in-comment"/>
+          </include>
+        </context>
+
+        <!-- Keys: quoted or bare, followed by a colon. Query operators ($match, $gte…) stand out. -->
+        <context id="operator-key" style-ref="operator-key">
+          <match>("\$[\p{L}_$][\p{L}\p{N}_$]*"|'\$[\p{L}_$][\p{L}\p{N}_$]*'|\$[\p{L}_$][\p{L}\p{N}_$]*)(?=\s*:)</match>
+        </context>
+        <context id="key" style-ref="key">
+          <match>("(\\.|[^"\\])*"|'(\\.|[^'\\])*'|[\p{L}_$][\p{L}\p{N}_$]*)(?=\s*:)</match>
+        </context>
+
+        <!-- Field paths and variables in aggregation expressions: "$amount", "$$ROOT". -->
+        <context id="field-path" style-ref="field-path">
+          <match>"\$\$?[\p{L}_][\p{L}\p{N}_.]*"|'\$\$?[\p{L}_][\p{L}\p{N}_.]*'</match>
+        </context>
+
+        <context id="string-double" style-ref="string" end-at-line-end="true" class="string" class-disabled="no-spell-check">
+          <start>"</start>
+          <end>"</end>
+          <include>
+            <context ref="escape"/>
+          </include>
+        </context>
+        <context id="string-single" style-ref="string" end-at-line-end="true" class="string" class-disabled="no-spell-check">
+          <start>'</start>
+          <end>'</end>
+          <include>
+            <context ref="escape"/>
+          </include>
+        </context>
+        <context id="template" style-ref="string" class="string" class-disabled="no-spell-check">
+          <start>`</start>
+          <end>`</end>
+          <include>
+            <context ref="escape"/>
+          </include>
+        </context>
+
+        <!-- Regular expression literals after (, [, comma, colon, = or start of line. -->
+        <context id="regex">
+          <match>(^|[(\[,:=!&amp;|?{};])\s*(/(?![/*])(\\.|\[(\\.|[^\]\\\n])*\]|[^/\\\[\n])+/[a-z]*)</match>
+          <include>
+            <context sub-pattern="2" style-ref="regex"/>
+          </include>
+        </context>
+
+        <context id="constructors" style-ref="constructor">
+          <keyword>ObjectId</keyword><keyword>ISODate</keyword><keyword>Date</keyword>
+          <keyword>NumberInt</keyword><keyword>Int32</keyword><keyword>NumberLong</keyword>
+          <keyword>Long</keyword><keyword>NumberDecimal</keyword><keyword>Decimal128</keyword>
+          <keyword>Double</keyword><keyword>BinData</keyword><keyword>HexData</keyword>
+          <keyword>UUID</keyword><keyword>Timestamp</keyword><keyword>MinKey</keyword>
+          <keyword>MaxKey</keyword><keyword>RegExp</keyword><keyword>Code</keyword>
+          <keyword>DBRef</keyword>
+        </context>
+        <context id="keywords" style-ref="keyword">
+          <keyword>new</keyword><keyword>const</keyword><keyword>let</keyword>
+          <keyword>var</keyword><keyword>function</keyword><keyword>return</keyword>
+          <keyword>use</keyword><keyword>if</keyword><keyword>else</keyword>
+          <keyword>for</keyword><keyword>of</keyword><keyword>in</keyword>
+        </context>
+        <context id="builtins" style-ref="builtin">
+          <keyword>db</keyword><keyword>rs</keyword><keyword>sh</keyword>
+          <keyword>print</keyword><keyword>printjson</keyword>
+        </context>
+        <context id="boolean" style-ref="boolean">
+          <keyword>true</keyword><keyword>false</keyword>
+        </context>
+        <context id="null" style-ref="null">
+          <keyword>null</keyword><keyword>undefined</keyword>
+          <keyword>NaN</keyword><keyword>Infinity</keyword>
+        </context>
+        <context id="number" style-ref="number">
+          <match>(?&lt;![\p{L}\p{N}_$.])(0[xX][0-9A-Fa-f_]+|0[oO][0-7_]+|0[bB][01_]+|(\d[\d_]*\.?[\d_]*|\.\d[\d_]*)([eE][+-]?\d+)?)</match>
+        </context>
+      </include>
+    </context>
+  </definitions>
+</language>

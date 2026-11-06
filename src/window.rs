@@ -3025,6 +3025,8 @@ fn tool_submenus() -> gio::Menu {
         &items(&[
             (t!("Pretty JSON"), "json-pretty"),
             (t!("Minify JSON"), "json-minify"),
+            (t!("Pretty MongoDB / JSON5"), "mongo-pretty"),
+            (t!("Minify MongoDB / JSON5"), "mongo-minify"),
             (t!("Pretty XML"), "xml-pretty"),
             (t!("Minify XML"), "xml-minify"),
             (t!("Pretty YAML"), "yaml-pretty"),
@@ -3033,7 +3035,16 @@ fn tool_submenus() -> gio::Menu {
     );
     more.append_submenu(
         Some(t!("Convert")),
-        &items(&[("JSON → YAML", "json-to-yaml"), ("YAML → JSON", "yaml-to-json")]),
+        &items(&[
+            ("JSON → YAML", "json-to-yaml"),
+            ("YAML → JSON", "yaml-to-json"),
+            ("mongosh → Extended JSON", "mongo-to-ejson"),
+            (t!("mongosh → Extended JSON (canonical)"), "mongo-to-ejson-canonical"),
+            ("Extended JSON → mongosh", "ejson-to-mongo"),
+            (t!("PHP array → Extended JSON"), "php-to-ejson"),
+            (t!("PHP array → mongosh"), "php-to-mongo"),
+            (t!("Extended JSON / mongosh → PHP array"), "to-php"),
+        ]),
     );
     more.append_submenu(
         Some(t!("Lines")),

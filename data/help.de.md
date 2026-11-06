@@ -305,13 +305,46 @@ pro Folie mit allen Schritten.
 Das Menü *Formatieren & Werkzeuge* (Kopfleiste) und das Kontextmenü des Editors (rechte
 Maustaste) arbeiten auf der Auswahl oder, wenn nichts ausgewählt ist, auf dem ganzen Tab:
 
-- **Formatieren / Minimieren** von JSON, XML, YAML und SQL (Strg+Alt+B / Strg+Alt+M erkennen
-  das Format)
-- **Umwandeln** JSON ↔ YAML
+- **Formatieren / Minimieren** von JSON, MongoDB / JSON5, XML, YAML und SQL (Strg+Alt+B /
+  Strg+Alt+M erkennen das Format)
+- **Umwandeln** JSON ↔ YAML, mongosh ↔ Extended JSON, PHP-Array ↔ Extended JSON / mongosh
 - **Zeilen:** sortieren, umkehren, Duplikate oder leere Zeilen entfernen, Leerzeichen am
   Zeilenende entfernen
 - **Kodieren / Dekodieren:** Base64, URL, JSON-Strings
 - **Groß-/Kleinschreibung:** GROSSBUCHSTABEN, kleinbuchstaben
+
+### MongoDB-Abfragen und JSON5
+
+Notizen mit MongoDB-Shell-Code (`db.orders.aggregate([...])`) oder JSON5 (Schlüssel ohne
+Anführungszeichen, einfache Anführungszeichen, Kommentare, Komma am Ende) werden automatisch
+erkannt und als *MongoDB / JSON5* hervorgehoben; ebenso Dateien mit der Endung `.mongodb`,
+`.mongodb.js` oder `.json5`.
+
+- **Formatieren** setzt jede Pipeline-Stufe in eine eigene Zeile und lässt kurze Dokumente in
+  einer Zeile. Schlüssel, Anführungszeichen und Kommentare bleiben, wie sie sind.
+  **Minimieren** entfernt Kommentare.
+- **mongosh → Extended JSON** wandelt `ObjectId("…")`, `ISODate("…")`, `NumberLong(…)`,
+  `NumberDecimal("…")`, `UUID("…")`, `BinData(…)`, `Timestamp(…)`, `MinKey`/`MaxKey` und
+  `/regex/` in Extended JSON v2 um (relaxed oder *kanonisch* mit expliziten Zahlentypen). Bei
+  einer Anweisung wie `db.orders.find({...}).limit(5)` wird das Dokument-Argument umgewandelt,
+  sonst vorher das Dokument oder die Pipeline auswählen. Kommentare entfallen.
+- **Extended JSON → mongosh** wandelt zurück, auch `mongoexport`-Ausgaben (ein Dokument pro
+  Zeile) und Extended JSON innerhalb von Shell-Anweisungen.
+
+**PHP-Arrays** (MongoDB-PHP-Bibliothek, Doctrine ODM) lassen sich in Extended JSON oder
+mongosh-Syntax umwandeln und zurück: das Array, `$pipeline = [...];`, `return [...];` oder einen
+Aufruf wie `->aggregate([...])` auswählen. `[...]` und `array(...)` funktionieren beide.
+
+- BSON-Klassen werden umgewandelt, mit oder ohne Namespace: `new ObjectId(…)`,
+  `new UTCDateTime(…)` (Millisekunden oder `new \DateTime('2024-01-01')`), `new \DateTime('…')` /
+  `new \DateTimeImmutable('…')` (Datumsangaben ohne Zeitzone gelten als UTC), `Regex`,
+  `Decimal128`, `Int64`, `Timestamp`, `Binary`, `MinKey`, `MaxKey`, `Javascript`.
+- Alles andere – Variablen, Methodenaufrufe, Konstanten – wird zu einem Platzhalter wie
+  `"{{$orders}}"` oder `{"$oid": "{{$customer->getId()}}"}`. Vor dem Ausführen der Abfrage durch
+  einen echten Wert ersetzen; beim Zurückwandeln nach PHP entsteht wieder der ursprüngliche Code.
+- *Extended JSON / mongosh → PHP-Array* schreibt kurze Array-Syntax mit einfachen
+  Anführungszeichen und Komma am Ende und verwendet die kurzen Klassennamen (die
+  `use MongoDB\BSON\…;`-Importe ergänzen). Kommentare entfallen bei allen Umwandlungen.
 
 ## Geocaching-Werkzeuge {#geocaching}
 

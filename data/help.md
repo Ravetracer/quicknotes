@@ -293,11 +293,43 @@ shown.
 The *Format & tools* menu (header bar) and the editor's right-click menu work on the
 selection, or on the whole tab when nothing is selected:
 
-- **Beautify / Minify** JSON, XML, YAML and SQL (Ctrl+Alt+B / Ctrl+Alt+M detect the format)
-- **Convert** JSON ↔ YAML
+- **Beautify / Minify** JSON, MongoDB / JSON5, XML, YAML and SQL (Ctrl+Alt+B / Ctrl+Alt+M
+  detect the format)
+- **Convert** JSON ↔ YAML, mongosh ↔ Extended JSON, PHP array ↔ Extended JSON / mongosh
 - **Lines:** sort, reverse, remove duplicates or empty lines, trim trailing whitespace
 - **Encode / Decode:** Base64, URL, JSON strings
 - **Case:** UPPERCASE, lowercase
+
+### MongoDB queries and JSON5
+
+Notes with MongoDB shell code (`db.orders.aggregate([...])`) or JSON5 (unquoted keys, single
+quotes, comments, trailing commas) are detected automatically and get the *MongoDB / JSON5*
+highlighting; files ending in `.mongodb`, `.mongodb.js` or `.json5` too.
+
+- **Beautify** puts each pipeline stage on its own line and keeps short documents on one line.
+  Keys, quotes and comments stay as written. **Minify** removes comments.
+- **mongosh → Extended JSON** turns `ObjectId("…")`, `ISODate("…")`, `NumberLong(…)`,
+  `NumberDecimal("…")`, `UUID("…")`, `BinData(…)`, `Timestamp(…)`, `MinKey`/`MaxKey` and
+  `/regex/` into Extended JSON v2 (relaxed, or *canonical* with explicit number types). For a
+  statement like `db.orders.find({...}).limit(5)` the document argument is converted; otherwise
+  select the document or pipeline first. Comments are dropped.
+- **Extended JSON → mongosh** does the reverse, also for `mongoexport` output (one document per
+  line) and for Extended JSON inside shell statements.
+
+**PHP arrays** (MongoDB PHP library, Doctrine ODM) convert to Extended JSON or mongosh syntax and
+back: select the array, `$pipeline = [...];`, `return [...];` or a call like
+`->aggregate([...])`. Both `[...]` and `array(...)` work.
+
+- BSON classes are converted, with or without namespace: `new ObjectId(…)`, `new UTCDateTime(…)`
+  (milliseconds or `new \DateTime('2024-01-01')`), `new \DateTime('…')` /
+  `new \DateTimeImmutable('…')` (dates without a time zone count as UTC), `Regex`, `Decimal128`,
+  `Int64`, `Timestamp`, `Binary`, `MinKey`, `MaxKey`, `Javascript`.
+- Everything else — variables, method calls, constants — becomes a placeholder like
+  `"{{$orders}}"` or `{"$oid": "{{$customer->getId()}}"}`. Replace it with a real value before
+  running the query; converting back to PHP restores the original code.
+- *Extended JSON / mongosh → PHP array* writes short array syntax with single quotes and
+  trailing commas and uses the short class names (add the `use MongoDB\BSON\…;` imports).
+  Comments are dropped in all conversions.
 
 ## Geocaching tools {#geocaching}
 

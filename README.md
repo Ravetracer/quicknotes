@@ -22,6 +22,10 @@ after a restart.
 - Image viewer (PNG, JPEG, GIF, WebP, SVG, BMP, ICO, TIFF, …) with zoom
 - Large files (logs): loaded asynchronously; highlighting and wrapping are switched off above 8 MB
 - Beautify/minify JSON, XML, YAML, SQL; JSON ↔ YAML; line tools; Base64/URL/JSON-string encode/decode
+- **MongoDB / JSON5**: highlighting and auto-detection of mongosh queries and JSON5, beautify/minify
+  (pipeline stages one per line), conversion mongosh ↔ Extended JSON v2 (relaxed and canonical)
+  and PHP arrays (MongoDB PHP library / Doctrine) ↔ Extended JSON / mongosh, with placeholders
+  for PHP variables
 - Find & replace (case, whole word, regex)
 - Drag & drop: files open in new tabs, dropped text (e.g. from a browser) is inserted into the note
 - Dark and light theme
@@ -50,8 +54,8 @@ after a restart.
 | F5 | Reload file from disk |
 | Ctrl+F / Ctrl+H | Find / Find and replace |
 | F3 / Shift+F3 | Next / previous match |
-| Ctrl+Alt+B | Beautify (JSON/XML/YAML/SQL, auto-detected) |
-| Ctrl+Alt+M | Minify (JSON/XML) |
+| Ctrl+Alt+B | Beautify (JSON/MongoDB/XML/YAML/SQL, auto-detected) |
+| Ctrl+Alt+M | Minify (JSON/MongoDB/XML) |
 | Ctrl+Shift+V | Toggle preview (Markdown, reStructuredText, PlantUML, HTML) |
 | Ctrl+Shift+E / Ctrl+Shift+P | Export as HTML / PDF (Markdown, reStructuredText, presentations) |
 | Ctrl+F5 / Shift+F5 | Start presentation from the beginning / from the current slide |
