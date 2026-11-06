@@ -1,9 +1,9 @@
 //! A text tab: GtkSourceView editor plus an optional live preview
-//! (Markdown or PlantUML) in a split pane.
+//! (Markdown, reStructuredText, PlantUML, HTML, presentations) in a split pane.
 
 use crate::store::{TabKind, TabMeta};
 use crate::calc::{self, LineResult};
-use crate::{html, langs, markdown, plantuml, rst};
+use crate::{html, langs, markdown, plantuml, rst, slides};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use sourceview5::prelude::*;
@@ -28,6 +28,7 @@ pub enum PreviewKind {
     PlantUml,
     Rst,
     Html,
+    Slides,
 }
 
 impl PreviewKind {
@@ -37,13 +38,14 @@ impl PreviewKind {
             Some("plantuml") => Some(Self::PlantUml),
             Some("rst") => Some(Self::Rst),
             Some("html") => Some(Self::Html),
+            Some(slides::LANGUAGE) => Some(Self::Slides),
             _ => None,
         }
     }
 
     /// Documents that can be exported to HTML/PDF.
     pub fn is_document(self) -> bool {
-        matches!(self, Self::Markdown | Self::Rst)
+        matches!(self, Self::Markdown | Self::Rst | Self::Slides)
     }
 
     /// Shown automatically when such a file is opened (HTML files are often
@@ -56,7 +58,7 @@ impl PreviewKind {
         match self {
             Self::PlantUml => 700,
             Self::Html => 400,
-            Self::Markdown | Self::Rst => 250,
+            Self::Markdown | Self::Rst | Self::Slides => 250,
         }
     }
 }
@@ -69,12 +71,22 @@ pub enum CursorTarget {
     Offset(i32),
 }
 
+/// Page loaded in the preview.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shell {
+    /// A user HTML document.
+    None,
+    /// The document shell (Markdown, reStructuredText, PlantUML).
+    Doc,
+    /// The presentation preview.
+    Slides,
+}
+
 struct Preview {
     webview: webkit6::WebView,
     /// The current page finished loading (navigations are blocked from then on).
     loaded: Cell<bool>,
-    /// The current page is our document shell (vs. a user HTML document).
-    shell: Cell<bool>,
+    shell: Cell<Shell>,
     /// JavaScript to run once the current page has loaded.
     pending: RefCell<Option<String>>,
 }
@@ -115,6 +127,10 @@ pub struct EditorTab {
     pub message_hook: RefCell<Option<MessageHook>>,
     calc: RefCell<Option<CalcColumn>>,
     calc_timer: RefCell<Option<glib::SourceId>>,
+    /// Presentations: source lines of the slides (as of the last render) and
+    /// the slide shown in the preview.
+    slide_lines: RefCell<Vec<(usize, usize)>>,
+    shown_slide: Cell<usize>,
 }
 
 impl EditorTab {
@@ -171,6 +187,8 @@ impl EditorTab {
             message_hook: RefCell::new(None),
             calc: RefCell::new(None),
             calc_timer: RefCell::new(None),
+            slide_lines: RefCell::new(Vec::new()),
+            shown_slide: Cell::new(0),
         });
 
         let weak = Rc::downgrade(&tab);
@@ -184,6 +202,14 @@ impl EditorTab {
                         t.schedule_calc();
                     }
                 }
+            }
+        });
+
+        // The presentation preview follows the cursor.
+        let weak = Rc::downgrade(&tab);
+        tab.buffer.connect_notify_local(Some("cursor-position"), move |_, _| {
+            if let Some(t) = weak.upgrade() {
+                t.follow_cursor();
             }
         });
 
@@ -485,7 +511,7 @@ impl EditorTab {
         };
         self.buffer.set_style_scheme(scheme.as_ref());
         if let Some(p) = self.preview.borrow().as_ref() {
-            if p.shell.get() {
+            if p.shell.get() != Shell::None {
                 p.webview.set_background_color(&preview_bg(dark));
                 let js = format!("setTheme('{}')", if dark { "dark" } else { "light" });
                 if p.loaded.get() {
@@ -641,10 +667,25 @@ impl EditorTab {
             hook(webview.upcast_ref());
         }
 
+        // Messages from the presentation preview ("go to slide").
+        if let Some(ucm) = webview.user_content_manager() {
+            ucm.register_script_message_handler("qn", None);
+            let weak = Rc::downgrade(self);
+            ucm.connect_script_message_received(Some("qn"), move |_, value| {
+                let Some(t) = weak.upgrade() else { return };
+                let Ok(msg) = serde_json::from_str::<serde_json::Value>(&value.to_str()) else { return };
+                if msg.get("type").and_then(|v| v.as_str()) == Some("goto") {
+                    if let Some(i) = msg.get("slide").and_then(|v| v.as_i64()) {
+                        t.goto_slide(i);
+                    }
+                }
+            });
+        }
+
         *self.preview.borrow_mut() = Some(Preview {
             webview: webview.clone(),
             loaded: Cell::new(false),
-            shell: Cell::new(false),
+            shell: Cell::new(Shell::None),
             pending: RefCell::new(None),
         });
         webview
@@ -659,13 +700,21 @@ impl EditorTab {
         self.base_dir().map(|d| format!("{}/", gio::File::for_path(d).uri()))
     }
 
-    /// Loads a page into the preview; `shell` = our document shell.
-    fn load_page(&self, p: &Preview, page: &str, shell: bool) {
+    /// Base for relative paths in presentations: the file's folder, or the
+    /// home folder for notes (so absolute paths work too).
+    pub fn slides_base_uri(&self) -> Option<String> {
+        self.base_uri()
+            .or_else(|| dirs::home_dir().map(|d| format!("{}/", gio::File::for_path(d).uri())))
+    }
+
+    /// Loads a page into the preview.
+    fn load_page(&self, p: &Preview, page: &str, shell: Shell) {
         p.loaded.set(false);
         p.shell.set(shell);
-        let bg = if shell { preview_bg(self.shared.dark.get()) } else { gdk::RGBA::WHITE };
+        let bg = if shell != Shell::None { preview_bg(self.shared.dark.get()) } else { gdk::RGBA::WHITE };
         p.webview.set_background_color(&bg);
-        p.webview.load_html(page, self.base_uri().as_deref());
+        let base = if shell == Shell::Slides { self.slides_base_uri() } else { self.base_uri() };
+        p.webview.load_html(page, base.as_deref());
     }
 
     /// The rendered document body (Markdown, reStructuredText), for export.
@@ -673,7 +722,71 @@ impl EditorTab {
         match self.preview_kind()? {
             PreviewKind::Markdown => Some(markdown::to_html(&self.text())),
             PreviewKind::Rst => Some(rst::to_html(&self.text(), self.base_dir().as_deref())),
-            PreviewKind::PlantUml | PreviewKind::Html => None,
+            PreviewKind::PlantUml | PreviewKind::Html | PreviewKind::Slides => None,
+        }
+    }
+
+    /// The parsed presentation, if this is one.
+    pub fn deck(&self) -> Option<slides::Deck> {
+        (self.preview_kind()? == PreviewKind::Slides).then(|| slides::parse(&self.text()))
+    }
+
+    /// Index of the slide at the cursor (0 when this is no presentation).
+    pub fn current_slide(&self) -> usize {
+        let line = self.buffer.iter_at_mark(&self.buffer.get_insert()).line().max(0) as usize;
+        slides::slide_at(&slides::slide_lines(&self.text()), line)
+    }
+
+    /// Moves the cursor to the first line of slide `index`.
+    fn goto_slide(&self, index: i64) {
+        let lines = self.slide_lines.borrow().clone();
+        if lines.is_empty() || index < 0 {
+            return;
+        }
+        let (_, body) = lines[(index as usize).min(lines.len() - 1)];
+        let iter = self.buffer.iter_at_line(body as i32).unwrap_or_else(|| self.buffer.end_iter());
+        self.buffer.place_cursor(&iter);
+        let mark = self.buffer.get_insert();
+        self.view.scroll_to_mark(&mark, 0.1, true, 0.0, 0.1);
+        self.view.grab_focus();
+    }
+
+    /// Shows the slide at the cursor in the preview.
+    fn follow_cursor(&self) {
+        if self.loading.get() || !self.preview_visible() || self.preview_kind() != Some(PreviewKind::Slides) {
+            return;
+        }
+        let line = self.buffer.iter_at_mark(&self.buffer.get_insert()).line().max(0) as usize;
+        let index = slides::slide_at(&self.slide_lines.borrow(), line);
+        if index == self.shown_slide.replace(index) {
+            return;
+        }
+        let preview = self.preview.borrow();
+        let Some(p) = preview.as_ref() else { return };
+        if p.shell.get() == Shell::Slides && p.loaded.get() {
+            let js = format!("QN.showSlide({index})");
+            p.webview.evaluate_javascript(&js, None, None, None::<&gio::Cancellable>, |_| {});
+        }
+    }
+
+    /// Renders the presentation into the preview, showing the slide at the cursor.
+    fn render_slides(&self) {
+        let deck = slides::parse(&self.text());
+        let line = self.buffer.iter_at_mark(&self.buffer.get_insert()).line().max(0) as usize;
+        let index = slides::slide_at(&deck.lines, line);
+        self.shown_slide.set(index);
+        *self.slide_lines.borrow_mut() = deck.lines.clone();
+        let js = format!("QN.update({}, {index})", deck.json());
+        let preview = self.preview.borrow();
+        let Some(p) = preview.as_ref() else { return };
+        if p.shell.get() != Shell::Slides {
+            let opts = slides::PageOptions { dark: self.shared.dark.get(), ..Default::default() };
+            self.load_page(p, &slides::page(slides::Mode::Preview, None, opts), Shell::Slides);
+            *p.pending.borrow_mut() = Some(js);
+        } else if p.loaded.get() {
+            p.webview.evaluate_javascript(&js, None, None, None::<&gio::Cancellable>, |_| {});
+        } else {
+            *p.pending.borrow_mut() = Some(js);
         }
     }
 
@@ -694,8 +807,8 @@ impl EditorTab {
         let preview = self.preview.borrow();
         let Some(p) = preview.as_ref() else { return };
         let js = format!("setContent({})", serde_json::to_string(html).unwrap_or_default());
-        if !p.shell.get() {
-            self.load_page(p, &html::preview_shell(self.shared.dark.get()), true);
+        if p.shell.get() != Shell::Doc {
+            self.load_page(p, &html::preview_shell(self.shared.dark.get()), Shell::Doc);
             *p.pending.borrow_mut() = Some(js);
         } else if p.loaded.get() {
             p.webview.evaluate_javascript(&js, None, None, None::<&gio::Cancellable>, |_| {});
@@ -708,7 +821,7 @@ impl EditorTab {
     fn render_html_page(self: &Rc<Self>) {
         let preview = self.preview.borrow();
         let Some(p) = preview.as_ref() else { return };
-        if p.loaded.get() && !p.shell.get() {
+        if p.loaded.get() && p.shell.get() == Shell::None {
             let weak = Rc::downgrade(self);
             p.webview.evaluate_javascript(
                 "window.scrollY",
@@ -731,7 +844,7 @@ impl EditorTab {
     fn load_html_document(&self, scroll_y: f64) {
         let preview = self.preview.borrow();
         let Some(p) = preview.as_ref() else { return };
-        self.load_page(p, &self.text(), false);
+        self.load_page(p, &self.text(), Shell::None);
         *p.pending.borrow_mut() = (scroll_y > 0.0).then(|| format!("window.scrollTo(0, {scroll_y})"));
     }
 
@@ -758,6 +871,7 @@ impl EditorTab {
             Some(PreviewKind::Rst) => self.set_preview_html(&rst::to_html(&self.text(), self.base_dir().as_deref())),
             Some(PreviewKind::PlantUml) => self.render_plantuml(),
             Some(PreviewKind::Html) => self.render_html_page(),
+            Some(PreviewKind::Slides) => self.render_slides(),
             None => {}
         }
     }

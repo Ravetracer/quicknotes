@@ -15,6 +15,10 @@ after a restart.
 - Syntax highlighting (GtkSourceView, ~150 languages), auto-detected for pasted snippets
 - Live preview side-by-side for **Markdown**, **reStructuredText**, **PlantUML** and **HTML**
 - Export of Markdown and reStructuredText documents to **HTML** and **PDF**
+- **Presentations** in Markdown: slides separated by `---`, slide transitions, step-by-step
+  reveal (`::: steps fade-up`), positioning (`::: place bottom right`, columns), background
+  images, presenter notes (`???`); presenter view with notes, next slide and timer on a second
+  screen; export as stand-alone HTML or PDF
 - Image viewer (PNG, JPEG, GIF, WebP, SVG, BMP, ICO, TIFF, …) with zoom
 - Large files (logs): loaded asynchronously; highlighting and wrapping are switched off above 8 MB
 - Beautify/minify JSON, XML, YAML, SQL; JSON ↔ YAML; line tools; Base64/URL/JSON-string encode/decode
@@ -49,7 +53,9 @@ after a restart.
 | Ctrl+Alt+B | Beautify (JSON/XML/YAML/SQL, auto-detected) |
 | Ctrl+Alt+M | Minify (JSON/XML) |
 | Ctrl+Shift+V | Toggle preview (Markdown, reStructuredText, PlantUML, HTML) |
-| Ctrl+Shift+E / Ctrl+Shift+P | Export as HTML / PDF (Markdown, reStructuredText) |
+| Ctrl+Shift+E / Ctrl+Shift+P | Export as HTML / PDF (Markdown, reStructuredText, presentations) |
+| Ctrl+F5 / Shift+F5 | Start presentation from the beginning / from the current slide |
+| Ctrl+Shift+F5 | Present in a window |
 | Alt+Z | Toggle word wrap |
 | Ctrl+wheel, Ctrl +/−, Ctrl+0 | Font size |
 | Ctrl+Tab, Ctrl+PgUp/PgDn, Alt+1…9 | Switch tabs |

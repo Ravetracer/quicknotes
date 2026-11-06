@@ -12,12 +12,27 @@ use webkit6::prelude::*;
 const TIMEOUT: Duration = Duration::from_secs(60);
 
 type Done = Box<dyn FnOnce(Result<(), String>)>;
+
+/// Paper format of the PDF.
+#[derive(Clone, Copy, Debug)]
+pub enum Page {
+    /// A4 portrait with margins (documents).
+    A4,
+    /// A custom size without margins (presentation slides).
+    Custom { width_mm: f64, height_mm: f64 },
+}
 /// Off-screen view and print operation, kept alive until printing is done.
 type Keep = Rc<RefCell<Option<(webkit6::WebView, Option<webkit6::PrintOperation>)>>>;
 
 /// Writes `html` as PDF to `out`. `base_uri` resolves relative images.
 /// `done` is called exactly once.
-pub fn pdf(html: String, base_uri: Option<String>, out: PathBuf, done: impl FnOnce(Result<(), String>) + 'static) {
+pub fn pdf(
+    html: String,
+    base_uri: Option<String>,
+    out: PathBuf,
+    page: Page,
+    done: impl FnOnce(Result<(), String>) + 'static,
+) {
     let done: Rc<RefCell<Option<Done>>> = Rc::new(RefCell::new(Some(Box::new(done))));
     let finish = {
         let done = done.clone();
@@ -42,7 +57,7 @@ pub fn pdf(html: String, base_uri: Option<String>, out: PathBuf, done: impl FnOn
             }
             started.set(true);
             if let Some((html, base, out)) = job.borrow_mut().take() {
-                print(printer.clone(), html, base, out, finish.clone());
+                print(printer.clone(), html, base, out, page, finish.clone());
             }
             true
         }
@@ -70,6 +85,7 @@ fn print(
     html: String,
     base_uri: Option<String>,
     out: PathBuf,
+    page: Page,
     finish: Rc<impl Fn(Result<(), String>) + 'static>,
 ) {
     let webview = webkit6::WebView::new();
@@ -86,11 +102,20 @@ fn print(
         settings.set(gtk::PRINT_SETTINGS_OUTPUT_URI, Some(gio::File::for_path(&out).uri().as_str()));
 
         let setup = gtk::PageSetup::new();
-        setup.set_paper_size(&gtk::PaperSize::new(Some(gtk::PAPER_NAME_A4)));
-        setup.set_top_margin(18.0, gtk::Unit::Mm);
-        setup.set_bottom_margin(18.0, gtk::Unit::Mm);
-        setup.set_left_margin(18.0, gtk::Unit::Mm);
-        setup.set_right_margin(18.0, gtk::Unit::Mm);
+        let (paper, margin) = match page {
+            Page::A4 => (gtk::PaperSize::new(Some(gtk::PAPER_NAME_A4)), 18.0),
+            Page::Custom { width_mm, height_mm } => {
+                let paper = gtk::PaperSize::new_custom("quicknotes-slides", "Slides", width_mm, height_mm, gtk::Unit::Mm);
+                settings.set_paper_size(&paper);
+                (paper, 0.0)
+            }
+        };
+        setup.set_paper_size(&paper);
+        setup.set_orientation(gtk::PageOrientation::Portrait);
+        setup.set_top_margin(margin, gtk::Unit::Mm);
+        setup.set_bottom_margin(margin, gtk::Unit::Mm);
+        setup.set_left_margin(margin, gtk::Unit::Mm);
+        setup.set_right_margin(margin, gtk::Unit::Mm);
 
         let op = webkit6::PrintOperation::new(wv);
         op.set_print_settings(&settings);

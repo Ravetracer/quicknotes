@@ -5,7 +5,8 @@ use crate::editor::{CursorTarget, EditorTab, PreviewKind, Shared};
 use crate::image_tab::{self, ImageTab};
 use crate::store::{self, Session, Settings, TabKind, TabMeta};
 use crate::geocaching::{self, Field};
-use crate::{format, html, langs, APP_ID};
+use crate::presenter::{self, Presentation};
+use crate::{format, html, langs, slides, APP_ID};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use sourceview5::prelude::*;
@@ -94,6 +95,8 @@ pub struct Window {
     menu_page: RefCell<Option<adw::TabPage>>,
     /// Closing all tabs for a restore: no confirmations, no undo.
     bulk_close: Cell<bool>,
+    present_btn: adw::SplitButton,
+    presentation: RefCell<Option<Rc<Presentation>>>,
 }
 
 thread_local! {
@@ -180,11 +183,24 @@ impl Window {
             .action_name("win.preview")
             .build();
         let find_btn = icon_button("edit-find-symbolic", t!("Find (Ctrl+F)"), "win.find");
+        let present_menu = gio::Menu::new();
+        present_menu.append(Some(t!("From Beginning")), Some("win.present"));
+        present_menu.append(Some(t!("From Current Slide")), Some("win.present-current"));
+        present_menu.append(Some(t!("In a Window")), Some("win.present-window"));
+        let present_btn = adw::SplitButton::builder()
+            .icon_name("media-playback-start-symbolic")
+            .tooltip_text(t!("Start presentation (Ctrl+F5)"))
+            .dropdown_tooltip(t!("Presentation options"))
+            .action_name("win.present")
+            .menu_model(&present_menu)
+            .visible(false)
+            .build();
         header.pack_end(&menu_btn);
         header.pack_end(&theme_btn);
         header.pack_end(&tools_btn);
         header.pack_end(&preview_btn);
         header.pack_end(&find_btn);
+        header.pack_end(&present_btn);
 
         // ----- tabs ------------------------------------------------------
         let view = adw::TabView::new();
@@ -313,6 +329,8 @@ impl Window {
             scroll_acc: Cell::new(0.0),
             menu_page: RefCell::new(None),
             bulk_close: Cell::new(false),
+            present_btn,
+            presentation: RefCell::new(None),
         });
 
         this.setup_actions(app);
@@ -379,6 +397,10 @@ impl Window {
             w.new_note();
         });
         self.action("new-calculation", &["<Control><Shift>n"], |w| w.new_calculation());
+        self.action("new-presentation", &[], |w| w.new_presentation());
+        self.action("present", &["<Control>F5"], |w| w.present(false, presenter::Layout::Fullscreen));
+        self.action("present-current", &["<Shift>F5"], |w| w.present(true, presenter::Layout::Fullscreen));
+        self.action("present-window", &["<Control><Shift>F5"], |w| w.present(true, presenter::Layout::Window));
         self.action("help", &["F1"], |w| {
             let (dark, zoom) = (w.settings.borrow().dark, w.shared.zoom.get());
             crate::help::show(&w.win, dark, zoom);
@@ -956,6 +978,45 @@ impl Window {
         self.sync_ui();
     }
 
+    /// A new presentation with an example of the syntax (see `slides.rs`).
+    fn new_presentation(self: &Rc<Self>) {
+        let t = self.new_note();
+        t.language_locked.set(true);
+        t.set_text_irreversible(slides::template());
+        t.set_language_id(Some(slides::LANGUAGE));
+        t.place_cursor(CursorTarget::Start);
+        t.set_preview(true);
+        self.mark_dirty(&t.id);
+        self.refresh_title(&t.id);
+        self.sync_ui();
+    }
+
+    /// Starts the presentation of the current tab.
+    fn present(self: &Rc<Self>, from_cursor: bool, layout: presenter::Layout) {
+        let Some(t) = self.current_text() else { return };
+        let Some(deck) = t.deck() else {
+            self.toast(t!("This tab is no presentation"));
+            return;
+        };
+        if deck.slides.is_empty() {
+            self.toast(t!("The presentation has no slides yet"));
+            return;
+        }
+        if let Some(running) = self.presentation.borrow_mut().take() {
+            running.end();
+        }
+        let start = if from_cursor { t.current_slide() } else { 0 };
+        let Some(app) = self.win.application().and_downcast::<adw::Application>() else { return };
+        let weak = self.weak();
+        let presentation = Presentation::start(&app, &self.win, &deck, t.slides_base_uri(), start, layout, move || {
+            if let Some(this) = weak.upgrade() {
+                this.presentation.borrow_mut().take();
+                this.win.present();
+            }
+        });
+        *self.presentation.borrow_mut() = Some(presentation);
+    }
+
     /// Removes a tab from bookkeeping and remembers it for t!("Reopen Closed Tab").
     fn forget(self: &Rc<Self>, tab: &Tab) {
         let meta = tab.meta();
@@ -1441,6 +1502,9 @@ impl Window {
             t.set_large(large);
             t.set_wrap(false);
             t.set_language(langs::guess(Some(&path), &read_head(&path)).as_ref());
+            if t.preview_kind() == Some(PreviewKind::Slides) {
+                t.set_wrap(true);
+            }
             self.add_tab(Tab::Text(t.clone()), true);
             if t.preview_kind().is_some_and(PreviewKind::auto_preview) && !large {
                 t.set_preview(true);
@@ -1515,6 +1579,10 @@ impl Window {
     /// Exports the current Markdown/reStructuredText document.
     fn export(self: &Rc<Self>, format: ExportFormat) {
         let Some(t) = self.current_text() else { return };
+        if let Some(deck) = t.deck() {
+            self.export_presentation(&t, deck, format);
+            return;
+        }
         let Some(body) = t.document_html() else {
             self.toast(t!("Export works for Markdown and reStructuredText"));
             return;
@@ -1554,7 +1622,60 @@ impl Window {
                     this.toast(t!("Exporting PDF…"));
                     let weak = this.weak();
                     let target = path.clone();
-                    crate::export::pdf(document, base_uri, path, move |result| {
+                    crate::export::pdf(document, base_uri, path, crate::export::Page::A4, move |result| {
+                        if let Some(this) = weak.upgrade() {
+                            this.export_done(&target, result);
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    /// Exports a presentation as stand-alone HTML file (with keyboard
+    /// navigation and animations) or as PDF with one slide per page.
+    fn export_presentation(self: &Rc<Self>, t: &Rc<EditorTab>, deck: slides::Deck, format: ExportFormat) {
+        let ext = match format {
+            ExportFormat::Html => "html",
+            ExportFormat::Pdf => "pdf",
+        };
+        let stem = t
+            .path
+            .borrow()
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|s| s.to_string_lossy().trim_end_matches(".md").trim_end_matches(".slides").to_owned())
+            .unwrap_or_else(|| file_name_for(&if deck.title.is_empty() { t.title() } else { deck.title.clone() }));
+        let dialog = gtk::FileDialog::builder()
+            .title(t!("Export as {}", ext.to_uppercase()))
+            .modal(true)
+            .initial_name(format!("{stem}.{ext}"))
+            .build();
+        if let Some(dir) = t.base_dir() {
+            dialog.set_initial_folder(Some(&gio::File::for_path(dir)));
+        }
+        let mode = match format {
+            ExportFormat::Html => slides::Mode::Export,
+            ExportFormat::Pdf => slides::Mode::Print,
+        };
+        let document = slides::page(mode, Some(&deck), slides::PageOptions::default());
+        let base_uri = t.slides_base_uri();
+        let page_mm = deck.page_mm();
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let Ok(file) = dialog.save_future(Some(&this.win)).await else { return };
+            let Some(path) = file.path() else { return };
+            match format {
+                ExportFormat::Html => {
+                    let result = std::fs::write(&path, document).map_err(|e| e.to_string());
+                    this.export_done(&path, result);
+                }
+                ExportFormat::Pdf => {
+                    this.toast(t!("Exporting PDF…"));
+                    let weak = this.weak();
+                    let target = path.clone();
+                    let page = crate::export::Page::Custom { width_mm: page_mm.0, height_mm: page_mm.1 };
+                    crate::export::pdf(document, base_uri, path, page, move |result| {
                         if let Some(this) = weak.upgrade() {
                             this.export_done(&target, result);
                         }
@@ -1986,6 +2107,8 @@ impl Window {
                 let exportable = t.preview_kind().is_some_and(PreviewKind::is_document);
                 self.set_enabled("export-html", exportable);
                 self.set_enabled("export-pdf", exportable);
+                let slides = t.preview_kind() == Some(PreviewKind::Slides);
+                self.set_presentable(slides);
             }
             _ => {
                 self.lang_drop.set_visible(false);
@@ -1994,6 +2117,7 @@ impl Window {
                 self.set_enabled("export-html", false);
                 self.set_enabled("export-pdf", false);
                 self.set_enabled("gc", false);
+                self.set_presentable(false);
             }
         }
         self.guard.set(false);
@@ -2011,6 +2135,13 @@ impl Window {
 
         self.update_window_title();
         self.update_status();
+    }
+
+    fn set_presentable(&self, on: bool) {
+        for name in ["present", "present-current", "present-window"] {
+            self.set_enabled(name, on);
+        }
+        self.present_btn.set_visible(on);
     }
 
     fn update_window_title(&self) {
@@ -2062,6 +2193,13 @@ impl Window {
         self.set_enabled("gc", buf.has_selection());
         if let Some((s, e)) = buf.selection_bounds() {
             text.push_str(&t!("  ({} selected)", e.offset() - s.offset()));
+        }
+        if t.preview_kind() == Some(PreviewKind::Slides) {
+            let lines = slides::slide_lines(&t.text());
+            if !lines.is_empty() {
+                let index = slides::slide_at(&lines, iter.line().max(0) as usize);
+                text = format!("{}  ·  {}", t!("Slide {} of {}", index + 1, lines.len()), text);
+            }
         }
         self.status_pos.set_text(&text);
         if self.search.revealer.reveals_child() {
@@ -2575,6 +2713,7 @@ fn main_menu() -> gio::Menu {
         &section(&[
             (t!("New Note"), "win.new-note"),
             (t!("New Calculation"), "win.new-calculation"),
+            (t!("New Presentation"), "win.new-presentation"),
             (t!("Open File…"), "win.open"),
             (t!("Save"), "win.save"),
             (t!("Save As…"), "win.save-as"),
@@ -2584,6 +2723,14 @@ fn main_menu() -> gio::Menu {
     menu.append_section(
         None,
         &section(&[(t!("Export as HTML…"), "win.export-html"), (t!("Export as PDF…"), "win.export-pdf")]),
+    );
+    menu.append_section(
+        None,
+        &section(&[
+            (t!("Start Presentation"), "win.present"),
+            (t!("Present from Current Slide"), "win.present-current"),
+            (t!("Present in a Window"), "win.present-window"),
+        ]),
     );
     menu.append_section(
         None,

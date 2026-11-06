@@ -1,7 +1,7 @@
 # QuickNotes-Hilfe {#top}
 
 **Inhalt:** [Notizen & Tabs](#notes) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
-[Vorschau & Export](#previews) · [Werkzeuge](#tools) · [Geocaching](#geocaching) · [Sicherung](#backup) ·
+[Vorschau & Export](#previews) · [Präsentationen](#slides) · [Werkzeuge](#tools) · [Geocaching](#geocaching) · [Sicherung](#backup) ·
 [Tastenkürzel](#shortcuts)
 
 ## Notizen & Tabs {#notes}
@@ -135,6 +135,162 @@ Relative Bilder werden aus dem Ordner des Dokuments geladen.
 PlantUML benötigt eine lokale PlantUML-Installation (Befehl `plantuml` oder eine
 `plantuml*.jar` in `~/bin`).
 
+## Präsentationen {#slides}
+
+Eine **Präsentation** ist Markdown, das in Folien aufgeteilt ist. Neu anlegen mit
+*Hauptmenü → Neue Präsentation* – sie beginnt mit einem kurzen Beispiel. Dateien mit dem
+Namen `*.slides.md` und Markdown-Dateien mit `presentation: true` im Vorspann werden als
+Präsentation geöffnet; jeder Markdown-Tab lässt sich in der Statusleiste auf *Presentation*
+umstellen.
+
+Die Vorschau zeigt die Folie am Cursor mit ihren Notizen; **‹ ›** springen im Text zur
+vorherigen/nächsten Folie, **►** spielt die Animationen der Folie ab.
+
+### Folien und Einstellungen
+
+Eine Zeile mit nur `---` beginnt eine neue Folie (in Code-Blöcken bleibt sie Code).
+Einstellungen für die ganze Präsentation stehen in einem Vorspann ganz am Anfang:
+
+```
+---
+presentation: true
+title: Mein Vortrag
+theme: default        # default, dark, ocean, sunset
+aspect: 16:9          # 16:9, 4:3, 16:10
+transition: fade 500ms
+step: fade-up 400ms   # Standard-Animation der Schritte
+paginate: true        # Foliennummern
+header: Text oben
+footer: Text unten
+duration: 20m         # Vortragsdauer, wird als Restzeit angezeigt
+style: |
+  .qn-slide h1 { text-transform: uppercase; }
+---
+```
+
+Einstellungen einer einzelnen Folie stehen als HTML-Kommentar irgendwo auf der Folie,
+mehrere durch `;` getrennt:
+
+```
+<!-- transition: zoom 0.8s; background: #1e3a5f; color: white; class: lead -->
+```
+
+Folien-Einstellungen: `transition`, `step`, `theme`, `background` (Farbe, Verlauf),
+`color`, `class`, `align` (left, center, right), `valign` (top, middle, bottom), `header`,
+`footer`, `paginate`. Klassen: `lead` (zentrierte Titelfolie), `invert` (vertauschte Farben).
+
+### Animationen
+
+Dauern werden als `400ms` oder `0.8s` angegeben oder als Tempo `fast`, `normal`, `slow`.
+
+- **Folienübergänge** (`transition:`): `none`, `fade`, `slide-left` (`slide`),
+  `slide-right`, `slide-up`, `slide-down`, `cover`, `zoom`, `zoom-out`, `flip`, `cube`,
+  `rotate`, `blur`. Beim Zurückblättern läuft der Übergang rückwärts.
+- **Schritt-Animationen**: `fade`, `fade-up`, `fade-down`, `fade-left`, `fade-right`, `zoom`,
+  `zoom-out`, `flip`, `rotate`, `blur`, `bounce`, `drop`, `wipe`, `none` (einfach erscheinen).
+
+### Schritt für Schritt
+
+Inhalte in einem **Container** – eine Zeile `:::` mit Wörtern, geschlossen durch eine Zeile
+`:::` – erscheinen per Klick oder Tastendruck:
+
+```
+::: steps fade-up dim
+- erscheint zuerst
+- erscheint als Zweites (der erste Punkt wird abgeblendet)
+:::
+
+::: step zoom 0.8s delay=200ms
+![w=400](foto.jpg)
+:::
+```
+
+- `step` – der ganze Block ist ein Schritt (beliebiger Inhalt: Bilder, Tabellen, Code, …).
+- `steps` – jeder Listenpunkt bzw. jeder Absatz/Block ist ein eigener Schritt.
+- `dim` – blendet frühere Schritte des Containers ab.
+- Ein Animationsname oder eine Dauer allein macht den Block ebenfalls zum Schritt.
+
+Container lassen sich verschachteln; die Schritte erscheinen in der Reihenfolge des Textes.
+
+### Positionieren und Layout
+
+```
+::: place bottom right
+Unten rechts platziert
+:::
+
+::: place x=10% y=70% w=35%
+An einer genauen Position (in % der Folie)
+:::
+
+::: columns 2:1
+Linke Spalte (zwei Drittel)
+|||
+Rechte Spalte
+:::
+
+::: center
+Zentrierter Text
+:::
+```
+
+- `place` mit `top`, `middle`, `bottom` und `left`, `center`, `right` (die fehlende Richtung
+  wird zentriert); `x=`, `y=`, `w=` für genaue Position und Breite.
+- `left`, `center`, `right` ohne `place` richten den Text aus.
+- `columns` (gleich breit) oder ein Verhältnis wie `2:1` oder `1:1:1`; `|||` beginnt die
+  nächste Spalte.
+- `size=1.3` setzt die Schriftgröße (relativ), `box` zeichnet eine Karte, `small`, `large`,
+  `muted`.
+- Alle Wörter lassen sich kombinieren, z. B. `::: place bottom left step fade-right`.
+
+### Bilder
+
+- `![w=400](foto.jpg)`, `![h=300](…)`, `![w=50% center](…)` – Größe und Ausrichtung.
+- `![bg](foto.jpg)` – Hintergrundbild über die ganze Folie; `![bg contain](…)` passt es ein.
+- `![bg left 40%](foto.jpg)` / `![bg right](…)` – Bild auf einer Seite, Inhalt auf der
+  anderen.
+
+Relative Pfade beziehen sich auf den Ordner der Datei, bei Notizen auf den Home-Ordner.
+`~/Bilder/x.jpg` funktioniert überall.
+
+### Notizen für den Vortragenden
+
+Alles nach einer Zeile `???` auf einer Folie sowie HTML-Kommentare, die keine Einstellungen
+sind, sind **Notizen**. Sie erscheinen nur in der Vorschau und in der Referentenansicht.
+
+### Präsentieren
+
+| Tastenkürzel | Aktion |
+|---|---|
+| Strg+F5 | Präsentation von Anfang an starten |
+| Umschalt+F5 | Ab der Folie am Cursor starten |
+| Strg+Umschalt+F5 | In einem Fenster präsentieren (Probe) |
+
+Dasselbe bietet die ►-Schaltfläche in der Kopfleiste. Mit **zwei oder mehr Bildschirmen**
+sieht das Publikum die Folien im Vollbild auf dem anderen Bildschirm, auf dem Bildschirm mit
+QuickNotes erscheint die **Referentenansicht**: aktuelle Folie, nächster Schritt bzw. nächste
+Folie, große Notizen, eine Uhr, die mit der Präsentation startet (Restzeit mit `duration:`),
+und die Uhrzeit. Mit einem Bildschirm wechselt `P` zwischen Folien und Referentenansicht.
+
+| Taste | Während der Präsentation |
+|---|---|
+| → ↓ Leertaste Bild↓ Enter, Klick | Nächster Schritt bzw. nächste Folie |
+| ← ↑ Bild↑ Rücktaste, Rechtsklick | Vorheriger Schritt bzw. vorherige Folie |
+| Pos1 / Ende | Erste / letzte Folie |
+| Zahl + Enter | Gehe zu Folie |
+| B oder . / W oder , | Schwarzer / weißer Bildschirm |
+| P | Referentenansicht ein/aus (ein Bildschirm) |
+| S | Bildschirme tauschen |
+| F | Vollbild ein/aus |
+| T / R | Zeit anhalten / zurücksetzen |
+| + / − | Schriftgröße der Notizen |
+| H | Tasten anzeigen |
+| Esc | Präsentation beenden |
+
+*Als HTML exportieren* schreibt eine einzelne Datei, die die Präsentation in jedem Browser
+abspielt (Tastatur, Animationen, `F` für Vollbild). *Als PDF exportieren* erzeugt eine Seite
+pro Folie mit allen Schritten.
+
 ## Werkzeuge {#tools}
 
 Das Menü *Formatieren & Werkzeuge* (Kopfleiste) arbeitet auf der Auswahl oder, wenn nichts
@@ -206,6 +362,8 @@ automatischen Sicherung abgelegt).
 | Strg+Alt+B, Strg+Alt+M | Formatieren, Minimieren |
 | Strg+Umschalt+V | Vorschau ein/aus |
 | Strg+Umschalt+E, Strg+Umschalt+P | Als HTML, PDF exportieren |
+| Strg+F5, Umschalt+F5 | Präsentation von Anfang an, ab aktueller Folie starten |
+| Strg+Umschalt+F5 | In einem Fenster präsentieren |
 | Alt+Z | Zeilenumbruch ein/aus |
 | Strg+Mausrad, Strg +/−/0 | Schriftgröße |
 | Strg+Tab, Strg+Bild↑/Bild↓, Alt+1…9 | Tab wechseln |

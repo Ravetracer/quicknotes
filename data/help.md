@@ -1,7 +1,7 @@
 # QuickNotes Help {#top}
 
 **Contents:** [Notes & tabs](#notes) · [Calculations](#calc) · [Templates](#templates) ·
-[Previews & export](#previews) · [Tools](#tools) · [Geocaching](#geocaching) · [Backup](#backup) ·
+[Previews & export](#previews) · [Presentations](#slides) · [Tools](#tools) · [Geocaching](#geocaching) · [Backup](#backup) ·
 [Shortcuts](#shortcuts)
 
 ## Notes & tabs {#notes}
@@ -129,6 +129,158 @@ the folder of the document.
 PlantUML needs a local PlantUML installation (`plantuml` command or a `plantuml*.jar` in
 `~/bin`).
 
+## Presentations {#slides}
+
+A **presentation** is Markdown split into slides. Create one with *Main menu → New
+Presentation* – it starts with a short example. Files named `*.slides.md`, and Markdown files
+with `presentation: true` in their front matter, open as presentations; any Markdown tab can
+be switched to *Presentation* in the status bar.
+
+The preview shows the slide at the cursor together with its notes; **‹ ›** jump to the
+previous/next slide in the text, **►** plays the slide's animations.
+
+### Slides and settings
+
+A line with only `---` starts a new slide (inside code blocks it stays code). Settings for the
+whole presentation go into a front matter block at the very top:
+
+```
+---
+presentation: true
+title: My Talk
+theme: default        # default, dark, ocean, sunset
+aspect: 16:9          # 16:9, 4:3, 16:10
+transition: fade 500ms
+step: fade-up 400ms   # default animation of steps
+paginate: true        # slide numbers
+header: Text at the top
+footer: Text at the bottom
+duration: 20m         # talk length, shown as remaining time
+style: |
+  .qn-slide h1 { text-transform: uppercase; }
+---
+```
+
+Settings of a single slide are written as HTML comment anywhere on the slide, several of
+them separated by `;`:
+
+```
+<!-- transition: zoom 0.8s; background: #1e3a5f; color: white; class: lead -->
+```
+
+Slide settings: `transition`, `step`, `theme`, `background` (color, gradient),
+`color`, `class`, `align` (left, center, right), `valign` (top, middle, bottom), `header`,
+`footer`, `paginate`. Classes: `lead` (centered title slide), `invert` (swapped colors).
+
+### Animations
+
+Durations are written as `400ms` or `0.8s`, or as speed `fast`, `normal`, `slow`.
+
+- **Slide transitions** (`transition:`): `none`, `fade`, `slide-left` (`slide`),
+  `slide-right`, `slide-up`, `slide-down`, `cover`, `zoom`, `zoom-out`, `flip`, `cube`,
+  `rotate`, `blur`. Going back plays the transition in reverse.
+- **Step animations**: `fade`, `fade-up`, `fade-down`, `fade-left`, `fade-right`, `zoom`,
+  `zoom-out`, `flip`, `rotate`, `blur`, `bounce`, `drop`, `wipe`, `none` (just appear).
+
+### Step by step
+
+Wrap content in a **container** – a line `:::` with words, closed by a line `:::` –
+to show it on click or key press:
+
+```
+::: steps fade-up dim
+- appears first
+- appears second (the first one is dimmed)
+:::
+
+::: step zoom 0.8s delay=200ms
+![w=400](photo.jpg)
+:::
+```
+
+- `step` – the whole block is one step (any content: images, tables, code, …).
+- `steps` – each list item, or each paragraph/block, is its own step.
+- `dim` – dims earlier steps of the container.
+- An animation name or duration alone also makes the block a step.
+
+Containers can be nested; the steps appear in the order of the text.
+
+### Positioning and layout
+
+```
+::: place bottom right
+Placed in the bottom right corner
+:::
+
+::: place x=10% y=70% w=35%
+At an exact position (in % of the slide)
+:::
+
+::: columns 2:1
+Left column (two thirds)
+|||
+Right column
+:::
+
+::: center
+Centered text
+:::
+```
+
+- `place` with `top`, `middle`, `bottom` and `left`, `center`, `right` (the missing direction
+  is centered); `x=`, `y=`, `w=` for exact positions and width.
+- `left`, `center`, `right` without `place` align the text.
+- `columns` (equal width) or a ratio like `2:1` or `1:1:1`; `|||` starts the next column.
+- `size=1.3` sets the font size (relative), `box` draws a card, `small`, `large`, `muted`.
+- All words can be combined, e.g. `::: place bottom left step fade-right`.
+
+### Images
+
+- `![w=400](photo.jpg)`, `![h=300](…)`, `![w=50% center](…)` – size and alignment.
+- `![bg](photo.jpg)` – background image filling the slide; `![bg contain](…)` fits it in.
+- `![bg left 40%](photo.jpg)` / `![bg right](…)` – image on one side, content on the other.
+
+Relative paths are taken from the folder of the file; in notes from the home folder.
+`~/Pictures/x.jpg` works everywhere.
+
+### Presenter notes
+
+Everything after a line `???` on a slide, and HTML comments that are no settings, are
+**presenter notes**. They are only visible in the preview and the presenter view.
+
+### Presenting
+
+| Shortcut | Action |
+|---|---|
+| Ctrl+F5 | Start presentation from the beginning |
+| Shift+F5 | Start from the slide at the cursor |
+| Ctrl+Shift+F5 | Present in a window (rehearsal) |
+
+The ► button in the header bar offers the same. With **two or more screens** the audience
+sees the slides fullscreen on the other screen, while the screen with QuickNotes shows the
+**presenter view**: current slide, the next step or slide, large notes, a timer started with
+the presentation (remaining time with `duration:`) and the clock. With one screen, `P`
+switches between slides and presenter view.
+
+| Key | During the presentation |
+|---|---|
+| → ↓ Space PgDn Enter, click | Next step or slide |
+| ← ↑ PgUp Backspace, right click | Previous step or slide |
+| Home / End | First / last slide |
+| number + Enter | Go to slide |
+| B or . / W or , | Black / white screen |
+| P | Presenter view on/off (one screen) |
+| S | Swap screens |
+| F | Fullscreen on/off |
+| T / R | Pause / reset the timer |
+| + / − | Notes font size |
+| H | Show the keys |
+| Esc | End presentation |
+
+*Export as HTML* writes a single file that plays the presentation in any browser (keyboard,
+animations, `F` for fullscreen). *Export as PDF* creates one page per slide with all steps
+shown.
+
 ## Tools {#tools}
 
 The *Format & tools* menu (header bar) works on the selection, or on the whole tab when
@@ -195,6 +347,8 @@ file. *Restore Backup…* either **adds** the tabs of a backup to the current on
 | Ctrl+Alt+B, Ctrl+Alt+M | Beautify, minify |
 | Ctrl+Shift+V | Toggle preview |
 | Ctrl+Shift+E, Ctrl+Shift+P | Export as HTML, PDF |
+| Ctrl+F5, Shift+F5 | Start presentation from the beginning, from the current slide |
+| Ctrl+Shift+F5 | Present in a window |
 | Alt+Z | Toggle word wrap |
 | Ctrl+mouse wheel, Ctrl +/−/0 | Font size |
 | Ctrl+Tab, Ctrl+PgUp/PgDn, Alt+1…9 | Switch tabs |

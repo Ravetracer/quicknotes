@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- QuickNotes presentations: Markdown plus slide separators, containers
+     and presenter notes (see src/slides.rs and data/help.md). -->
+<language id="slides" name="Presentation" version="2.0" section="Markup">
+  <metadata>
+    <property name="globs">*.slides.md</property>
+    <property name="block-comment-start">&lt;!--</property>
+    <property name="block-comment-end">--&gt;</property>
+    <property name="suggested-suffix">.slides.md</property>
+  </metadata>
+
+  <styles>
+    <style id="front-matter" name="Front matter" map-to="def:comment"/>
+    <style id="key" name="Setting" map-to="def:type"/>
+    <style id="separator" name="Slide separator" map-to="def:keyword"/>
+    <style id="container" name="Container" map-to="def:preprocessor"/>
+    <style id="notes" name="Notes marker" map-to="def:note"/>
+  </styles>
+
+  <definitions>
+    <context id="front-matter" style-ref="front-matter" first-line-only="true" class="no-spell-check">
+      <start>^---\s*$</start>
+      <end>^(---|\.\.\.)\s*$</end>
+      <include>
+        <context id="key" style-ref="key">
+          <match>^[A-Za-z_-]+(?=:)</match>
+        </context>
+      </include>
+    </context>
+
+    <context id="separator" style-ref="separator">
+      <match>^---\s*$</match>
+    </context>
+
+    <context id="container" style-ref="container" class="no-spell-check">
+      <match>^\s*:::.*$</match>
+    </context>
+
+    <context id="column-break" style-ref="container">
+      <match>^\s*\|\|\|\s*$</match>
+    </context>
+
+    <context id="notes" style-ref="notes">
+      <match>^\?\?\?\s*$</match>
+    </context>
+
+    <context id="slides">
+      <include>
+        <context ref="front-matter"/>
+        <context ref="separator"/>
+        <context ref="container"/>
+        <context ref="column-break"/>
+        <context ref="notes"/>
+        <context ref="markdown:markdown"/>
+      </include>
+    </context>
+  </definitions>
+</language>
