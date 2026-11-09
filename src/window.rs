@@ -1159,6 +1159,7 @@ impl Window {
         *t.path.borrow_mut() = meta.path.clone();
         *t.custom_title.borrow_mut() = meta.title.clone();
         t.language_locked.set(meta.language_locked);
+        t.split.set(meta.split);
         t.set_wrap(meta.wrap);
         t.set_language_id(meta.language.as_deref());
         if let Some(p) = &meta.path {

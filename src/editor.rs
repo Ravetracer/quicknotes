@@ -117,6 +117,8 @@ pub struct EditorTab {
     preview: RefCell<Option<Preview>>,
     preview_on: Cell<bool>,
     needs_split: Cell<bool>,
+    /// Editor share of the editor/preview split (0..1), kept across sessions.
+    pub split: Cell<Option<f64>>,
     preview_timer: RefCell<Option<glib::SourceId>>,
     rendering: Cell<bool>,
     rerender: Cell<bool>,
@@ -182,6 +184,7 @@ impl EditorTab {
             preview: RefCell::new(None),
             preview_on: Cell::new(false),
             needs_split: Cell::new(false),
+            split: Cell::new(None),
             preview_timer: RefCell::new(None),
             rendering: Cell::new(false),
             rerender: Cell::new(false),
@@ -216,14 +219,25 @@ impl EditorTab {
             }
         });
 
-        // Split the pane in half once the size is known.
+        // Split the pane (at the stored ratio) once the size is known.
         let weak = Rc::downgrade(&tab);
         tab.root.connect_notify_local(Some("max-position"), move |paned, _| {
             if let Some(t) = weak.upgrade() {
                 let max = paned.max_position();
                 if t.needs_split.get() && max > 100 && max < i32::MAX / 2 {
                     t.needs_split.set(false);
-                    paned.set_position(paned.max_position() / 2);
+                    paned.set_position(t.split_position(max));
+                }
+            }
+        });
+
+        // Remember the split ratio whenever the divider moves.
+        let weak = Rc::downgrade(&tab);
+        tab.root.connect_notify_local(Some("position"), move |paned, _| {
+            if let Some(t) = weak.upgrade() {
+                let max = paned.max_position();
+                if paned.end_child().is_some() && !t.needs_split.get() && max > 100 && max < i32::MAX / 2 {
+                    t.split.set(Some((paned.position() as f64 / max as f64).clamp(0.0, 1.0)));
                 }
             }
         });
@@ -582,7 +596,7 @@ impl EditorTab {
                 // Unallocated panes report max-position = G_MAXINT; use the real width.
                 let width = self.root.width();
                 if width > 100 {
-                    self.root.set_position(width / 2);
+                    self.root.set_position(self.split_position(width));
                 } else {
                     self.needs_split.set(true);
                 }
@@ -591,6 +605,11 @@ impl EditorTab {
         } else if self.root.end_child().is_some() {
             self.root.set_end_child(None::<&gtk::Widget>);
         }
+    }
+
+    /// Divider position for a pane of size `max` at the stored ratio.
+    fn split_position(&self, max: i32) -> i32 {
+        (max as f64 * self.split.get().unwrap_or(0.5)).round() as i32
     }
 
     fn ensure_webview(self: &Rc<Self>) -> webkit6::WebView {
@@ -928,6 +947,7 @@ impl EditorTab {
             wrap: self.wrap(),
             preview: self.preview_on.get(),
             cursor: self.buffer.cursor_position(),
+            split: self.split.get(),
         }
     }
 }

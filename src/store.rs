@@ -75,6 +75,8 @@ pub struct TabMeta {
     pub modified: bool,
     pub preview: bool,
     pub cursor: i32,
+    /// Editor share of the editor/preview split (0..1); centred when `None`.
+    pub split: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
