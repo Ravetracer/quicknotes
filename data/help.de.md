@@ -19,11 +19,23 @@ Jeder Tab ist entweder eine **Notiz** oder eine **geöffnete Datei**.
 - Die Syntaxhervorhebung wird automatisch gewählt und kann in der Statusleiste geändert werden.
 - Tabs sind je nach Art eingefärbt: Code, Dokumente (Markdown, reStructuredText),
   Präsentationen, Berechnungen und Bilder haben jeweils eine eigene Farbe; einfache Notizen
-  behalten das normale Aussehen.
-- Schriftart und -größe des Editors werden in der Statusleiste eingestellt (oder mit
-  Strg+Mausrad).
-- Die Sprache der Oberfläche (English, Deutsch oder Systemsprache) wird im Hauptmenü unter
-  *Sprache* gewählt und gilt nach einem Neustart.
+  behalten das normale Aussehen. Die Farben lassen sich in den Einstellungen anpassen.
+- Tabs werden oben oder in einer Seitenleiste links angezeigt (*Einstellungen → Tabs*). Die
+  Breite der Seitenleiste lässt sich ziehen; Tabs werden per Drag-and-drop umsortiert und mit
+  der mittleren Maustaste geschlossen.
+- Der **ablenkungsfreie Modus** (Alt+Enter, Esc zum Verlassen) zeigt nur den Text – im
+  Vollbild, zentriert, ohne Leisten, Tabs, Vorschau und Zeilennummern.
+
+### Einstellungen
+
+*Hauptmenü → Einstellungen* (Strg+,) legt Editor-Schrift, Schriftgröße und Ligaturen, die
+Sprache der Oberfläche (gilt nach einem Neustart), das Farbdesign, die Tab-Position und die
+Tab-Farben fest und bietet Sicherung und Wiederherstellung der Notizen (*Import/Export*).
+
+*Designs* enthält das dunkle und helle Standarddesign sowie 165 Designs aus Dracula, den
+Dayle-Rees-Farbschemata und dem VSCode Ultimate Themes Pack. Ein Klick wendet ein Design sofort
+auf Editor, Fenster und Vorschau an; Strg+F sucht in den Einstellungen nach Designnamen. Die Schriftgröße lässt sich auch
+mit Strg+Mausrad oder Strg +/−/0 ändern.
 
 ## Berechnungen {#calc}
 
@@ -385,7 +397,7 @@ Auswahl ein. Die Optionen werden für das nächste Mal gespeichert.
 
 ## Sicherung {#backup}
 
-*Notizen sichern…* im Hauptmenü schreibt alle Tabs, Notizen und Einstellungen in eine einzige
+*Notizen sichern…* unter *Einstellungen → Import/Export* schreibt alle Tabs, Notizen und Einstellungen in eine einzige
 `.tar.gz`-Datei. *Sicherung wiederherstellen…* **fügt** die Tabs einer Sicherung entweder zu den
 aktuellen **hinzu** oder **ersetzt** alles (der aktuelle Stand wird vorher in einer
 automatischen Sicherung abgelegt).
@@ -407,6 +419,8 @@ automatischen Sicherung abgelegt).
 | Strg+F5, Umschalt+F5 | Präsentation von Anfang an, ab aktueller Folie starten |
 | Strg+Umschalt+F5 | In einem Fenster präsentieren |
 | Alt+Z | Zeilenumbruch ein/aus |
+| Alt+Enter, Esc | Ablenkungsfreier Modus ein/aus, verlassen |
+| Strg+, | Einstellungen |
 | Strg+Mausrad, Strg +/−/0 | Schriftgröße |
 | Strg+Tab, Strg+Bild↑/Bild↓, Alt+1…9 | Tab wechseln |
 | F1 | Diese Hilfe |

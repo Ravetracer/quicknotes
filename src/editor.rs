@@ -3,6 +3,7 @@
 
 use crate::store::{TabKind, TabMeta};
 use crate::calc::{self, LineResult};
+use crate::themes::Theme;
 use crate::{html, langs, markdown, plantuml, rst, slides};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -16,7 +17,7 @@ use webkit6::prelude::*;
 
 /// State shared by all tabs of the window.
 pub struct Shared {
-    pub dark: Cell<bool>,
+    pub theme: Cell<&'static Theme>,
     /// Preview zoom factor, follows the editor font size.
     pub zoom: Cell<f64>,
     pub plantuml_command: RefCell<Option<String>>,
@@ -102,6 +103,12 @@ struct CalcColumn {
 
 const CALC_LANGUAGE: &str = "calc";
 const CALC_PAD: i32 = 14;
+const TOP_MARGIN: i32 = 6;
+const FOCUS_TOP_MARGIN: i32 = 48;
+const LEFT_MARGIN: i32 = 6;
+const RIGHT_MARGIN: i32 = 12;
+/// Width of the text column in distraction-free mode, in characters.
+const FOCUS_COLUMNS: i32 = 90;
 
 pub struct EditorTab {
     pub id: String,
@@ -116,7 +123,10 @@ pub struct EditorTab {
     shared: Rc<Shared>,
     preview: RefCell<Option<Preview>>,
     preview_on: Cell<bool>,
-    needs_split: Cell<bool>,
+    /// Distraction-free mode: no preview, no line numbers, centred text.
+    focus: Cell<bool>,
+    /// Pane size the split ratio was last applied for; -1 forces re-applying.
+    split_max: Cell<i32>,
     /// Editor share of the editor/preview split (0..1), kept across sessions.
     pub split: Cell<Option<f64>>,
     preview_timer: RefCell<Option<glib::SourceId>>,
@@ -149,10 +159,10 @@ impl EditorTab {
         view.set_smart_backspace(true);
         view.set_smart_home_end(sourceview5::SmartHomeEndType::Before);
         view.set_monospace(true);
-        view.set_top_margin(6);
+        view.set_top_margin(TOP_MARGIN);
         view.set_bottom_margin(120);
-        view.set_left_margin(6);
-        view.set_right_margin(12);
+        view.set_left_margin(LEFT_MARGIN);
+        view.set_right_margin(RIGHT_MARGIN);
         view.add_css_class("editor-view");
         let completion = view.completion();
         completion.set_show_icons(false);
@@ -183,7 +193,8 @@ impl EditorTab {
             shared,
             preview: RefCell::new(None),
             preview_on: Cell::new(false),
-            needs_split: Cell::new(false),
+            focus: Cell::new(false),
+            split_max: Cell::new(-1),
             split: Cell::new(None),
             preview_timer: RefCell::new(None),
             rendering: Cell::new(false),
@@ -219,31 +230,58 @@ impl EditorTab {
             }
         });
 
-        // Split the pane (at the stored ratio) once the size is known.
-        let weak = Rc::downgrade(&tab);
-        tab.root.connect_notify_local(Some("max-position"), move |paned, _| {
-            if let Some(t) = weak.upgrade() {
-                let max = paned.max_position();
-                if t.needs_split.get() && max > 100 && max < i32::MAX / 2 {
-                    t.needs_split.set(false);
-                    paned.set_position(t.split_position(max));
+        // The split keeps its ratio when the pane is resized; moving the
+        // divider changes the ratio.
+        for prop in ["max-position", "position"] {
+            let weak = Rc::downgrade(&tab);
+            tab.root.connect_notify_local(Some(prop), move |_, _| {
+                if let Some(t) = weak.upgrade() {
+                    t.split_changed();
                 }
-            }
-        });
+            });
+        }
 
-        // Remember the split ratio whenever the divider moves.
+        // Distraction-free mode centres the text; follow the visible width.
         let weak = Rc::downgrade(&tab);
-        tab.root.connect_notify_local(Some("position"), move |paned, _| {
+        scrolled.hadjustment().connect_page_size_notify(move |_| {
             if let Some(t) = weak.upgrade() {
-                let max = paned.max_position();
-                if paned.end_child().is_some() && !t.needs_split.get() && max > 100 && max < i32::MAX / 2 {
-                    t.split.set(Some((paned.position() as f64 / max as f64).clamp(0.0, 1.0)));
-                }
+                t.update_focus_margins();
             }
         });
 
         tab.apply_theme();
         tab
+    }
+
+    // ----- distraction-free mode ----------------------------------------
+
+    pub fn set_focus_mode(self: &Rc<Self>, on: bool) {
+        if self.focus.replace(on) == on {
+            return;
+        }
+        self.view.set_show_line_numbers(!on);
+        self.view.set_highlight_current_line(!on);
+        self.view.set_top_margin(if on { FOCUS_TOP_MARGIN } else { TOP_MARGIN });
+        self.sync_preview();
+        self.update_focus_margins();
+    }
+
+    /// Side margins: centred column in distraction-free mode, defaults otherwise.
+    fn update_focus_margins(&self) {
+        let (left, right) = if self.focus.get() {
+            let width = self.view.hadjustment().map_or(0.0, |a| a.page_size()) as i32;
+            let char_width = self.view.create_pango_layout(Some("0")).pixel_size().0.max(1);
+            let side = ((width - FOCUS_COLUMNS * char_width) / 2).max(LEFT_MARGIN);
+            (side, side.max(RIGHT_MARGIN))
+        } else {
+            (LEFT_MARGIN, RIGHT_MARGIN)
+        };
+        if self.view.left_margin() != left {
+            self.view.set_left_margin(left);
+        }
+        if self.view.right_margin() != right {
+            self.view.set_right_margin(right);
+        }
     }
 
     // ----- content -------------------------------------------------------
@@ -519,18 +557,18 @@ impl EditorTab {
     }
 
     pub fn apply_theme(&self) {
-        let dark = self.shared.dark.get();
+        let theme = self.shared.theme.get();
         let sm = sourceview5::StyleSchemeManager::default();
-        let scheme = if dark {
-            sm.scheme("Adwaita-dark").or_else(|| sm.scheme("oblivion"))
-        } else {
-            sm.scheme("Adwaita").or_else(|| sm.scheme("classic"))
-        };
+        let fallback = if theme.dark { ["Adwaita-dark", "oblivion"] } else { ["Adwaita", "classic"] };
+        let scheme = sm
+            .scheme(&theme.scheme_id())
+            .or_else(|| sm.scheme(fallback[0]))
+            .or_else(|| sm.scheme(fallback[1]));
         self.buffer.set_style_scheme(scheme.as_ref());
         if let Some(p) = self.preview.borrow().as_ref() {
             if p.shell.get() != Shell::None {
-                p.webview.set_background_color(&preview_bg(dark));
-                let js = format!("setTheme('{}')", if dark { "dark" } else { "light" });
+                p.webview.set_background_color(&preview_bg(theme));
+                let js = format!("setTheme('{}', '{}')", if theme.dark { "dark" } else { "light" }, theme.preview_vars());
                 if p.loaded.get() {
                     p.webview.evaluate_javascript(&js, None, None, None::<&gio::Cancellable>, |_| {});
                 }
@@ -548,6 +586,7 @@ impl EditorTab {
         glib::timeout_add_local_once(Duration::from_millis(150), move || {
             if let Some(t) = weak.upgrade() {
                 t.fit_calc_column();
+                t.update_focus_margins();
             }
         });
     }
@@ -589,17 +628,12 @@ impl EditorTab {
     }
 
     fn sync_preview(self: &Rc<Self>) {
-        if self.preview_visible() {
+        if self.preview_visible() && !self.focus.get() {
             let webview = self.ensure_webview();
             if self.root.end_child().as_ref() != Some(webview.upcast_ref()) {
                 self.root.set_end_child(Some(&webview));
-                // Unallocated panes report max-position = G_MAXINT; use the real width.
-                let width = self.root.width();
-                if width > 100 {
-                    self.root.set_position(self.split_position(width));
-                } else {
-                    self.needs_split.set(true);
-                }
+                self.split_max.set(-1);
+                self.split_changed();
             }
             self.schedule_render(0);
         } else if self.root.end_child().is_some() {
@@ -607,20 +641,32 @@ impl EditorTab {
         }
     }
 
-    /// Divider position for a pane of size `max` at the stored ratio.
-    fn split_position(&self, max: i32) -> i32 {
-        (max as f64 * self.split.get().unwrap_or(0.5)).round() as i32
+    /// Applies the stored ratio when the pane size changed (window resized,
+    /// preview shown again), otherwise remembers the ratio of the divider.
+    fn split_changed(&self) {
+        let max = self.root.max_position();
+        // Unallocated panes report max-position = G_MAXINT.
+        if self.root.end_child().is_none() || max <= 100 || max >= i32::MAX / 2 {
+            return;
+        }
+        if max != self.split_max.get() {
+            self.split_max.set(max);
+            let position = (max as f64 * self.split.get().unwrap_or(0.5)).round() as i32;
+            self.root.set_position(position);
+        } else {
+            self.split.set(Some((self.root.position() as f64 / max as f64).clamp(0.0, 1.0)));
+        }
     }
 
     fn ensure_webview(self: &Rc<Self>) -> webkit6::WebView {
         if let Some(p) = self.preview.borrow().as_ref() {
             return p.webview.clone();
         }
-        let dark = self.shared.dark.get();
+        let theme = self.shared.theme.get();
         let webview = webkit6::WebView::new();
         webview.set_hexpand(true);
         webview.set_vexpand(true);
-        webview.set_background_color(&preview_bg(dark));
+        webview.set_background_color(&preview_bg(theme));
         webview.set_zoom_level(self.shared.zoom.get());
         if let Some(s) = WebViewExt::settings(&webview) {
             s.set_enable_developer_extras(false);
@@ -733,7 +779,7 @@ impl EditorTab {
     fn load_page(&self, p: &Preview, page: &str, shell: Shell) {
         p.loaded.set(false);
         p.shell.set(shell);
-        let bg = if shell != Shell::None { preview_bg(self.shared.dark.get()) } else { gdk::RGBA::WHITE };
+        let bg = if shell != Shell::None { preview_bg(self.shared.theme.get()) } else { gdk::RGBA::WHITE };
         p.webview.set_background_color(&bg);
         let base = if shell == Shell::Slides { self.slides_base_uri() } else { self.base_uri() };
         p.webview.load_html(page, base.as_deref());
@@ -802,7 +848,7 @@ impl EditorTab {
         let preview = self.preview.borrow();
         let Some(p) = preview.as_ref() else { return };
         if p.shell.get() != Shell::Slides {
-            let opts = slides::PageOptions { dark: self.shared.dark.get(), ..Default::default() };
+            let opts = slides::PageOptions { dark: self.shared.theme.get().dark, ..Default::default() };
             self.load_page(p, &slides::page(slides::Mode::Preview, None, opts), Shell::Slides);
             *p.pending.borrow_mut() = Some(js);
         } else if p.loaded.get() {
@@ -830,7 +876,7 @@ impl EditorTab {
         let Some(p) = preview.as_ref() else { return };
         let js = format!("setContent({})", serde_json::to_string(html).unwrap_or_default());
         if p.shell.get() != Shell::Doc {
-            self.load_page(p, &html::preview_shell(self.shared.dark.get()), Shell::Doc);
+            self.load_page(p, &html::preview_shell(self.shared.theme.get()), Shell::Doc);
             *p.pending.borrow_mut() = Some(js);
         } else if p.loaded.get() {
             p.webview.evaluate_javascript(&js, None, None, None::<&gio::Cancellable>, |_| {});
@@ -962,12 +1008,8 @@ fn result_markup(result: &LineResult) -> String {
     }
 }
 
-fn preview_bg(dark: bool) -> gdk::RGBA {
-    if dark {
-        gdk::RGBA::new(0x1e as f32 / 255.0, 0x1e as f32 / 255.0, 0x1e as f32 / 255.0, 1.0)
-    } else {
-        gdk::RGBA::WHITE
-    }
+pub fn preview_bg(theme: &Theme) -> gdk::RGBA {
+    gdk::RGBA::parse(theme.background()).unwrap_or(gdk::RGBA::WHITE)
 }
 
 pub fn truncate(s: &str, max: usize) -> String {

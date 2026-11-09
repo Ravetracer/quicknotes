@@ -2,28 +2,24 @@
 
 use crate::{html, markdown};
 use adw::prelude::*;
-use gtk::{gdk, gio};
+use gtk::gio;
 use webkit6::prelude::*;
 
 const HELP_EN: &str = include_str!("../data/help.md");
 const HELP_DE: &str = include_str!("../data/help.de.md");
 
-pub fn show(parent: &impl IsA<gtk::Window>, dark: bool, zoom: f64) {
+pub fn show(parent: &impl IsA<gtk::Window>, theme: &crate::themes::Theme, zoom: f64) {
     let help = match crate::i18n::lang() {
         crate::i18n::Lang::De => HELP_DE,
         crate::i18n::Lang::En => HELP_EN,
     };
     let body = markdown::to_html(help);
-    let page = html::static_page(t!("QuickNotes Help"), &body, dark);
+    let page = html::static_page(t!("QuickNotes Help"), &body, theme);
 
     let webview = webkit6::WebView::new();
     webview.set_vexpand(true);
     webview.set_zoom_level(zoom);
-    webview.set_background_color(&if dark {
-        gdk::RGBA::new(0x1e as f32 / 255.0, 0x1e as f32 / 255.0, 0x1e as f32 / 255.0, 1.0)
-    } else {
-        gdk::RGBA::WHITE
-    });
+    webview.set_background_color(&crate::editor::preview_bg(theme));
     if let Some(settings) = WebViewExt::settings(&webview) {
         settings.set_enable_javascript(false);
     }

@@ -18,7 +18,10 @@ pub struct Settings {
     pub font_family: String,
     /// OpenType ligatures (e.g. `!=` as `≠` in Fira Code).
     pub ligatures: bool,
+    /// Kept in sync with the theme (fallback when a theme no longer exists).
     pub dark: bool,
+    /// Colour theme id, see `themes.rs`; empty: default for `dark`.
+    pub theme: String,
     pub width: i32,
     pub height: i32,
     pub maximized: bool,
@@ -31,6 +34,12 @@ pub struct Settings {
     pub gc_options: std::collections::BTreeMap<String, crate::geocaching::Options>,
     /// User interface language: "system", "en" or "de".
     pub language: String,
+    /// Tabs in a sidebar on the left instead of the tab bar on top.
+    pub vertical_tabs: bool,
+    /// Width of the tab sidebar in pixels.
+    pub sidebar_width: i32,
+    /// User-defined tab colours (`#rrggbb`) per tab type, e.g. `code`.
+    pub tab_colors: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for Settings {
@@ -40,6 +49,7 @@ impl Default for Settings {
             font_family: "Monospace".into(),
             ligatures: true,
             dark: true,
+            theme: String::new(),
             width: 1100,
             height: 750,
             maximized: false,
@@ -47,6 +57,9 @@ impl Default for Settings {
             large_file_mb: 8,
             gc_options: Default::default(),
             language: "system".into(),
+            vertical_tabs: false,
+            sidebar_width: 220,
+            tab_colors: Default::default(),
         }
     }
 }

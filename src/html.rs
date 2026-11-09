@@ -1,5 +1,7 @@
 //! HTML pages for the preview pane and for exported documents.
 
+use crate::themes::Theme;
+
 /// Document styles shared by preview and export. Colors come from CSS
 /// variables so the preview can switch themes; covers Markdown output,
 /// docutils (reStructuredText) output and PlantUML diagrams.
@@ -104,17 +106,20 @@ pub fn escape(text: &str) -> String {
 
 /// The preview page shell. Content is swapped via `setContent()` so the
 /// scroll position survives updates.
-pub fn preview_shell(dark: bool) -> String {
-    let theme = if dark { "dark" } else { "light" };
+pub fn preview_shell(theme: &Theme) -> String {
+    let (vars, theme) = (theme.preview_vars(), if theme.dark { "dark" } else { "light" });
     format!(
         r#"<!DOCTYPE html>
-<html data-theme="{theme}">
+<html data-theme="{theme}" style="{vars}">
 <head>
 <meta charset="utf-8">
 <style>{DOC_CSS}</style>
 <script>
 window.setContent = function (html) {{ document.getElementById('content').innerHTML = html; }};
-window.setTheme = function (t) {{ document.documentElement.dataset.theme = t; }};
+window.setTheme = function (t, vars) {{
+  document.documentElement.dataset.theme = t;
+  document.documentElement.style.cssText = vars || '';
+}};
 </script>
 </head>
 <body><div id="content"></div></body>
@@ -146,12 +151,12 @@ pub fn standalone(title: &str, body: &str) -> String {
 }
 
 /// A static themed page (e.g. the help).
-pub fn static_page(title: &str, body: &str, dark: bool) -> String {
-    let theme = if dark { "dark" } else { "light" };
+pub fn static_page(title: &str, body: &str, theme: &Theme) -> String {
+    let (vars, theme) = (theme.preview_vars(), if theme.dark { "dark" } else { "light" });
     let title = escape(title);
     format!(
         r#"<!DOCTYPE html>
-<html data-theme="{theme}">
+<html data-theme="{theme}" style="{vars}">
 <head>
 <meta charset="utf-8">
 <title>{title}</title>

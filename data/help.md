@@ -17,10 +17,23 @@ Every tab is either a **note** or an **opened file**.
 - The tab title is the first line of a note. *Rename Tab* (F2) sets a fixed title.
 - Syntax highlighting is chosen automatically and can be changed in the status bar.
 - Tabs are tinted by type: code, documents (Markdown, reStructuredText), presentations,
-  calculations and images each have their own colour; plain notes keep the default look.
-- The editor font and its size are set in the status bar (or with Ctrl+mouse wheel).
-- The interface language (English, Deutsch or the system language) is chosen in the main menu
-  under *Language* and applies after a restart.
+  calculations and images each have their own colour (adjustable in the preferences); plain
+  notes keep the default look.
+- Tabs are shown on top or in a sidebar on the left (*Preferences → Tabs*). The sidebar width
+  can be dragged; tabs can be reordered by drag and drop and closed with a middle click.
+- **Distraction-free mode** (Alt+Enter, Esc to leave) shows only the text, full screen and
+  centred, without bars, tabs, preview or line numbers.
+
+### Preferences
+
+*Main menu → Preferences* (Ctrl+,) sets the editor font, its size and ligatures, the
+interface language (applies after a restart), the colour theme, the tab position and the tab
+colours, and offers backup and restore of the notes (*Import/Export*).
+
+*Themes* lists the default dark and light theme and 165 themes from Dracula, the Dayle Rees
+colour schemes and the VSCode Ultimate Themes Pack. A click applies a theme right away to the
+editor, the window and the preview; Ctrl+F in the preferences searches themes by name. The font size can also be changed with
+Ctrl+mouse wheel or Ctrl +/−/0.
 
 ## Calculations {#calc}
 
@@ -368,7 +381,7 @@ selected with the mouse. The options are remembered for the next time.
 
 ## Backup {#backup}
 
-*Back Up Notes…* in the main menu writes all tabs, notes and settings into one `.tar.gz`
+*Back Up Notes…* in *Preferences → Import/Export* writes all tabs, notes and settings into one `.tar.gz`
 file. *Restore Backup…* either **adds** the tabs of a backup to the current ones or
 **replaces** everything (the current state is saved to an automatic backup first).
 
@@ -389,6 +402,8 @@ file. *Restore Backup…* either **adds** the tabs of a backup to the current on
 | Ctrl+F5, Shift+F5 | Start presentation from the beginning, from the current slide |
 | Ctrl+Shift+F5 | Present in a window |
 | Alt+Z | Toggle word wrap |
+| Alt+Enter, Esc | Distraction-free mode on/off, leave |
+| Ctrl+, | Preferences |
 | Ctrl+mouse wheel, Ctrl +/−/0 | Font size |
 | Ctrl+Tab, Ctrl+PgUp/PgDn, Alt+1…9 | Switch tabs |
 | F1 | This help |

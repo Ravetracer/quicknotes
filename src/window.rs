@@ -6,6 +6,9 @@ use crate::image_tab::{self, ImageTab};
 use crate::store::{self, Session, Settings, TabKind, TabMeta};
 use crate::geocaching::{self, Field};
 use crate::presenter::{self, Presentation};
+use crate::prefs::{self, MAX_FONT, MIN_FONT};
+use crate::tab_list::TabList;
+use crate::themes::{self, Theme};
 use crate::{format, html, langs, slides, APP_ID};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -16,8 +19,6 @@ use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
-const MIN_FONT: f64 = 6.0;
-const MAX_FONT: f64 = 48.0;
 const BASE_FONT: f64 = 12.0;
 
 #[derive(Clone)]
@@ -81,11 +82,8 @@ pub struct Window {
     status_info: gtk::Label,
     status_pos: gtk::Label,
     zoom_btn: gtk::Button,
-    font_drop: gtk::DropDown,
-    font_guard: Cell<bool>,
     lang_drop: gtk::DropDown,
     lang_ids: Vec<Option<String>>,
-    theme_btn: gtk::Button,
     guard: Cell<bool>,
     search: SearchUi,
     closed: RefCell<Vec<(TabMeta, Option<String>)>>,
@@ -98,6 +96,16 @@ pub struct Window {
     present_btn: adw::SplitButton,
     presentation: RefCell<Option<Rc<Presentation>>>,
     tab_bar: adw::TabBar,
+    /// Vertical tabs (sidebar) and the pane holding it next to the tabs.
+    tab_list: Rc<TabList>,
+    content: gtk::Paned,
+    toolbar: adw::ToolbarView,
+    /// Tab colours (generated from the settings).
+    tab_css: gtk::CssProvider,
+    /// libadwaita colour overrides of the current theme.
+    theme_css: gtk::CssProvider,
+    /// Distraction-free mode: fullscreen editor without bars and sidebar.
+    focus_mode: Cell<bool>,
     /// The header bar's main menu; rebuilt when the menu context changes.
     main_menu: gio::Menu,
     menu_context: Cell<Option<MenuContext>>,
@@ -138,11 +146,7 @@ pub fn persist_now() {
 impl Window {
     fn new(app: &adw::Application, settings: Settings) -> Rc<Self> {
         crate::i18n::init(&settings.language);
-        adw::StyleManager::default().set_color_scheme(if settings.dark {
-            adw::ColorScheme::ForceDark
-        } else {
-            adw::ColorScheme::ForceLight
-        });
+        let theme = themes::find(&settings.theme, settings.dark);
 
         let win = adw::ApplicationWindow::builder()
             .application(app)
@@ -184,7 +188,6 @@ impl Window {
             .menu_model(&tools_menu())
             .tooltip_text(t!("Format & tools"))
             .build();
-        let theme_btn = icon_button("weather-clear-symbolic", t!("Toggle dark/light theme"), "win.dark");
         let preview_btn = gtk::ToggleButton::builder()
             .icon_name("view-dual-symbolic")
             .tooltip_text(t!("Toggle preview (Ctrl+Shift+V)"))
@@ -204,7 +207,6 @@ impl Window {
             .visible(false)
             .build();
         header.pack_end(&menu_btn);
-        header.pack_end(&theme_btn);
         header.pack_end(&tools_btn);
         header.pack_end(&preview_btn);
         header.pack_end(&find_btn);
@@ -248,9 +250,6 @@ impl Window {
         zoom_box.append(&zoom_btn);
         zoom_box.append(&zoom_step("+", t!("Larger font (Ctrl++)"), "win.zoom-in"));
 
-        // Editor font family (the size is handled by the zoom above).
-        let font_drop = build_font_dropdown(&zoom_btn, &settings.font_family);
-
         let languages = langs::all();
         let mut lang_ids: Vec<Option<String>> = vec![None];
         let mut names: Vec<String> = vec![t!("Plain Text").into()];
@@ -273,7 +272,6 @@ impl Window {
 
         status.append(&status_info);
         status.append(&status_pos);
-        status.append(&font_drop);
         status.append(&zoom_box);
         status.append(&lang_drop);
 
@@ -296,8 +294,27 @@ impl Window {
         stack.add_named(&view, Some("tabs"));
         stack.add_named(&empty, Some("empty"));
 
+        // Vertical tabs: a sidebar next to the tabs (hidden for horizontal tabs).
+        let menu_target: Rc<RefCell<Option<Weak<Window>>>> = Rc::default();
+        let target = menu_target.clone();
+        let tab_list = TabList::new(
+            &view,
+            Box::new(move |page| {
+                if let Some(this) = target.borrow().as_ref().and_then(Weak::upgrade) {
+                    this.set_menu_page(page);
+                }
+            }),
+        );
+        let content = gtk::Paned::new(gtk::Orientation::Horizontal);
+        content.set_start_child(Some(&tab_list.root));
+        content.set_end_child(Some(&stack));
+        content.set_resize_start_child(false);
+        content.set_shrink_start_child(false);
+        content.set_shrink_end_child(false);
+        content.set_position(settings.sidebar_width.max(120));
+
         let toasts = adw::ToastOverlay::new();
-        toasts.set_child(Some(&stack));
+        toasts.set_child(Some(&content));
 
         let toolbar = adw::ToolbarView::new();
         toolbar.add_top_bar(&header);
@@ -313,9 +330,21 @@ impl Window {
             &editor_css,
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
+        let tab_css = gtk::CssProvider::new();
+        gtk::style_context_add_provider_for_display(
+            &gdk::Display::default().expect("no display"),
+            &tab_css,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        let theme_css = gtk::CssProvider::new();
+        gtk::style_context_add_provider_for_display(
+            &gdk::Display::default().expect("no display"),
+            &theme_css,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
 
         let shared = Rc::new(Shared {
-            dark: Cell::new(settings.dark),
+            theme: Cell::new(theme),
             zoom: Cell::new(settings.font_size / BASE_FONT),
             plantuml_command: RefCell::new(settings.plantuml_command.clone()),
         });
@@ -333,11 +362,8 @@ impl Window {
             status_info,
             status_pos,
             zoom_btn,
-            font_drop,
-            font_guard: Cell::new(false),
             lang_drop,
             lang_ids,
-            theme_btn,
             guard: Cell::new(false),
             search,
             closed: RefCell::new(Vec::new()),
@@ -349,16 +375,25 @@ impl Window {
             present_btn,
             presentation: RefCell::new(None),
             tab_bar,
+            tab_list,
+            content,
+            toolbar: toolbar.clone(),
+            tab_css,
+            theme_css,
+            focus_mode: Cell::new(false),
             main_menu,
             menu_context: Cell::new(None),
             tab_styles: RefCell::new(HashMap::new()),
         });
 
+        *menu_target.borrow_mut() = Some(this.weak());
         this.setup_actions(app);
         this.setup_signals(&toolbar);
         this.setup_search();
         this.apply_font();
-        this.apply_theme_ui();
+        this.apply_tab_colors();
+        this.apply_theme_ui(theme);
+        this.sync_layout();
         this
     }
 
@@ -424,8 +459,7 @@ impl Window {
         self.action("present-window", &["<Control><Shift>F5"], |w| w.present(true, presenter::Layout::Window));
         self.action("syntax-help", &["<Shift>F1"], |w| w.show_syntax_help());
         self.action("help", &["F1"], |w| {
-            let (dark, zoom) = (w.settings.borrow().dark, w.shared.zoom.get());
-            crate::help::show(&w.win, dark, zoom);
+            crate::help::show(&w.win, w.shared.theme.get(), w.shared.zoom.get());
         });
         self.action("open", &["<Control>o"], |w| w.open_dialog());
         self.action("save", &["<Control>s"], |w| w.save());
@@ -467,8 +501,17 @@ impl Window {
                 w.view.close_other_pages(&p);
             }
         });
-        self.action("find", &["<Control>f"], |w| w.open_search(false));
-        self.action("replace", &["<Control>h"], |w| w.open_search(true));
+        // Dialogs (e.g. the preferences' search) keep their own Ctrl+F.
+        self.action("find", &["<Control>f"], |w| {
+            if w.win.visible_dialog().is_none() {
+                w.open_search(false);
+            }
+        });
+        self.action("replace", &["<Control>h"], |w| {
+            if w.win.visible_dialog().is_none() {
+                w.open_search(true);
+            }
+        });
         self.action("find-next", &["F3"], |w| w.find_step(true, false));
         self.action("find-prev", &["<Shift>F3"], |w| w.find_step(false, false));
         self.action("zoom-in", &["<Control>plus", "<Control>equal", "<Control>KP_Add"], |w| w.zoom(1.0));
@@ -480,12 +523,7 @@ impl Window {
         });
         self.action("export-html", &["<Control><Shift>e"], |w| w.export(ExportFormat::Html));
         self.action("export-pdf", &["<Control><Shift>p"], |w| w.export(ExportFormat::Pdf));
-        self.action("backup", &[], |w| w.backup());
-        self.action("restore-backup", &[], |w| w.restore_backup());
-        self.action("open-data-dir", &[], |w| {
-            let launcher = gtk::FileLauncher::new(Some(&gio::File::for_path(store::data_dir())));
-            launcher.launch(Some(&w.win), None::<&gio::Cancellable>, |_| {});
-        });
+        self.action("preferences", &["<Control>comma"], |w| w.show_preferences());
         self.action("about", &[], |w| {
             let about = adw::AboutDialog::builder()
                 .application_name("QuickNotes")
@@ -494,6 +532,9 @@ impl Window {
                 .comments(t!("A small tabbed notepad for text and code snippets.\nNotes are stored in ~/.local/share/quicknotes."))
                 .license_type(gtk::License::MitX11)
                 .build();
+            for (_, name, copyright) in themes::SOURCES.iter().filter(|s| !s.2.is_empty()) {
+                about.add_legal_section(name, Some(copyright), gtk::License::MitX11, None);
+            }
             about.present(Some(&w.win));
         });
 
@@ -509,32 +550,7 @@ impl Window {
                 w.mark_dirty(&t.id);
             }
         });
-        let language = gio::SimpleAction::new_stateful(
-            "language",
-            Some(glib::VariantTy::STRING),
-            &self.settings.borrow().language.to_variant(),
-        );
-        let weak = self.weak();
-        language.connect_activate(move |action, param| {
-            let (Some(this), Some(lang)) = (weak.upgrade(), param.and_then(|p| p.str())) else { return };
-            if this.settings.borrow().language == lang {
-                return;
-            }
-            action.set_state(&lang.to_variant());
-            this.settings.borrow_mut().language = lang.to_owned();
-            this.schedule_persist();
-            this.toast(t!("Restart QuickNotes to switch the language"));
-        });
-        self.win.add_action(&language);
-
-        self.toggle_action("dark", &[], |w, on| w.set_dark(on));
-        self.set_toggle("dark", true, self.settings.borrow().dark);
-        self.toggle_action("ligatures", &[], |w, on| {
-            w.settings.borrow_mut().ligatures = on;
-            w.apply_font();
-            w.schedule_persist();
-        });
-        self.set_toggle("ligatures", true, self.settings.borrow().ligatures);
+        self.toggle_action("focus-mode", &["<Alt>Return"], |w, on| w.set_focus_mode(on));
 
         let tool = gio::SimpleAction::new("tool", Some(glib::VariantTy::STRING));
         let weak = self.weak();
@@ -569,33 +585,40 @@ impl Window {
     }
 
     fn setup_signals(self: &Rc<Self>, toolbar: &adw::ToolbarView) {
-        let family = self.settings.borrow().font_family.clone();
-        self.select_font(&family);
+        // Remember the width of the tab sidebar.
         let weak = self.weak();
-        self.font_drop.connect_selected_item_notify(move |drop| {
+        self.content.connect_position_notify(move |paned| {
             let Some(this) = weak.upgrade() else { return };
-            if this.font_guard.get() {
-                return;
-            }
-            let Some(family) = drop.selected_item().and_downcast::<gtk::StringObject>().map(|s| s.string()) else {
-                return;
-            };
-            if this.settings.borrow().font_family == family.as_str() {
-                return;
-            }
-            this.settings.borrow_mut().font_family = family.to_string();
-            this.apply_font();
-            this.schedule_persist();
-            // Back to the text, so typing continues right away.
-            if let Some(t) = this.current_text() {
-                t.view.grab_focus();
+            if this.tab_list.root.is_visible() && paned.width() > 0 {
+                this.settings.borrow_mut().sidebar_width = paned.position();
+                this.schedule_persist();
             }
         });
+
+        // Escape leaves distraction-free mode (capture phase: the editor
+        // consumes Escape otherwise). Dialogs keep their own Escape.
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = self.weak();
+        keys.connect_key_pressed(move |_, key, _, mods| {
+            let Some(this) = weak.upgrade() else { return glib::Propagation::Proceed };
+            if key == gdk::Key::Escape
+                && mods.is_empty()
+                && this.focus_mode.get()
+                && this.win.visible_dialog().is_none()
+            {
+                this.set_focus_mode(false);
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        self.win.add_controller(keys);
 
         let weak = self.weak();
         self.view.connect_selected_page_notify(move |_| {
             if let Some(this) = weak.upgrade() {
                 this.sync_ui();
+                this.tab_list.sync_selection();
                 if let Some(Tab::Text(t)) = this.current() {
                     if !this.search.revealer.reveals_child() {
                         t.view.grab_focus();
@@ -641,18 +664,8 @@ impl Window {
 
         let weak = self.weak();
         self.view.connect_setup_menu(move |_, page| {
-            let Some(this) = weak.upgrade() else { return };
-            match page {
-                Some(p) => *this.menu_page.borrow_mut() = Some(p.clone()),
-                None => {
-                    // Clear after the menu action had a chance to run.
-                    let weak = this.weak();
-                    glib::idle_add_local_once(move || {
-                        if let Some(this) = weak.upgrade() {
-                            this.menu_page.borrow_mut().take();
-                        }
-                    });
-                }
+            if let Some(this) = weak.upgrade() {
+                this.set_menu_page(page);
             }
         });
 
@@ -821,6 +834,22 @@ impl Window {
 
     // ===== tab bookkeeping ================================================
 
+    /// Page a tab context menu is open for (`None` once the menu closed).
+    fn set_menu_page(self: &Rc<Self>, page: Option<&adw::TabPage>) {
+        match page {
+            Some(p) => *self.menu_page.borrow_mut() = Some(p.clone()),
+            None => {
+                // Clear after the menu action had a chance to run.
+                let weak = self.weak();
+                glib::idle_add_local_once(move || {
+                    if let Some(this) = weak.upgrade() {
+                        this.menu_page.borrow_mut().take();
+                    }
+                });
+            }
+        }
+    }
+
     fn menu_page(&self) -> Option<adw::TabPage> {
         self.menu_page.borrow().clone().or_else(|| self.view.selected_page())
     }
@@ -867,7 +896,10 @@ impl Window {
         self.tabs.borrow_mut().insert(id.clone(), Entry { tab: tab.clone(), page: page.clone() });
 
         match &tab {
-            Tab::Text(t) => self.connect_text_tab(t),
+            Tab::Text(t) => {
+                self.connect_text_tab(t);
+                t.set_focus_mode(self.focus_mode.get());
+            }
             Tab::Image(_) => page.set_icon(Some(&gio::ThemedIcon::new("image-x-generic-symbolic"))),
         }
         self.refresh_title(&id);
@@ -1454,11 +1486,10 @@ impl Window {
             (s.width, s.height, s.maximized) = (w, h, m);
         }
         *self.shared.plantuml_command.borrow_mut() = restored.plantuml_command.clone();
-        self.set_dark(restored.dark);
-        self.set_toggle("dark", true, restored.dark);
-        self.set_toggle("ligatures", true, restored.ligatures);
-        self.select_font(&restored.font_family);
+        self.set_theme(&restored.theme);
         self.apply_font();
+        self.apply_tab_colors();
+        self.sync_layout();
 
         let (count, missing) = self.import_tabs(&backup, false);
         if self.view.n_pages() == 0 {
@@ -2051,22 +2082,6 @@ impl Window {
         self.schedule_persist();
     }
 
-    /// Shows `family` as selected in the font selector (without side effects).
-    fn select_font(&self, family: &str) {
-        let Some(model) = self.font_drop.model() else { return };
-        let position = (0..model.n_items()).find(|&i| {
-            model
-                .item(i)
-                .and_downcast::<gtk::StringObject>()
-                .is_some_and(|s| s.string().eq_ignore_ascii_case(family))
-        });
-        if let Some(position) = position {
-            self.font_guard.set(true);
-            self.font_drop.set_selected(position);
-            self.font_guard.set(false);
-        }
-    }
-
     fn apply_font(&self) {
         let s = self.settings.borrow();
         let family = s.font_family.replace(['"', '\\', ';', '}'], "");
@@ -2083,26 +2098,93 @@ impl Window {
         }
     }
 
-    fn set_dark(self: &Rc<Self>, dark: bool) {
-        self.settings.borrow_mut().dark = dark;
-        self.shared.dark.set(dark);
-        adw::StyleManager::default().set_color_scheme(if dark {
+    fn set_theme(self: &Rc<Self>, id: &str) {
+        let theme = {
+            let mut s = self.settings.borrow_mut();
+            let theme = themes::find(id, s.dark);
+            s.theme = theme.id.clone();
+            s.dark = theme.dark;
+            theme
+        };
+        self.shared.theme.set(theme);
+        self.apply_theme_ui(theme);
+        for t in self.text_tabs() {
+            t.apply_theme();
+        }
+        self.schedule_persist();
+    }
+
+    /// Light/dark variant and colour overrides of the window for `theme`.
+    fn apply_theme_ui(&self, theme: &Theme) {
+        adw::StyleManager::default().set_color_scheme(if theme.dark {
             adw::ColorScheme::ForceDark
         } else {
             adw::ColorScheme::ForceLight
         });
-        for t in self.text_tabs() {
-            t.apply_theme();
-        }
-        self.apply_theme_ui();
-        self.schedule_persist();
+        self.theme_css.load_from_string(&theme.ui_css());
     }
 
-    fn apply_theme_ui(&self) {
-        let dark = self.settings.borrow().dark;
-        self.theme_btn.set_icon_name(if dark { "weather-clear-symbolic" } else { "weather-clear-night-symbolic" });
-        self.theme_btn
-            .set_tooltip_text(Some(if dark { t!("Switch to light theme") } else { t!("Switch to dark theme") }));
+    /// Loads the tab colours (defaults or user-defined) into the tab CSS.
+    fn apply_tab_colors(&self) {
+        let settings = self.settings.borrow();
+        let mut css = String::new();
+        for style in TabStyle::COLORED {
+            let class = style.css_class();
+            let color = settings
+                .tab_colors
+                .get(style.key())
+                .filter(|c| gdk::RGBA::parse(c.as_str()).is_ok())
+                .map_or(style.default_color(), String::as_str);
+            css.push_str(&format!(
+                "tabbar tab.{class}, .tab-sidebar row.{class} {{ background-color: alpha({color}, 0.15); }}\n\
+                 tabbar tab.{class}:selected {{ background-color: alpha({color}, 0.33); box-shadow: inset 0 -2px {color}; }}\n\
+                 .tab-sidebar row.{class}:selected {{ background-color: alpha({color}, 0.33); box-shadow: inset 3px 0 {color}; }}\n"
+            ));
+        }
+        self.tab_css.load_from_string(&css);
+    }
+
+    /// Tab bar or sidebar, depending on the settings and distraction-free mode.
+    fn sync_layout(&self) {
+        let vertical = self.settings.borrow().vertical_tabs;
+        let focus = self.focus_mode.get();
+        self.tab_bar.set_visible(!vertical);
+        self.tab_list.root.set_visible(vertical && !focus && self.view.n_pages() > 0);
+        self.toolbar.set_reveal_top_bars(!focus);
+        self.toolbar.set_reveal_bottom_bars(!focus);
+    }
+
+    fn set_focus_mode(self: &Rc<Self>, on: bool) {
+        if self.focus_mode.replace(on) == on {
+            return;
+        }
+        self.set_toggle("focus-mode", true, on);
+        if on {
+            self.close_search();
+            self.win.fullscreen();
+        } else {
+            self.win.unfullscreen();
+        }
+        for t in self.text_tabs() {
+            t.set_focus_mode(on);
+        }
+        self.sync_layout();
+        if on {
+            self.toast(t!("Distraction-free mode – Alt+Enter or Esc to leave"));
+        }
+        if let Some(t) = self.current_text() {
+            t.view.grab_focus();
+        }
+    }
+
+    fn show_preferences(self: &Rc<Self>) {
+        let colors = TabStyle::COLORED
+            .iter()
+            .map(|s| prefs::TabColor { key: s.key(), label: s.label(), default: s.default_color() })
+            .collect();
+        let mut settings = self.settings.borrow().clone();
+        settings.theme = self.shared.theme.get().id.clone();
+        prefs::show(&self.win, &settings, colors, Rc::new(PrefsBridge(self.weak())));
     }
 
     fn toast(&self, text: &str) {
@@ -2116,6 +2198,7 @@ impl Window {
     fn sync_ui(self: &Rc<Self>) {
         let has_tabs = self.view.n_pages() > 0;
         self.stack.set_visible_child_name(if has_tabs { "tabs" } else { "empty" });
+        self.sync_layout();
 
         self.guard.set(true);
         match self.current() {
@@ -2200,12 +2283,11 @@ impl Window {
             let page = widget.property::<Option<adw::TabPage>>("page");
             let style = page
                 .and_then(|p| tabs.values().find(|e| e.page == p).map(|e| TabStyle::of(&e.tab)));
-            for s in TabStyle::ALL {
-                widget.remove_css_class(s.css_class());
-            }
-            if let Some(s) = style {
-                widget.add_css_class(s.css_class());
-            }
+            set_style_class(&widget, style);
+        }
+        for (row, page) in self.tab_list.rows() {
+            let style = tabs.values().find(|e| e.page == page).map(|e| TabStyle::of(&e.tab));
+            set_style_class(row.upcast_ref(), style);
         }
     }
 
@@ -2614,124 +2696,9 @@ fn parse_uri_list(list: &str) -> Vec<PathBuf> {
 
 // ===== construction helpers ==============================================
 
-/// Font families for the editor font selector: the system default
-/// "Monospace", other monospace fonts, then all remaining fonts.
-/// Returns the names and how many belong to the monospace group.
-fn font_families(widget: &impl IsA<gtk::Widget>, current: &str) -> (Vec<String>, usize) {
-    let (mut mono, mut other): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
-    for family in widget.pango_context().list_families() {
-        let name = family.name().to_string();
-        if family.is_monospace() {
-            mono.push(name);
-        } else {
-            other.push(name);
-        }
-    }
-    for list in [&mut mono, &mut other] {
-        list.sort_by_key(|n| n.to_lowercase());
-        list.dedup();
-        list.retain(|n| !n.eq_ignore_ascii_case("Monospace"));
-    }
-    let mut names = vec!["Monospace".to_owned()];
-    names.extend(mono);
-    // A configured font that is not installed (anymore) stays selectable.
-    let known = names.iter().chain(&other).any(|n| n.eq_ignore_ascii_case(current));
-    if !known && !current.is_empty() {
-        names.insert(1, current.to_owned());
-    }
-    let mono_count = names.len();
-    names.extend(other);
-    (names, mono_count)
-}
-
-/// Searchable font selector. Unlike GtkFontDialog (GTK 4.14), it shows the
-/// current font as selected, so Enter keeps it. Each name is rendered in
-/// its own font; monospace fonts come first. Group captions live inside the
-/// rows because GtkDropDown drops list sections when search is enabled.
-fn build_font_dropdown(widget: &impl IsA<gtk::Widget>, current: &str) -> gtk::DropDown {
-    let (names, mono_count) = font_families(widget, current);
-    let captions: Rc<HashMap<String, &'static str>> = Rc::new(
-        [
-            names.first().map(|n| (n.clone(), t!("Monospace fonts"))),
-            names.get(mono_count).map(|n| (n.clone(), t!("Other fonts"))),
-        ]
-        .into_iter()
-        .flatten()
-        .collect(),
-    );
-    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-    let list = gtk::StringList::new(&refs);
-
-    // Rows: optional group caption above the font name.
-    let factory = |in_list: bool| {
-        let f = gtk::SignalListItemFactory::new();
-        f.connect_setup(move |_, item| {
-            let Some(item) = item.downcast_ref::<gtk::ListItem>() else { return };
-            let row = gtk::Box::new(gtk::Orientation::Vertical, 2);
-            let caption = gtk::Label::builder().xalign(0.0).visible(false).build();
-            caption.add_css_class("caption-heading");
-            caption.add_css_class("dim-label");
-            let name = gtk::Label::builder().xalign(0.0).build();
-            if !in_list {
-                name.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                name.set_max_width_chars(16);
-            }
-            row.append(&caption);
-            row.append(&name);
-            item.set_child(Some(&row));
-        });
-        let captions = captions.clone();
-        f.connect_bind(move |_, item| {
-            let Some(item) = item.downcast_ref::<gtk::ListItem>() else { return };
-            let Some(row) = item.child().and_downcast::<gtk::Box>() else { return };
-            let Some(family) = item.item().and_downcast::<gtk::StringObject>().map(|s| s.string()) else {
-                return;
-            };
-            let (Some(caption), Some(name)) = (
-                row.first_child().and_downcast::<gtk::Label>(),
-                row.last_child().and_downcast::<gtk::Label>(),
-            ) else {
-                return;
-            };
-            let group = if in_list { captions.get(family.as_str()).copied() } else { None };
-            caption.set_text(group.unwrap_or_default());
-            caption.set_visible(group.is_some());
-            if group == Some(t!("Other fonts")) {
-                row.add_css_class("font-group-start");
-            } else {
-                row.remove_css_class("font-group-start");
-            }
-            let mut desc = gtk::pango::FontDescription::new();
-            desc.set_family(&family);
-            let attrs = gtk::pango::AttrList::new();
-            attrs.insert(gtk::pango::AttrFontDesc::new(&desc));
-            name.set_attributes(Some(&attrs));
-            name.set_text(&family);
-        });
-        f
-    };
-
-    let drop = gtk::DropDown::new(
-        Some(list),
-        Some(gtk::PropertyExpression::new(
-            gtk::StringObject::static_type(),
-            None::<&gtk::Expression>,
-            "string",
-        )),
-    );
-    drop.set_factory(Some(&factory(false)));
-    drop.set_list_factory(Some(&factory(true)));
-    drop.set_enable_search(true);
-    drop.set_search_match_mode(gtk::StringFilterMatchMode::Substring);
-    drop.set_tooltip_text(Some(t!("Editor font")));
-    drop.add_css_class("flat");
-    enter_picks_first_match(&drop);
-    drop
-}
-
 /// GtkDropDown ignores Enter in its search field. Make Enter pick the first
 /// match of the search, or keep the current item when nothing was typed.
-fn enter_picks_first_match(drop: &gtk::DropDown) {
+pub(crate) fn enter_picks_first_match(drop: &gtk::DropDown) {
     let Some(entry) = descendants(drop).into_iter().find_map(|w| w.downcast::<gtk::SearchEntry>().ok()) else {
         return;
     };
@@ -2856,6 +2823,43 @@ impl TabStyle {
         }
     }
 
+    /// Types with their own colour (plain notes keep the default look).
+    const COLORED: [Self; 5] = [Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Image];
+
+    /// Key in `Settings::tab_colors`.
+    fn key(self) -> &'static str {
+        match self {
+            Self::Note => "note",
+            Self::Code => "code",
+            Self::Document => "document",
+            Self::Slides => "slides",
+            Self::Calc => "calc",
+            Self::Image => "image",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Note => t!("Notes"),
+            Self::Code => t!("Code"),
+            Self::Document => t!("Documents (Markdown, reStructuredText, HTML, PlantUML)"),
+            Self::Slides => t!("Presentations"),
+            Self::Calc => t!("Calculations"),
+            Self::Image => t!("Images"),
+        }
+    }
+
+    fn default_color(self) -> &'static str {
+        match self {
+            Self::Note => "#9a9996",
+            Self::Code => "#2190a4",
+            Self::Document => "#3584e4",
+            Self::Slides => "#9141ac",
+            Self::Calc => "#33d17a",
+            Self::Image => "#ff7800",
+        }
+    }
+
     fn css_class(self) -> &'static str {
         match self {
             Self::Note => "tab-note",
@@ -2873,6 +2877,108 @@ impl TabStyle {
 
     fn exportable(self) -> bool {
         matches!(self, Self::Document | Self::Slides)
+    }
+}
+
+/// Tags a tab widget (tab bar or sidebar row) with the class of its type.
+fn set_style_class(widget: &gtk::Widget, style: Option<TabStyle>) {
+    for s in TabStyle::ALL {
+        if Some(s) != style {
+            widget.remove_css_class(s.css_class());
+        }
+    }
+    if let Some(s) = style {
+        widget.add_css_class(s.css_class());
+    }
+}
+
+/// Applies the changes made in the preferences dialog.
+struct PrefsBridge(Weak<Window>);
+
+impl PrefsBridge {
+    fn with(&self, f: impl FnOnce(&Rc<Window>)) {
+        if let Some(w) = self.0.upgrade() {
+            f(&w);
+        }
+    }
+}
+
+impl prefs::Handler for PrefsBridge {
+    fn set_theme(&self, id: &str) {
+        self.with(|w| w.set_theme(id));
+    }
+
+    fn set_vertical_tabs(&self, vertical: bool) {
+        self.with(|w| {
+            w.settings.borrow_mut().vertical_tabs = vertical;
+            w.sync_layout();
+            w.sync_menus();
+            w.tab_list.sync_selection();
+            w.schedule_persist();
+        });
+    }
+
+    fn set_font_family(&self, family: &str) {
+        self.with(|w| {
+            if w.settings.borrow().font_family == family {
+                return;
+            }
+            w.settings.borrow_mut().font_family = family.to_owned();
+            w.apply_font();
+            w.schedule_persist();
+        });
+    }
+
+    fn set_font_size(&self, size: f64) {
+        self.with(|w| {
+            w.settings.borrow_mut().font_size = size.clamp(MIN_FONT, MAX_FONT);
+            w.apply_font();
+            w.schedule_persist();
+        });
+    }
+
+    fn set_ligatures(&self, on: bool) {
+        self.with(|w| {
+            w.settings.borrow_mut().ligatures = on;
+            w.apply_font();
+            w.schedule_persist();
+        });
+    }
+
+    fn set_language(&self, language: &str) {
+        self.with(|w| {
+            w.settings.borrow_mut().language = language.to_owned();
+            w.schedule_persist();
+        });
+    }
+
+    fn set_tab_color(&self, kind: &str, color: Option<String>) {
+        self.with(|w| {
+            {
+                let mut s = w.settings.borrow_mut();
+                match color {
+                    Some(c) => s.tab_colors.insert(kind.to_owned(), c),
+                    None => s.tab_colors.remove(kind),
+                };
+            }
+            w.apply_tab_colors();
+            w.schedule_persist();
+        });
+    }
+
+    fn backup(&self) {
+        self.with(|w| w.backup());
+    }
+
+    fn restore_backup(&self) {
+        self.with(|w| w.restore_backup());
+    }
+
+    fn open_data_dir(&self) {
+        self.with(|w| {
+            let launcher = gtk::FileLauncher::new(Some(&gio::File::for_path(store::data_dir())));
+            launcher.launch(Some(&w.win), None::<&gio::Cancellable>, |_| {});
+        });
     }
 }
 
@@ -2946,25 +3052,17 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
     if text {
         view.push((t!("Word Wrap"), "win.wrap"));
     }
-    view.push((t!("Font Ligatures"), "win.ligatures"));
+    view.push((t!("Distraction-Free Mode"), "win.focus-mode"));
     menu.append_section(None, &menu_section(&view));
 
     menu.append_section(
         None,
         &menu_section(&[
-            (t!("Back Up Notes…"), "win.backup"),
-            (t!("Restore Backup…"), "win.restore-backup"),
-            (t!("Open Notes Folder"), "win.open-data-dir"),
+            (t!("Preferences"), "win.preferences"),
+            (t!("Help"), "win.help"),
+            (t!("About QuickNotes"), "win.about"),
         ]),
     );
-    let language = gio::Menu::new();
-    language.append(Some(t!("System Default")), Some("win.language::system"));
-    language.append(Some("English"), Some("win.language::en"));
-    language.append(Some("Deutsch"), Some("win.language::de"));
-    let language_section = gio::Menu::new();
-    language_section.append_submenu(Some(t!("Language")), &language);
-    menu.append_section(None, &language_section);
-    menu.append_section(None, &menu_section(&[(t!("Help"), "win.help"), (t!("About QuickNotes"), "win.about")]));
 }
 
 /// Extra entries for an editor's right-click menu.

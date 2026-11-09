@@ -15,11 +15,14 @@ mod langs;
 mod mongo;
 mod markdown;
 mod plantuml;
+mod prefs;
 mod presenter;
 mod rst;
 mod slides;
 mod slides_assist;
 mod store;
+mod tab_list;
+mod themes;
 mod window;
 mod xdnd;
 
@@ -52,18 +55,12 @@ const APP_CSS: &str = r#"
    width, fail to present and leave stale pixels behind. */
 GtkSourceAssistant.completion list { min-width: 240px; min-height: 24px; }
 
-/* Tab colours by type (plain notes keep the default look). */
-@define-color tab_code_color #2190a4;
-tabbar tab.tab-code     { background-color: alpha(@tab_code_color, 0.14); }
-tabbar tab.tab-document { background-color: alpha(@blue_3, 0.16); }
-tabbar tab.tab-slides   { background-color: alpha(@purple_3, 0.16); }
-tabbar tab.tab-calc     { background-color: alpha(@green_3, 0.16); }
-tabbar tab.tab-image    { background-color: alpha(@orange_3, 0.16); }
-tabbar tab.tab-code:selected     { background-color: alpha(@tab_code_color, 0.32); box-shadow: inset 0 -2px @tab_code_color; }
-tabbar tab.tab-document:selected { background-color: alpha(@blue_3, 0.34); box-shadow: inset 0 -2px @blue_3; }
-tabbar tab.tab-slides:selected   { background-color: alpha(@purple_3, 0.34); box-shadow: inset 0 -2px @purple_3; }
-tabbar tab.tab-calc:selected     { background-color: alpha(@green_3, 0.34); box-shadow: inset 0 -2px @green_3; }
-tabbar tab.tab-image:selected    { background-color: alpha(@orange_3, 0.34); box-shadow: inset 0 -2px @orange_3; }
+/* Vertical tabs; their colours (like the tab bar's) are set in window.rs. */
+.tab-sidebar { padding: 6px 4px; }
+.tab-sidebar row { padding: 2px 4px 2px 10px; min-height: 32px; }
+.tab-sidebar row .tab-close { min-width: 24px; min-height: 24px; padding: 0; opacity: 0; }
+.tab-sidebar row:hover .tab-close, .tab-sidebar row:selected .tab-close { opacity: 0.7; }
+.tab-sidebar row .tab-close:hover { opacity: 1; }
 "#;
 
 fn main() -> glib::ExitCode {
@@ -83,6 +80,7 @@ fn main() -> glib::ExitCode {
 
     app.connect_startup(|_| {
         langs::register();
+        themes::register();
         let display = gdk::Display::default().expect("no display");
         icons::register(&display);
         let css = gtk::CssProvider::new();

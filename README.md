@@ -28,17 +28,21 @@ after a restart.
   for PHP variables
 - Find & replace (case, whole word, regex)
 - Drag & drop: files open in new tabs, dropped text (e.g. from a browser) is inserted into the note
-- Dark and light theme
+- 165 colour themes (Dracula, Dayle Rees colour schemes, VSCode Ultimate Themes Pack) besides the
+  default dark and light theme; applied instantly to editor, window and preview
+- Tabs on top or in a sidebar (vertical tabs), with user-defined colours per tab type
+- Distraction-free mode (Alt+Enter): full-screen, centred text without bars or preview
+- Preferences dialog (Ctrl+,) for themes, editor font, language, tabs and import/export
 - Font size via Ctrl+mouse wheel or Ctrl +/−/0 (the preview follows)
 - **Calculation sheets**: variables, operators, functions and live results per line;
   templates like `> N ab° cd.{e*3:3}` fill in calculated values (e.g. Geocaching coordinates)
 - **Geocaching tools** in the editor's context menu: ROT13/5/18/47, Caesar, letter value
   (sums, checksums), letter frequency, Scrabble values, prime alphabet, hex, ASCII, binary,
   Roman numerals, Morse code, phone keypad — results are inserted below the selection
-- User interface in English or German (main menu → *Language*, applies after a restart)
+- User interface in English or German (*Preferences*, applies after a restart)
 - Built-in help (F1) explaining all features, especially calculations and templates
 - Backup of all notes into a single `.tar.gz` and restore (add to or replace the current tabs)
-- Editor font selectable in the status bar (e.g. fonts with ligatures like Fira Code); ligatures can be switched off in the main menu
+- Editor font selectable in the preferences (e.g. fonts with ligatures like Fira Code); ligatures can be switched off
 
 ## Keyboard shortcuts
 
@@ -61,6 +65,8 @@ after a restart.
 | Ctrl+F5 / Shift+F5 | Start presentation from the beginning / from the current slide |
 | Ctrl+Shift+F5 | Present in a window |
 | Alt+Z | Toggle word wrap |
+| Alt+Enter / Esc | Distraction-free mode / leave it |
+| Ctrl+, | Preferences |
 | Ctrl+wheel, Ctrl +/−, Ctrl+0 | Font size |
 | Ctrl+Tab, Ctrl+PgUp/PgDn, Alt+1…9 | Switch tabs |
 | F1 | Help |
@@ -136,11 +142,11 @@ first match wins:
 
 ## Backup and restore
 
-*Main menu → Back Up Notes…* writes one `.tar.gz` with all tabs, note contents
+*Preferences → Import/Export → Back Up Notes…* writes one `.tar.gz` with all tabs, note contents
 (including unsaved changes of opened files) and settings. Opened files themselves
 are not included – their tabs only keep the path.
 
-*Main menu → Restore Backup…* offers two modes:
+*Preferences → Import/Export → Restore Backup…* offers two modes:
 
 - **Add** – puts the backup's tabs next to the current ones; tabs that are already
   open with the same content are skipped.
@@ -177,3 +183,19 @@ toolkits; QuickNotes works around them:
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+## Third-party themes
+
+The bundled colour themes are converted from these MIT-licensed projects:
+
+- [Dracula](https://github.com/dracula/dracula-theme) – Dracula and Alucard
+  (© Dracula Theme)
+- [Colour Schemes](https://github.com/daylerees/colour-schemes) by Dayle Rees – 57 themes
+  (© Dayle Rees)
+- [VSCode Ultimate Themes Pack](https://github.com/CodewithEvilxd/VSCode-Ultimate-Themes-Pack)
+  by codewithevilxd – 106 themes (© codewithevilxd)
+
+Many thanks to their authors. The full license texts are in
+[THIRD_PARTY_THEMES.md](THIRD_PARTY_THEMES.md); the copyright notices are also shown in
+*About QuickNotes → Legal*. The themes are converted with
+`tools/themes/convert.py <folder with the cloned repositories>`.
