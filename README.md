@@ -32,6 +32,8 @@ after a restart.
   default dark and light theme; applied instantly to editor, window and preview
 - Tabs on top or in a sidebar (vertical tabs), with user-defined colours per tab type
 - Distraction-free mode (Alt+Enter): full-screen, centred text without bars or preview
+- **Emmet** abbreviations in HTML, XML, XSLT, CSS, SCSS and Less (Tab or Ctrl+E, tab stops for the
+  fields, wrap with abbreviation via Ctrl+Shift+G), powered by the official Emmet engine
 - Preferences dialog (Ctrl+,) for themes, editor font, language, tabs and import/export
 - Font size via Ctrl+mouse wheel or Ctrl +/−/0 (the preview follows)
 - **Calculation sheets**: variables, operators, functions and live results per line;
@@ -66,6 +68,7 @@ after a restart.
 | Ctrl+Shift+F5 | Present in a window |
 | Alt+Z | Toggle word wrap |
 | Alt+Enter / Esc | Distraction-free mode / leave it |
+| Tab, Ctrl+E / Ctrl+Shift+G | Expand Emmet abbreviation / wrap with abbreviation (HTML, CSS, …) |
 | Ctrl+, | Preferences |
 | Ctrl+wheel, Ctrl +/−, Ctrl+0 | Font size |
 | Ctrl+Tab, Ctrl+PgUp/PgDn, Alt+1…9 | Switch tabs |
@@ -184,7 +187,16 @@ toolkits; QuickNotes works around them:
 
 MIT, see [LICENSE](LICENSE).
 
-## Third-party themes
+## Third-party components
+
+### Emmet
+
+Emmet support uses the official [Emmet](https://github.com/emmetio/emmet) engine (npm package
+`emmet` 2.4.11, © Sergey Chikuyonok, MIT License), bundled in `data/emmet/` and run in
+JavaScriptCore. It is the engine behind [Emmet for Sublime Text](https://github.com/sergeche/emmet-sublime)
+and the other Emmet editor plugins. Thanks to Sergey Chikuyonok and the Emmet contributors.
+
+### Colour themes
 
 The bundled colour themes are converted from these MIT-licensed projects:
 

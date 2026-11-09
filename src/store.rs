@@ -40,6 +40,8 @@ pub struct Settings {
     pub sidebar_width: i32,
     /// User-defined tab colours (`#rrggbb`) per tab type, e.g. `code`.
     pub tab_colors: std::collections::BTreeMap<String, String>,
+    /// Tab expands Emmet abbreviations in HTML, XML and CSS files.
+    pub emmet_tab: bool,
 }
 
 impl Default for Settings {
@@ -60,6 +62,7 @@ impl Default for Settings {
             vertical_tabs: false,
             sidebar_width: 220,
             tab_colors: Default::default(),
+            emmet_tab: true,
         }
     }
 }

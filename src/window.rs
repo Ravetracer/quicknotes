@@ -110,7 +110,7 @@ pub struct Window {
     main_menu: gio::Menu,
     menu_context: Cell<Option<MenuContext>>,
     /// Style each text tab's context menu was last built for.
-    tab_styles: RefCell<HashMap<String, TabStyle>>,
+    tab_styles: RefCell<HashMap<String, (TabStyle, bool)>>,
 }
 
 thread_local! {
@@ -176,7 +176,7 @@ impl Window {
         header.pack_start(&icon_button("document-save-symbolic", t!("Save to file (Ctrl+S)"), "win.save"));
 
         let main_menu = gio::Menu::new();
-        fill_main_menu(&main_menu, MenuContext { style: None, has_file: false });
+        fill_main_menu(&main_menu, MenuContext { style: None, has_file: false, emmet: false });
         let menu_btn = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
             .menu_model(&main_menu)
@@ -345,6 +345,7 @@ impl Window {
 
         let shared = Rc::new(Shared {
             theme: Cell::new(theme),
+            emmet_tab: Cell::new(settings.emmet_tab),
             zoom: Cell::new(settings.font_size / BASE_FONT),
             plantuml_command: RefCell::new(settings.plantuml_command.clone()),
         });
@@ -524,6 +525,14 @@ impl Window {
         self.action("export-html", &["<Control><Shift>e"], |w| w.export(ExportFormat::Html));
         self.action("export-pdf", &["<Control><Shift>p"], |w| w.export(ExportFormat::Pdf));
         self.action("preferences", &["<Control>comma"], |w| w.show_preferences());
+        self.action("emmet-expand", &["<Control>e"], |w| {
+            if let Some(t) = w.current_text() {
+                if !t.emmet_expand(false) {
+                    w.toast(t!("No Emmet abbreviation before the cursor"));
+                }
+            }
+        });
+        self.action("emmet-wrap", &["<Control><Shift>g"], |w| w.emmet_wrap_popover());
         self.action("about", &[], |w| {
             let about = adw::AboutDialog::builder()
                 .application_name("QuickNotes")
@@ -532,6 +541,12 @@ impl Window {
                 .comments(t!("A small tabbed notepad for text and code snippets.\nNotes are stored in ~/.local/share/quicknotes."))
                 .license_type(gtk::License::MitX11)
                 .build();
+            about.add_legal_section(
+                "Emmet",
+                Some("Copyright (c) 2020 Sergey Chikuyonok"),
+                gtk::License::MitX11,
+                None,
+            );
             for (_, name, copyright) in themes::SOURCES.iter().filter(|s| !s.2.is_empty()) {
                 about.add_legal_section(name, Some(copyright), gtk::License::MitX11, None);
             }
@@ -1487,6 +1502,7 @@ impl Window {
         }
         *self.shared.plantuml_command.borrow_mut() = restored.plantuml_command.clone();
         self.set_theme(&restored.theme);
+        self.shared.emmet_tab.set(restored.emmet_tab);
         self.apply_font();
         self.apply_tab_colors();
         self.sync_layout();
@@ -2214,6 +2230,9 @@ impl Window {
                 self.set_enabled("export-pdf", exportable);
                 let slides = t.preview_kind() == Some(PreviewKind::Slides);
                 self.set_presentable(slides);
+                let emmet = t.emmet_syntax();
+                self.set_enabled("emmet-expand", emmet.is_some());
+                self.set_enabled("emmet-wrap", emmet.is_some_and(|s| !s.stylesheet));
             }
             _ => {
                 self.lang_drop.set_visible(false);
@@ -2222,6 +2241,8 @@ impl Window {
                 self.set_enabled("export-html", false);
                 self.set_enabled("export-pdf", false);
                 self.set_enabled("gc", false);
+                self.set_enabled("emmet-expand", false);
+                self.set_enabled("emmet-wrap", false);
                 self.set_presentable(false);
             }
         }
@@ -2250,6 +2271,7 @@ impl Window {
         let context = MenuContext {
             style: current.as_ref().map(TabStyle::of),
             has_file: matches!(&current, Some(Tab::Text(t)) if t.path.borrow().is_some()),
+            emmet: matches!(&current, Some(Tab::Text(t)) if t.emmet_syntax().is_some()),
         };
         if self.menu_context.get() != Some(context) {
             self.menu_context.set(Some(context));
@@ -2261,10 +2283,10 @@ impl Window {
         styles.retain(|id, _| tabs.contains_key(id));
         for (id, entry) in tabs.iter() {
             let Tab::Text(t) = &entry.tab else { continue };
-            let style = TabStyle::of(&entry.tab);
-            if styles.get(id) != Some(&style) {
-                t.view.set_extra_menu(Some(&editor_context_menu(style)));
-                styles.insert(id.clone(), style);
+            let key = (TabStyle::of(&entry.tab), t.emmet_syntax().is_some());
+            if styles.get(id) != Some(&key) {
+                t.view.set_extra_menu(Some(&editor_context_menu(key.0, key.1)));
+                styles.insert(id.clone(), key);
             }
         }
 
@@ -2349,6 +2371,63 @@ impl Window {
             glib::idle_add_local_once(move || p.unparent());
         });
         popover.popup();
+    }
+
+    /// Asks for an abbreviation to wrap the selection (or line) with.
+    fn emmet_wrap_popover(self: &Rc<Self>) {
+        let Some(t) = self.current_text() else { return };
+        if t.emmet_syntax().is_none_or(|s| s.stylesheet) {
+            return;
+        }
+        let entry = gtk::Entry::builder()
+            .placeholder_text(t!("Abbreviation, e.g. ul>li*"))
+            .width_chars(28)
+            .build();
+        let heading = gtk::Label::builder().label(t!("Wrap with Emmet Abbreviation")).xalign(0.0).build();
+        heading.add_css_class("heading");
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        for m in [6, 6] {
+            content.set_margin_top(m);
+            content.set_margin_bottom(m);
+            content.set_margin_start(m);
+            content.set_margin_end(m);
+        }
+        content.append(&heading);
+        content.append(&entry);
+
+        let popover = gtk::Popover::builder().child(&content).position(gtk::PositionType::Bottom).build();
+        popover.set_parent(&t.view);
+        let iter = match t.buffer.selection_bounds() {
+            Some((start, _)) => start,
+            None => t.buffer.iter_at_mark(&t.buffer.get_insert()),
+        };
+        let rect = t.view.iter_location(&iter);
+        let (x, y) = t.view.buffer_to_window_coords(gtk::TextWindowType::Widget, rect.x(), rect.y());
+        popover.set_pointing_to(Some(&gdk::Rectangle::new(x, y, 1, rect.height())));
+        popover.connect_closed(|p| {
+            let p = p.clone();
+            glib::idle_add_local_once(move || p.unparent());
+        });
+
+        let weak = self.weak();
+        let tab = Rc::downgrade(&t);
+        let pop = popover.downgrade();
+        entry.connect_activate(move |entry| {
+            let (Some(this), Some(t)) = (weak.upgrade(), tab.upgrade()) else { return };
+            let abbreviation = entry.text();
+            if abbreviation.trim().is_empty() {
+                return;
+            }
+            if let Some(p) = pop.upgrade() {
+                p.popdown();
+            }
+            if let Err(e) = t.emmet_wrap(abbreviation.trim()) {
+                this.toast(&t!("Emmet: {}", e));
+            }
+            t.view.grab_focus();
+        });
+        popover.popup();
+        entry.grab_focus();
     }
 
     fn set_presentable(&self, on: bool) {
@@ -2937,6 +3016,14 @@ impl prefs::Handler for PrefsBridge {
         });
     }
 
+    fn set_emmet_tab(&self, on: bool) {
+        self.with(|w| {
+            w.settings.borrow_mut().emmet_tab = on;
+            w.shared.emmet_tab.set(on);
+            w.schedule_persist();
+        });
+    }
+
     fn set_ligatures(&self, on: bool) {
         self.with(|w| {
             w.settings.borrow_mut().ligatures = on;
@@ -2987,6 +3074,8 @@ impl prefs::Handler for PrefsBridge {
 struct MenuContext {
     style: Option<TabStyle>,
     has_file: bool,
+    /// Emmet is available for the current tab's language.
+    emmet: bool,
 }
 
 fn menu_section(items: &[(&str, &str)]) -> gio::Menu {
@@ -3047,6 +3136,9 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
     }
     edit.push((t!("Reopen Closed Tab"), "win.reopen-closed"));
     menu.append_section(None, &menu_section(&edit));
+    if context.emmet {
+        menu.append_section(None, &emmet_section());
+    }
 
     let mut view: Vec<(&str, &str)> = Vec::new();
     if text {
@@ -3065,9 +3157,19 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
     );
 }
 
+fn emmet_section() -> gio::Menu {
+    menu_section(&[
+        (t!("Expand Emmet Abbreviation"), "win.emmet-expand"),
+        (t!("Wrap with Emmet Abbreviation…"), "win.emmet-wrap"),
+    ])
+}
+
 /// Extra entries for an editor's right-click menu.
-fn editor_context_menu(style: TabStyle) -> gio::Menu {
+fn editor_context_menu(style: TabStyle, emmet: bool) -> gio::Menu {
     let menu = gio::Menu::new();
+    if emmet {
+        menu.append_section(None, &emmet_section());
+    }
     menu.append_section(None, &quick_tools());
     menu.append_section(None, &tool_submenus());
     if style.exportable() {

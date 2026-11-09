@@ -4,6 +4,7 @@ mod backup;
 mod calc;
 mod completion;
 mod editor;
+mod emmet;
 mod export;
 mod format;
 mod geocaching;
@@ -81,6 +82,9 @@ fn main() -> glib::ExitCode {
     app.connect_startup(|_| {
         langs::register();
         themes::register();
+        // Snippets only come from Emmet: no tab-triggered GtkSourceView snippets
+        // (e.g. "mit" + Tab inserting a license text).
+        sourceview5::SnippetManager::default().set_search_path(&[] as &[&str]);
         let display = gdk::Display::default().expect("no display");
         icons::register(&display);
         let css = gtk::CssProvider::new();

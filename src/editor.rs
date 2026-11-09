@@ -4,7 +4,7 @@
 use crate::store::{TabKind, TabMeta};
 use crate::calc::{self, LineResult};
 use crate::themes::Theme;
-use crate::{html, langs, markdown, plantuml, rst, slides};
+use crate::{emmet, html, langs, markdown, plantuml, rst, slides};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use sourceview5::prelude::*;
@@ -18,6 +18,8 @@ use webkit6::prelude::*;
 /// State shared by all tabs of the window.
 pub struct Shared {
     pub theme: Cell<&'static Theme>,
+    /// Tab expands Emmet abbreviations (in supported languages).
+    pub emmet_tab: Cell<bool>,
     /// Preview zoom factor, follows the editor font size.
     pub zoom: Cell<f64>,
     pub plantuml_command: RefCell<Option<String>>,
@@ -143,6 +145,8 @@ pub struct EditorTab {
     /// the slide shown in the preview.
     slide_lines: RefCell<Vec<(usize, usize)>>,
     shown_slide: Cell<usize>,
+    /// Last inserted Emmet snippet; while it is active, Tab moves between its fields.
+    snippet: RefCell<Option<sourceview5::Snippet>>,
 }
 
 impl EditorTab {
@@ -159,6 +163,9 @@ impl EditorTab {
         view.set_smart_backspace(true);
         view.set_smart_home_end(sourceview5::SmartHomeEndType::Before);
         view.set_monospace(true);
+        // Tab moves between the fields of inserted (Emmet) snippets; GtkSourceView's
+        // own snippet files are not loaded, see `main.rs`.
+        view.set_enable_snippets(true);
         view.set_top_margin(TOP_MARGIN);
         view.set_bottom_margin(120);
         view.set_left_margin(LEFT_MARGIN);
@@ -206,6 +213,7 @@ impl EditorTab {
             calc_timer: RefCell::new(None),
             slide_lines: RefCell::new(Vec::new()),
             shown_slide: Cell::new(0),
+            snippet: RefCell::new(None),
         });
 
         let weak = Rc::downgrade(&tab);
@@ -241,6 +249,27 @@ impl EditorTab {
             });
         }
 
+        // Tab expands Emmet abbreviations before the cursor (HTML, CSS, …).
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(&tab);
+        keys.connect_key_pressed(move |_, key, _, mods| {
+            let modifiers = gdk::ModifierType::CONTROL_MASK
+                | gdk::ModifierType::ALT_MASK
+                | gdk::ModifierType::SHIFT_MASK
+                | gdk::ModifierType::SUPER_MASK;
+            if key != gdk::Key::Tab || mods.intersects(modifiers) {
+                return glib::Propagation::Proceed;
+            }
+            match weak.upgrade() {
+                Some(t) if t.shared.emmet_tab.get() && !t.snippet_active() && t.emmet_expand(true) => {
+                    glib::Propagation::Stop
+                }
+                _ => glib::Propagation::Proceed,
+            }
+        });
+        tab.view.add_controller(keys);
+
         // Distraction-free mode centres the text; follow the visible width.
         let weak = Rc::downgrade(&tab);
         scrolled.hadjustment().connect_page_size_notify(move |_| {
@@ -251,6 +280,115 @@ impl EditorTab {
 
         tab.apply_theme();
         tab
+    }
+
+    // ----- Emmet ---------------------------------------------------------
+
+    /// Emmet syntax of this tab; `None` for languages without Emmet.
+    pub fn emmet_syntax(&self) -> Option<emmet::Syntax> {
+        emmet::syntax_for(self.language_id().as_deref())
+    }
+
+    /// Expands the Emmet abbreviation before the cursor. With `from_tab`,
+    /// plain words that are no abbreviations are left alone.
+    pub fn emmet_expand(&self, from_tab: bool) -> bool {
+        let Some(document) = self.emmet_syntax() else { return false };
+        if self.buffer.has_selection() || self.large.get() {
+            return false;
+        }
+        let cursor = self.buffer.iter_at_mark(&self.buffer.get_insert());
+        let mut line_start = cursor;
+        line_start.set_line_offset(0);
+        let line = self.buffer.text(&line_start, &cursor, false).to_string();
+        // Context (inside <style>, a rule block, …) from the text before the cursor.
+        let mut context_start = cursor;
+        context_start.backward_chars(200_000);
+        let before = self.buffer.text(&context_start, &cursor, false).to_string();
+        let Some(syntax) = emmet::syntax_at(&before, document) else { return false };
+        let Some(found) = emmet::extract(&line, syntax) else { return false };
+        if from_tab && !emmet::tab_expands(&found, syntax, &before) {
+            return false;
+        }
+        // The snippet takes over the line's indentation and tab/space setting.
+        let Ok(text) = emmet::expand(&found.abbreviation, syntax, "\t", "", None) else { return false };
+        let mut start = line_start;
+        start.forward_chars(found.start as i32);
+        self.insert_snippet(&text, start, cursor)
+    }
+
+    /// Wraps the selection (or the current line) with an Emmet abbreviation.
+    pub fn emmet_wrap(&self, abbreviation: &str) -> Result<(), String> {
+        let syntax = self.emmet_syntax().filter(|s| !s.stylesheet).ok_or_else(|| t!("Not available here").to_owned())?;
+        let (start, end) = match self.buffer.selection_bounds() {
+            Some((mut start, end)) => {
+                // A selection starting in the indentation starts at the text, so
+                // the wrapper keeps the indentation of the line.
+                let mut line_start = start;
+                line_start.set_line_offset(0);
+                if self.buffer.text(&line_start, &start, false).trim().is_empty() {
+                    while start < end && !start.ends_line() && start.char().is_whitespace() {
+                        start.forward_char();
+                    }
+                }
+                (start, end)
+            }
+            None => {
+                let mut start = self.buffer.iter_at_mark(&self.buffer.get_insert());
+                start.set_line_offset(0);
+                while !start.ends_line() && start.char().is_whitespace() {
+                    start.forward_char();
+                }
+                let mut end = start;
+                if !end.ends_line() {
+                    end.forward_to_line_end();
+                }
+                (start, end)
+            }
+        };
+        // Indentation before the selection counts as part of the first line, so
+        // the common indentation is the same for all lines.
+        let mut line_start = start;
+        line_start.set_line_offset(0);
+        let prefix = self.buffer.text(&line_start, &start, false).to_string();
+        let prefix = if prefix.trim().is_empty() { prefix } else { String::new() };
+        let text = format!("{prefix}{}", self.buffer.text(&start, &end, false));
+        // Wrapped lines lose their common indentation; Emmet indents them again.
+        let indent = text
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.len() - l.trim_start().len())
+            .min()
+            .unwrap_or(0);
+        let lines: Vec<&str> = text.lines().map(|l| l.get(indent..).unwrap_or(l.trim_start())).collect();
+        let lines: Vec<&str> = if lines.is_empty() { vec![""] } else { lines };
+        let out = emmet::expand(abbreviation, syntax, "\t", "", Some(&lines))?;
+        if self.insert_snippet(&out, start, end) {
+            Ok(())
+        } else {
+            Err(t!("Invalid abbreviation").to_owned())
+        }
+    }
+
+    /// Replaces `start..end` with a GtkSourceView snippet (tab stops active).
+    fn insert_snippet(&self, text: &str, mut start: gtk::TextIter, mut end: gtk::TextIter) -> bool {
+        let Ok(snippet) = sourceview5::Snippet::new_parsed(text) else { return false };
+        self.buffer.begin_user_action();
+        self.buffer.delete(&mut start, &mut end);
+        self.view.push_snippet(&snippet, Some(&mut start));
+        self.buffer.end_user_action();
+        *self.snippet.borrow_mut() = Some(snippet);
+        true
+    }
+
+    /// An inserted snippet still has fields to move to (GtkSourceView
+    /// detaches a snippet from the buffer once it is finished).
+    fn snippet_active(&self) -> bool {
+        let mut slot = self.snippet.borrow_mut();
+        let active = slot.as_ref().is_some_and(|s| s.buffer().is_some() && s.focus_position() >= 0);
+        if !active {
+            slot.take();
+        }
+        active
     }
 
     // ----- distraction-free mode ----------------------------------------

@@ -19,6 +19,7 @@ pub trait Handler {
     fn set_font_family(&self, family: &str);
     fn set_font_size(&self, size: f64);
     fn set_ligatures(&self, on: bool);
+    fn set_emmet_tab(&self, on: bool);
     fn set_language(&self, language: &str);
     /// `None` restores the default colour.
     fn set_tab_color(&self, kind: &str, color: Option<String>);
@@ -91,6 +92,21 @@ fn general_page(parent: &impl IsA<gtk::Widget>, settings: &Settings, handler: &R
     ligatures.connect_active_notify(move |row| h.set_ligatures(row.is_active()));
     font.add(&ligatures);
     page.add(&font);
+
+    // ----- Emmet -----------------------------------------------------------
+    let emmet = adw::PreferencesGroup::builder()
+        .title("Emmet")
+        .description(t!("Abbreviations like ul>li*3 or m10 in HTML, XML, XSLT, CSS, SCSS and Less files."))
+        .build();
+    let tab = adw::SwitchRow::builder()
+        .title(t!("Expand with Tab"))
+        .subtitle(t!("Ctrl+E always expands; Ctrl+Shift+G wraps the selection"))
+        .active(settings.emmet_tab)
+        .build();
+    let h = handler.clone();
+    tab.connect_active_notify(move |row| h.set_emmet_tab(row.is_active()));
+    emmet.add(&tab);
+    page.add(&emmet);
 
     // ----- language ------------------------------------------------------
     let language = adw::PreferencesGroup::builder().title(t!("Language")).build();

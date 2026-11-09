@@ -1,7 +1,8 @@
 # QuickNotes Help {#top}
 
 **Contents:** [Notes & tabs](#notes) · [Calculations](#calc) · [Templates](#templates) ·
-[Previews & export](#previews) · [Presentations](#slides) · [Tools](#tools) · [Geocaching](#geocaching) · [Backup](#backup) ·
+[Previews & export](#previews) · [Presentations](#slides) · [Tools](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
+[Backup](#backup) ·
 [Shortcuts](#shortcuts)
 
 ## Notes & tabs {#notes}
@@ -313,6 +314,30 @@ selection, or on the whole tab when nothing is selected:
 - **Encode / Decode:** Base64, URL, JSON strings
 - **Case:** UPPERCASE, lowercase
 
+## Emmet {#emmet}
+
+In **HTML, XML, XSLT, CSS, SCSS and Less** tabs, [Emmet](https://emmet.io) abbreviations
+expand into code. Type an abbreviation and press **Tab** (or Ctrl+E):
+
+| Abbreviation | Result |
+|---|---|
+| `ul>li.item$*3` | a list with three items `item1` … `item3` |
+| `div#main.box>p{Hello}` | nested elements with id, class and text |
+| `a[href]`, `input:email`, `!` | attributes, typed inputs, an HTML5 document |
+| `m10`, `p10-20`, `df`, `bd+`, `pos:a` | `margin: 10px;`, padding, `display: flex;`, border, position |
+
+- `>` child, `+` sibling, `^` up, `*` repeat, `$` number, `()` group, `{}` text,
+  `\$` a literal dollar sign. Lorem ipsum: `lorem`, `p*3>lorem10`.
+- After an expansion, **Tab** and **Shift+Tab** move between the fields (attribute values,
+  element contents); typing replaces the selected placeholder.
+- Tab only expands real abbreviations: in HTML plain words must be element or snippet names,
+  in CSS the cursor has to be inside a rule block. Inside `<style>` CSS abbreviations apply,
+  inside `<script>` none.
+- **Wrap with abbreviation** (Ctrl+Shift+G) wraps the selection or the current line, e.g.
+  with `ul>li*` (one `li` per line).
+- Expanding with Tab can be switched off in *Preferences → General*; Ctrl+E always works.
+  In other languages (notes, Markdown, code, …) Emmet is not active.
+
 ### MongoDB queries and JSON5
 
 Notes with MongoDB shell code (`db.orders.aggregate([...])`) or JSON5 (unquoted keys, single
@@ -403,6 +428,7 @@ file. *Restore Backup…* either **adds** the tabs of a backup to the current on
 | Ctrl+Shift+F5 | Present in a window |
 | Alt+Z | Toggle word wrap |
 | Alt+Enter, Esc | Distraction-free mode on/off, leave |
+| Tab / Ctrl+E, Ctrl+Shift+G | Expand Emmet abbreviation, wrap with abbreviation (HTML, CSS, …) |
 | Ctrl+, | Preferences |
 | Ctrl+mouse wheel, Ctrl +/−/0 | Font size |
 | Ctrl+Tab, Ctrl+PgUp/PgDn, Alt+1…9 | Switch tabs |

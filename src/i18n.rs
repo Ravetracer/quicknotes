@@ -573,6 +573,17 @@ const DE: &[(&str, &str)] = &[
     ("The theme is applied right away. Search themes by name with Ctrl+F.", "Das Design wird sofort angewendet. Mit Strg+F nach Namen suchen."),
     ("Default Dark", "Standard dunkel"),
     ("Default Light", "Standard hell"),
+    ("Not available here", "Hier nicht verfügbar"),
+    ("Invalid abbreviation", "Ungültige Abkürzung"),
+    ("Expand Emmet Abbreviation", "Emmet-Abkürzung erweitern"),
+    ("Wrap with Emmet Abbreviation…", "Mit Emmet-Abkürzung umschließen…"),
+    ("Wrap with Emmet Abbreviation", "Mit Emmet-Abkürzung umschließen"),
+    ("No Emmet abbreviation before the cursor", "Keine Emmet-Abkürzung vor dem Cursor"),
+    ("Abbreviation, e.g. ul>li*", "Abkürzung, z. B. ul>li*"),
+    ("Emmet: {}", "Emmet: {}"),
+    ("Abbreviations like ul>li*3 or m10 in HTML, XML, XSLT, CSS, SCSS and Less files.", "Abkürzungen wie ul>li*3 oder m10 in HTML-, XML-, XSLT-, CSS-, SCSS- und Less-Dateien."),
+    ("Expand with Tab", "Mit Tab erweitern"),
+    ("Ctrl+E always expands; Ctrl+Shift+G wraps the selection", "Strg+E erweitert immer; Strg+Umschalt+G umschließt die Auswahl"),
 ];
 
 #[cfg(test)]
@@ -599,6 +610,7 @@ mod tests {
             include_str!("presenter.rs"),
             include_str!("prefs.rs"),
             include_str!("themes.rs"),
+            include_str!("emmet.rs"),
         ];
         let mut keys = Vec::new();
         for src in sources {

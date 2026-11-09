@@ -1,7 +1,8 @@
 # QuickNotes-Hilfe {#top}
 
 **Inhalt:** [Notizen & Tabs](#notes) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
-[Vorschau & Export](#previews) · [Präsentationen](#slides) · [Werkzeuge](#tools) · [Geocaching](#geocaching) · [Sicherung](#backup) ·
+[Vorschau & Export](#previews) · [Präsentationen](#slides) · [Werkzeuge](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
+[Sicherung](#backup) ·
 [Tastenkürzel](#shortcuts)
 
 ## Notizen & Tabs {#notes}
@@ -325,6 +326,30 @@ Maustaste) arbeiten auf der Auswahl oder, wenn nichts ausgewählt ist, auf dem g
 - **Kodieren / Dekodieren:** Base64, URL, JSON-Strings
 - **Groß-/Kleinschreibung:** GROSSBUCHSTABEN, kleinbuchstaben
 
+## Emmet {#emmet}
+
+In Tabs mit **HTML, XML, XSLT, CSS, SCSS und Less** werden [Emmet](https://emmet.io)-Abkürzungen
+zu Code erweitert. Abkürzung tippen und **Tab** (oder Strg+E) drücken:
+
+| Abkürzung | Ergebnis |
+|---|---|
+| `ul>li.item$*3` | eine Liste mit drei Einträgen `item1` … `item3` |
+| `div#main.box>p{Hallo}` | verschachtelte Elemente mit ID, Klasse und Text |
+| `a[href]`, `input:email`, `!` | Attribute, Eingabefelder, ein HTML5-Dokument |
+| `m10`, `p10-20`, `df`, `bd+`, `pos:a` | `margin: 10px;`, Padding, `display: flex;`, Rahmen, Position |
+
+- `>` Kind, `+` Geschwister, `^` eine Ebene hoch, `*` Wiederholung, `$` Nummer, `()` Gruppe,
+  `{}` Text, `\$` ein echtes Dollarzeichen. Blindtext: `lorem`, `p*3>lorem10`.
+- Nach dem Erweitern springen **Tab** und **Umschalt+Tab** zwischen den Feldern
+  (Attributwerte, Elementinhalte); Tippen ersetzt den markierten Platzhalter.
+- Tab erweitert nur echte Abkürzungen: in HTML müssen einzelne Wörter Element- oder
+  Snippet-Namen sein, in CSS muss der Cursor in einem Regelblock stehen. In `<style>` gelten
+  CSS-Abkürzungen, in `<script>` keine.
+- **Mit Abkürzung umschließen** (Strg+Umschalt+G) umschließt die Auswahl oder die aktuelle
+  Zeile, z. B. mit `ul>li*` (ein `li` pro Zeile).
+- Das Erweitern mit Tab lässt sich unter *Einstellungen → Allgemein* abschalten; Strg+E
+  funktioniert immer. In anderen Sprachen (Notizen, Markdown, Code, …) ist Emmet nicht aktiv.
+
 ### MongoDB-Abfragen und JSON5
 
 Notizen mit MongoDB-Shell-Code (`db.orders.aggregate([...])`) oder JSON5 (Schlüssel ohne
@@ -420,6 +445,7 @@ automatischen Sicherung abgelegt).
 | Strg+Umschalt+F5 | In einem Fenster präsentieren |
 | Alt+Z | Zeilenumbruch ein/aus |
 | Alt+Enter, Esc | Ablenkungsfreier Modus ein/aus, verlassen |
+| Tab / Strg+E, Strg+Umschalt+G | Emmet-Abkürzung erweitern, mit Abkürzung umschließen (HTML, CSS, …) |
 | Strg+, | Einstellungen |
 | Strg+Mausrad, Strg +/−/0 | Schriftgröße |
 | Strg+Tab, Strg+Bild↑/Bild↓, Alt+1…9 | Tab wechseln |
