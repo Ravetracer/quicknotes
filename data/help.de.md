@@ -1,6 +1,6 @@
 # QuickNotes-Hilfe {#top}
 
-**Inhalt:** [Notizen & Tabs](#notes) · [Checklisten](#checklists) · [Tabellen](#tables) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
+**Inhalt:** [Notizen & Tabs](#notes) · [Checklisten](#checklists) · [Tabellen](#tables) · [Kanban](#kanban) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
 [Vorschau & Export](#previews) · [Präsentationen](#slides) · [Werkzeuge](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Sicherung](#backup) ·
 [Tastenkürzel](#shortcuts)
@@ -79,6 +79,32 @@ formatiert, sodass die Spalten immer bündig sind – auch mit Umlauten und brei
   rechts **ausrichten** (`:--`, `:-:`, `--:`).
 - **Umschalt+Alt+↑/↓** verschieben die Zeile, **Umschalt+Alt+←/→** die Spalte.
 - *Formatieren* (Strg+Alt+B) formatiert in einem Markdown-Dokument alle Tabellen auf einmal.
+
+## Kanban-Boards {#kanban}
+
+*Hauptmenü → Neues Kanban-Board* (Strg+Umschalt+K) legt ein Board mit Spalten an (z. B.
+*Zu erledigen*, *In Arbeit*, *Erledigt*) und optionalen **Swimlanes** (Zeilen quer über alle
+Spalten, z. B. je Projekt oder Person).
+
+- **Karten:** *+ Karte hinzufügen* in einer Zelle; ein Klick auf eine Karte bearbeitet sie – die
+  erste Zeile ist der Titel, weitere Zeilen (Umschalt+Enter) die Beschreibung; Enter speichert,
+  Esc bricht ab. Die Checkbox markiert eine Karte als erledigt, × löscht sie. Karten lassen sich
+  mit der Maus an eine andere Stelle, in eine andere Spalte oder Swimlane ziehen.
+- **Spalten:** *+ Spalte* fügt eine hinzu. Den Spaltenkopf ziehen, um die Reihenfolge zu ändern;
+  das ⋯-Menü benennt sie um (oder Doppelklick auf den Kopf), setzt **Farbe** und **WIP-Limit**
+  (der Zähler wird rot, wenn die Spalte mehr Karten enthält), verschiebt oder löscht sie.
+- **Swimlanes:** *+ Swimlane* fügt eine hinzu (die erste bekommt dann ebenfalls einen Namen).
+  Den Kopf ziehen zum Umsortieren, ▾ klappt sie ein, das ⋯-Menü benennt um, verschiebt, löscht.
+- Klick auf den Board-Titel benennt das Board um. Strg+Z / Strg+Umschalt+Z machen Änderungen am
+  Board rückgängig bzw. wiederholen sie.
+- Die Statusleiste zählt die Karten und die erledigten.
+
+Ein Board wird als lesbares Markdown gespeichert (Swimlanes als `#`-, Spalten als
+`##`-Überschriften, Karten als `- [ ]`-Einträge, Farben und Limits im Front Matter) und bleibt so
+in jedem Editor und auf dem Handy nutzbar. *Vorschau* (Strg+Umschalt+V) zeigt diese Quelle neben
+dem Board; Änderungen daran aktualisieren das Board. Als Datei gespeichert bekommen Boards die
+Endung `.kanban.md`. Die Board-Ansicht schreibt die Quelle in ihrem eigenen Format – freier Text
+zwischen den Karten wird Teil der Karte darüber.
 
 ## Berechnungen {#calc}
 
@@ -475,6 +501,7 @@ automatischen Sicherung abgelegt).
 |---|---|
 | Strg+N / Strg+T | Neue Notiz |
 | Strg+Umschalt+N | Neue Berechnung |
+| Strg+Umschalt+K | Neues Kanban-Board |
 | Strg+O, Strg+S, Strg+Umschalt+S | Öffnen, Speichern, Speichern unter |
 | Strg+W, Strg+Umschalt+T | Tab schließen, geschlossenen Tab wiederherstellen |
 | F2 | Tab umbenennen |

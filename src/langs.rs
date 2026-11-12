@@ -11,6 +11,7 @@ const BUNDLED: &[(&str, &str)] = &[
     ("calc.lang", include_str!("../data/calc.lang")),
     ("slides.lang", include_str!("../data/slides.lang")),
     ("mongodb.lang", include_str!("../data/mongodb.lang")),
+    ("kanban.lang", include_str!("../data/kanban.lang")),
 ];
 
 /// Registers bundled language definitions. Must run before any language is used.
@@ -61,6 +62,9 @@ pub fn guess(path: Option<&Path>, content: &str) -> Option<Language> {
     let lm = LanguageManager::default();
     if let Some(path) = path {
         let name = path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+        if name.ends_with(".kanban.md") {
+            return by_id(crate::kanban::LANGUAGE);
+        }
         if name.ends_with(".slides.md") {
             return by_id(crate::slides::LANGUAGE);
         }
@@ -70,6 +74,9 @@ pub fn guess(path: Option<&Path>, content: &str) -> Option<Language> {
         let head = &content.as_bytes()[..content.len().min(4096)];
         let (content_type, _) = gio::content_type_guess(Some(path), head);
         if let Some(l) = lm.guess_language(Some(path), Some(&content_type)) {
+            if l.id() == "markdown" && crate::kanban::is_board(content) {
+                return by_id(crate::kanban::LANGUAGE);
+            }
             if l.id() == "markdown" && crate::slides::is_presentation(content) {
                 return by_id(crate::slides::LANGUAGE);
             }
@@ -133,6 +140,9 @@ pub fn sniff(content: &str) -> Option<&'static str> {
             return Some("php");
         }
         if first == "---" {
+            if crate::kanban::is_board(t) {
+                return Some(crate::kanban::LANGUAGE);
+            }
             if crate::slides::is_presentation(t) {
                 return Some(crate::slides::LANGUAGE);
             }
@@ -170,6 +180,7 @@ mod tests {
         assert_eq!(sniff("just a note"), None);
         assert_eq!(sniff("---\npresentation: true\n---\n# Hi"), Some("slides"));
         assert_eq!(sniff("---\nkey: value\n"), Some("yaml"));
+        assert_eq!(sniff("---\nkanban: 1\n---\n## To do\n"), Some("kanban"));
     }
 }
 

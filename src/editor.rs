@@ -4,7 +4,7 @@
 use crate::store::{TabKind, TabMeta};
 use crate::calc::{self, LineResult};
 use crate::themes::Theme;
-use crate::{checklist, emmet, html, langs, markdown, plantuml, rst, slides, table};
+use crate::{checklist, emmet, html, kanban, langs, markdown, plantuml, rst, slides, table};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use sourceview5::prelude::*;
@@ -32,6 +32,8 @@ pub enum PreviewKind {
     Rst,
     Html,
     Slides,
+    /// Kanban board: the board replaces the editor (the source can be shown next to it).
+    Kanban,
 }
 
 impl PreviewKind {
@@ -42,6 +44,7 @@ impl PreviewKind {
             Some("rst") => Some(Self::Rst),
             Some("html") => Some(Self::Html),
             Some(slides::LANGUAGE) => Some(Self::Slides),
+            Some(kanban::LANGUAGE) => Some(Self::Kanban),
             _ => None,
         }
     }
@@ -54,7 +57,7 @@ impl PreviewKind {
     /// Shown automatically when such a file is opened (HTML files are often
     /// edited as code, so their preview is opt-in).
     pub fn auto_preview(self) -> bool {
-        self != Self::Html
+        !matches!(self, Self::Html | Self::Kanban)
     }
 
     fn render_delay_ms(self) -> u64 {
@@ -62,6 +65,7 @@ impl PreviewKind {
             Self::PlantUml => 700,
             Self::Html => 400,
             Self::Markdown | Self::Rst | Self::Slides => 250,
+            Self::Kanban => 60,
         }
     }
 }
@@ -83,6 +87,8 @@ enum Shell {
     Doc,
     /// The presentation preview.
     Slides,
+    /// The Kanban board.
+    Kanban,
 }
 
 struct Preview {
@@ -894,6 +900,11 @@ impl EditorTab {
         if let Some(name) = self.path.borrow().as_ref().and_then(|p| p.file_name()) {
             return name.to_string_lossy().into_owned();
         }
+        if self.is_kanban() {
+            if let Some(title) = kanban::title(&self.text()) {
+                return truncate(&title, 32);
+            }
+        }
         let mut iter = self.buffer.start_iter();
         for _ in 0..50 {
             let mut end = iter;
@@ -1124,7 +1135,20 @@ impl EditorTab {
     }
 
     pub fn preview_visible(&self) -> bool {
-        self.preview_on.get() && self.preview_kind().is_some()
+        self.is_kanban() || (self.preview_on.get() && self.preview_kind().is_some())
+    }
+
+    pub fn is_kanban(&self) -> bool {
+        self.preview_kind() == Some(PreviewKind::Kanban)
+    }
+
+    /// State of the *Preview* toggle: for boards it shows the Markdown source.
+    pub fn preview_toggle_state(&self) -> bool {
+        if self.is_kanban() {
+            self.preview_on.get()
+        } else {
+            self.preview_visible()
+        }
     }
 
     pub fn set_preview(self: &Rc<Self>, on: bool) {
@@ -1133,7 +1157,11 @@ impl EditorTab {
     }
 
     fn sync_preview(self: &Rc<Self>) {
-        if self.preview_visible() && !self.focus.get() {
+        let kanban = self.is_kanban();
+        if let Some(source) = self.root.start_child() {
+            source.set_visible(!kanban || (self.preview_on.get() && !self.focus.get()));
+        }
+        if self.preview_visible() && (!self.focus.get() || kanban) {
             let webview = self.ensure_webview();
             if self.root.end_child().as_ref() != Some(webview.upcast_ref()) {
                 self.root.set_end_child(Some(&webview));
@@ -1253,6 +1281,13 @@ impl EditorTab {
                             t.goto_slide(i);
                         }
                     }
+                    Some("kanban") => {
+                        if let Some(board) = msg.get("board") {
+                            t.apply_board(board.clone());
+                        }
+                    }
+                    Some("undo") if t.buffer.can_undo() => t.buffer.undo(),
+                    Some("redo") if t.buffer.can_redo() => t.buffer.redo(),
                     Some("task") => {
                         if let Some(line) = msg.get("line").and_then(|v| v.as_i64()) {
                             t.toggle_task(line as i32);
@@ -1303,7 +1338,7 @@ impl EditorTab {
         match self.preview_kind()? {
             PreviewKind::Markdown => Some(markdown::to_html(&self.text())),
             PreviewKind::Rst => Some(rst::to_html(&self.text(), self.base_dir().as_deref())),
-            PreviewKind::PlantUml | PreviewKind::Html | PreviewKind::Slides => None,
+            PreviewKind::PlantUml | PreviewKind::Html | PreviewKind::Slides | PreviewKind::Kanban => None,
         }
     }
 
@@ -1369,6 +1404,37 @@ impl EditorTab {
         } else {
             *p.pending.borrow_mut() = Some(js);
         }
+    }
+
+    fn render_kanban(&self) {
+        let board = kanban::parse(&self.text());
+        let js = format!("QK.update({})", serde_json::to_string(&board).unwrap_or_default());
+        let preview = self.preview.borrow();
+        let Some(p) = preview.as_ref() else { return };
+        if p.shell.get() != Shell::Kanban {
+            let theme = self.shared.theme.get();
+            self.load_page(p, &kanban::page(theme.dark, &theme.preview_vars()), Shell::Kanban);
+            *p.pending.borrow_mut() = Some(js);
+        } else if p.loaded.get() {
+            p.webview.evaluate_javascript(&js, None, None, None::<&gio::Cancellable>, |_| {});
+        } else {
+            *p.pending.borrow_mut() = Some(js);
+        }
+    }
+
+    /// Writes a board edited in the board view back to the source.
+    fn apply_board(&self, value: serde_json::Value) {
+        let Ok(mut board) = serde_json::from_value::<kanban::Board>(value) else { return };
+        kanban::normalize(&mut board);
+        let text = kanban::to_markdown(&board);
+        if text == self.text() {
+            return;
+        }
+        let (mut start, mut end) = self.buffer.bounds();
+        self.buffer.begin_user_action();
+        self.buffer.delete(&mut start, &mut end);
+        self.buffer.insert(&mut start, &text);
+        self.buffer.end_user_action();
     }
 
     /// WebKitGTK does not paint a web view that was added to an already
@@ -1453,6 +1519,7 @@ impl EditorTab {
             Some(PreviewKind::PlantUml) => self.render_plantuml(),
             Some(PreviewKind::Html) => self.render_html_page(),
             Some(PreviewKind::Slides) => self.render_slides(),
+            Some(PreviewKind::Kanban) => self.render_kanban(),
             None => {}
         }
     }

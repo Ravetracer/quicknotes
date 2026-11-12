@@ -13,6 +13,7 @@ mod help;
 mod html;
 mod icons;
 mod image_tab;
+mod kanban;
 mod langs;
 mod mongo;
 mod markdown;

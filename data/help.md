@@ -1,6 +1,6 @@
 # QuickNotes Help {#top}
 
-**Contents:** [Notes & tabs](#notes) · [Checklists](#checklists) · [Tables](#tables) · [Calculations](#calc) · [Templates](#templates) ·
+**Contents:** [Notes & tabs](#notes) · [Checklists](#checklists) · [Tables](#tables) · [Kanban](#kanban) · [Calculations](#calc) · [Templates](#templates) ·
 [Previews & export](#previews) · [Presentations](#slides) · [Tools](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Backup](#backup) ·
 [Shortcuts](#shortcuts)
@@ -75,6 +75,29 @@ columns always line up – also with umlauts and wide characters.
   alphabetically) and **align** the column left, centred or right (`:--`, `:-:`, `--:`).
 - **Shift+Alt+↑/↓** move the row, **Shift+Alt+←/→** move the column.
 - *Beautify* (Ctrl+Alt+B) in a Markdown document formats all its tables at once.
+
+## Kanban boards {#kanban}
+
+*Main menu → New Kanban Board* (Ctrl+Shift+K) creates a board with columns (e.g. *To do*,
+*Doing*, *Done*) and optional **swimlanes** (rows across all columns, e.g. per project or person).
+
+- **Cards:** *+ Add card* in a cell, click a card to edit it – the first line is the title,
+  further lines (Shift+Enter) the description; Enter saves, Esc cancels. The checkbox marks a
+  card as done, × deletes it. Drag cards with the mouse to another place, column or swimlane.
+- **Columns:** *+ Column* adds one. Drag the column header to reorder; the ⋯ menu renames it
+  (or double-click the header), sets its **colour** and a **WIP limit** (the counter turns red
+  when the column holds more cards), moves or deletes it.
+- **Swimlanes:** *+ Swimlane* adds one (the first lane gets a name, too). Drag the lane header to
+  reorder, ▾ collapses it, the ⋯ menu renames, moves or deletes it.
+- Click the board title to rename it. Ctrl+Z / Ctrl+Shift+Z undo and redo board changes.
+- The status bar counts the cards and the done ones.
+
+A board is stored as readable Markdown (lanes as `#` headings, columns as `##` headings, cards
+as `- [ ]` items, colours and limits in the front matter), so it stays usable in any editor and
+on the phone. *Preview* (Ctrl+Shift+V) shows this source next to the board; changes to it
+update the board. Saved as a file, boards get the extension `.kanban.md`. The board view
+rewrites the source in its own layout – free text between the cards becomes part of the card
+above it.
 
 ## Calculations {#calc}
 
@@ -456,6 +479,7 @@ file. *Restore Backup…* either **adds** the tabs of a backup to the current on
 |---|---|
 | Ctrl+N / Ctrl+T | New note |
 | Ctrl+Shift+N | New calculation |
+| Ctrl+Shift+K | New Kanban board |
 | Ctrl+O, Ctrl+S, Ctrl+Shift+S | Open, save, save as |
 | Ctrl+W, Ctrl+Shift+T | Close tab, reopen closed tab |
 | F2 | Rename tab |

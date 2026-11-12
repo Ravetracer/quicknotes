@@ -30,6 +30,8 @@ after a restart.
   Ctrl+Enter, list continuation on Enter, progress in the status bar
 - **Markdown tables** like Obsidian's *Advanced Tables*: automatic formatting, Tab/Enter
   navigation, insert/delete/move rows and columns, sorting, column alignment
+- **Kanban boards**: freely defined columns (title, colour, WIP limit) and swimlanes, drag & drop
+  of cards, columns and lanes; stored as readable Markdown (`.kanban.md`)
 - Find & replace (case, whole word, regex)
 - Word, character and paragraph count in the status bar (of the selection, if any)
 - Drag & drop: files open in new tabs, dropped text (e.g. from a browser) is inserted into the note
@@ -57,6 +59,7 @@ after a restart.
 |---|---|
 | Ctrl+N / Ctrl+T | New note |
 | Ctrl+Shift+N | New calculation sheet |
+| Ctrl+Shift+K | New Kanban board |
 | Ctrl+O | Open file(s) — or drop files onto the window |
 | Ctrl+S / Ctrl+Shift+S | Save to file / Save as |
 | Ctrl+W | Close tab (notes can be restored via the *Undo* toast) |

@@ -9,7 +9,7 @@ use crate::presenter::{self, Presentation};
 use crate::prefs::{self, MAX_FONT, MIN_FONT};
 use crate::tab_list::TabList;
 use crate::themes::{self, Theme};
-use crate::{checklist, format, html, langs, slides, stats, table, APP_ID};
+use crate::{checklist, format, html, kanban, langs, slides, stats, table, APP_ID};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use sourceview5::prelude::*;
@@ -462,6 +462,7 @@ impl Window {
         });
         self.action("new-calculation", &["<Control><Shift>n"], |w| w.new_calculation());
         self.action("new-presentation", &[], |w| w.new_presentation());
+        self.action("new-kanban", &["<Control><Shift>k"], |w| w.new_kanban());
         self.action("present", &["<Control>F5"], |w| w.present(false, presenter::Layout::Fullscreen));
         self.action("present-current", &["<Shift>F5"], |w| w.present(true, presenter::Layout::Fullscreen));
         self.action("present-window", &["<Control><Shift>F5"], |w| w.present(true, presenter::Layout::Window));
@@ -1085,6 +1086,17 @@ impl Window {
         t.set_language_id(Some(slides::LANGUAGE));
         t.place_cursor(CursorTarget::Start);
         t.set_preview(true);
+        self.mark_dirty(&t.id);
+        self.refresh_title(&t.id);
+        self.sync_ui();
+    }
+
+    fn new_kanban(self: &Rc<Self>) {
+        let t = self.new_note();
+        t.language_locked.set(true);
+        t.set_text_irreversible(&kanban::template());
+        t.set_language_id(Some(kanban::LANGUAGE));
+        t.set_preview(false);
         self.mark_dirty(&t.id);
         self.refresh_title(&t.id);
         self.sync_ui();
@@ -2254,7 +2266,7 @@ impl Window {
                 let idx = self.lang_ids.iter().position(|l| *l == lang).unwrap_or(0);
                 self.lang_drop.set_selected(idx as u32);
                 self.lang_drop.set_visible(true);
-                self.set_toggle("preview", t.preview_kind().is_some(), t.preview_visible());
+                self.set_toggle("preview", t.preview_kind().is_some(), t.preview_toggle_state());
                 self.set_toggle("wrap", true, t.wrap());
                 let exportable = t.preview_kind().is_some_and(PreviewKind::is_document);
                 self.set_enabled("export-html", exportable);
@@ -2509,6 +2521,11 @@ impl Window {
             Some((s, e)) => (true, buf.text(&s, &e, true)),
             None => (false, buf.text(&buf.start_iter(), &buf.end_iter(), true)),
         };
+        if t.is_kanban() && !selected {
+            let (cards, done) = kanban::stats(&kanban::parse(&text));
+            self.status_counts.set_text(&t!("{} cards  ·  {} done", cards, done));
+            return;
+        }
         let c = stats::count(&text);
         let mut label = t!("{} words  ·  {} characters  ·  {} paragraphs", c.words, c.chars, c.paragraphs);
         if selected {
@@ -2957,16 +2974,18 @@ enum TabStyle {
     Document,
     Slides,
     Calc,
+    Kanban,
     Image,
 }
 
 impl TabStyle {
-    const ALL: [Self; 6] = [Self::Note, Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Image];
+    const ALL: [Self; 7] = [Self::Note, Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Kanban, Self::Image];
 
     fn of(tab: &Tab) -> Self {
         let Tab::Text(t) = tab else { return Self::Image };
         match t.preview_kind() {
             Some(PreviewKind::Slides) => Self::Slides,
+            Some(PreviewKind::Kanban) => Self::Kanban,
             Some(kind) if kind.is_document() => Self::Document,
             _ if t.is_calc() => Self::Calc,
             _ if t.language_id().is_none() => Self::Note,
@@ -2975,7 +2994,7 @@ impl TabStyle {
     }
 
     /// Types with their own colour (plain notes keep the default look).
-    const COLORED: [Self; 5] = [Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Image];
+    const COLORED: [Self; 6] = [Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Kanban, Self::Image];
 
     /// Key in `Settings::tab_colors`.
     fn key(self) -> &'static str {
@@ -2985,6 +3004,7 @@ impl TabStyle {
             Self::Document => "document",
             Self::Slides => "slides",
             Self::Calc => "calc",
+            Self::Kanban => "kanban",
             Self::Image => "image",
         }
     }
@@ -2996,6 +3016,7 @@ impl TabStyle {
             Self::Document => t!("Documents (Markdown, reStructuredText, HTML, PlantUML)"),
             Self::Slides => t!("Presentations"),
             Self::Calc => t!("Calculations"),
+            Self::Kanban => t!("Kanban boards"),
             Self::Image => t!("Images"),
         }
     }
@@ -3007,6 +3028,7 @@ impl TabStyle {
             Self::Document => "#3584e4",
             Self::Slides => "#9141ac",
             Self::Calc => "#33d17a",
+            Self::Kanban => "#e5a50a",
             Self::Image => "#ff7800",
         }
     }
@@ -3018,6 +3040,7 @@ impl TabStyle {
             Self::Document => "tab-document",
             Self::Slides => "tab-slides",
             Self::Calc => "tab-calc",
+            Self::Kanban => "tab-kanban",
             Self::Image => "tab-image",
         }
     }
@@ -3180,6 +3203,7 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
         (t!("New Note"), "win.new-note"),
         (t!("New Calculation"), "win.new-calculation"),
         (t!("New Presentation"), "win.new-presentation"),
+        (t!("New Kanban Board"), "win.new-kanban"),
         (t!("Open File…"), "win.open"),
     ];
     if text {

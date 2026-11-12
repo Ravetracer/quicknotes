@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- QuickNotes Kanban boards: Markdown with front matter, lanes as `#`
+     headings, columns as `##` headings and cards as list items
+     (see src/kanban.rs and data/help.md). -->
+<language id="kanban" name="Kanban Board" version="2.0" section="Markup">
+  <metadata>
+    <property name="globs">*.kanban.md</property>
+    <property name="block-comment-start">&lt;!--</property>
+    <property name="block-comment-end">--&gt;</property>
+    <property name="suggested-suffix">.kanban.md</property>
+  </metadata>
+
+  <styles>
+    <style id="front-matter" name="Front matter" map-to="def:comment"/>
+    <style id="key" name="Setting" map-to="def:type"/>
+  </styles>
+
+  <definitions>
+    <context id="front-matter" style-ref="front-matter" first-line-only="true" class="no-spell-check">
+      <start>^---\s*$</start>
+      <end>^(---|\.\.\.)\s*$</end>
+      <include>
+        <context id="key" style-ref="key">
+          <match>^\s*-?\s*[A-Za-z_-]+(?=:)</match>
+        </context>
+      </include>
+    </context>
+
+    <context id="kanban">
+      <include>
+        <context ref="front-matter"/>
+        <context ref="markdown:markdown"/>
+      </include>
+    </context>
+  </definitions>
+</language>
