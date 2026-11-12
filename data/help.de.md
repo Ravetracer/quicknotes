@@ -1,6 +1,6 @@
 # QuickNotes-Hilfe {#top}
 
-**Inhalt:** [Notizen & Tabs](#notes) · [Checklisten](#checklists) · [Tabellen](#tables) · [Kanban](#kanban) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
+**Inhalt:** [Notizen & Tabs](#notes) · [Checklisten](#checklists) · [Tabellen](#tables) · [Formatierung](#formatting) · [Kanban](#kanban) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
 [Vorschau & Export](#previews) · [Präsentationen](#slides) · [Werkzeuge](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Sicherheit](#security) · [Sicherung](#backup) ·
 [Tastenkürzel](#shortcuts)
@@ -55,7 +55,6 @@ Markdown-Format, sodass sie überall lesbar bleiben (GitHub, Obsidian, …):
 - **Strg+Enter** hakt den Eintrag in der Cursorzeile ab (bzw. alle markierten; sind schon alle
   erledigt, werden sie wieder geöffnet). Zeilen, die noch keine Einträge sind, werden zu
   Einträgen – ein paar Zeilen Ideen markieren und Strg+Enter drücken ergibt eine Checkliste.
-  Auch im Kontextmenü.
 - **Enter** am Ende eines Eintrags beginnt den nächsten, offenen Eintrag; Enter in einem leeren
   Eintrag beendet die Liste. Das funktioniert auch für normale Aufzählungen und nummerierte Listen.
 - Die Statusleiste zeigt den Fortschritt, z. B. *✓ 3 von 7 erledigt* (der Auswahl, falls
@@ -73,12 +72,29 @@ formatiert, sodass die Spalten immer bündig sind – auch mit Umlauten und brei
   sodass Tippen ihn ersetzt. Tab in der letzten Zelle einer Zeile fügt eine neue Spalte an.
 - **Enter** springt in derselben Spalte zur nächsten Zeile und fügt am Ende eine Zeile an.
   Enter in einer leeren letzten Zeile entfernt sie und verlässt die Tabelle.
-- Das Kontextmenü (Rechtsklick in eine Zelle) hat ein Untermenü **Tabelle**: formatieren,
+- In einer Tabelle zeigt das Kontextmenü (Rechtsklick in eine Zelle oder Umschalt+F10) nur die
+  Tabellenbefehle: formatieren,
   Zeilen und Spalten einfügen, verschieben und löschen, die Zeilen nach der Spalte
   **sortieren** (Zahlen numerisch, Text alphabetisch) und die Spalte links, zentriert oder
   rechts **ausrichten** (`:--`, `:-:`, `--:`).
 - **Umschalt+Alt+↑/↓** verschieben die Zeile, **Umschalt+Alt+←/→** die Spalte.
 - *Formatieren* (Strg+Alt+B) formatiert in einem Markdown-Dokument alle Tabellen auf einmal.
+
+## Formatierung {#formatting}
+
+Markdown-Dokumente und Präsentationen haben über dem Text eine **Formatierungsleiste**. Sie
+schreibt das Markdown für dich, die Syntax musst du dir nicht merken:
+
+- **Überschriften** 1–6 (und zurück zu normalem Text), **fett** (Strg+B), *kursiv* (Strg+I),
+  ~~durchgestrichen~~ und `Code im Text`. Ohne Auswahl wirken sie auf das Wort am Cursor.
+  Nochmal anwenden entfernt die Formatierung wieder.
+- **Textfarbe**: setzt die Auswahl in `<span style="color: …">`, sichtbar in der Vorschau und
+  im HTML-/PDF-Export. *Farbe entfernen* nimmt sie wieder weg.
+- Aufzählungen, nummerierte Listen, Checklisten und Zitate für die markierten Zeilen (nochmal
+  zum Entfernen), Codeblöcke, Trennlinien und Tabellen.
+- **Link** (Strg+K) und **Bild**: Die Auswahl wird zum Text, eine markierte URL zum Ziel.
+
+*Hauptmenü → Formatierungsleiste* blendet die Leiste aus; die Tastenkürzel funktionieren weiter.
 
 ## Kanban-Boards {#kanban}
 
@@ -560,6 +576,7 @@ vorher in einer automatischen Sicherung abgelegt).
 | Strg+Umschalt+E, Strg+Umschalt+P | Als HTML, PDF exportieren |
 | Strg+F5, Umschalt+F5 | Präsentation von Anfang an, ab aktueller Folie starten |
 | Strg+Umschalt+F5 | In einem Fenster präsentieren |
+| Strg+B, Strg+I, Strg+K | Markdown: fett, kursiv, Link |
 | Strg+Enter | Checklisten-Eintrag abhaken, Zeilen zur Checkliste machen |
 | Tab, Umschalt+Tab, Enter | Tabellen: nächste/vorige Zelle, nächste Zeile |
 | Umschalt+Alt+Pfeiltasten | Tabellen: Zeile bzw. Spalte verschieben |

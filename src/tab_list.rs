@@ -158,7 +158,7 @@ impl TabList {
                     gesture.set_state(gtk::EventSequenceState::Claimed);
                     let Some(model) = view.menu_model() else { return };
                     on_menu(Some(&page));
-                    let popover = gtk::PopoverMenu::from_model(Some(&model));
+                    let popover = gtk::PopoverMenu::from_model_full(&model, gtk::PopoverMenuFlags::NESTED);
                     popover.set_parent(&row);
                     popover.set_has_arrow(false);
                     popover.set_halign(gtk::Align::Start);

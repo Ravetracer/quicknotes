@@ -48,6 +48,8 @@ pub struct Settings {
     pub tab_colors: std::collections::BTreeMap<String, String>,
     /// Tab expands Emmet abbreviations in HTML, XML and CSS files.
     pub emmet_tab: bool,
+    /// Formatting toolbar above Markdown editors.
+    pub format_bar: bool,
 }
 
 impl Default for Settings {
@@ -69,6 +71,7 @@ impl Default for Settings {
             sidebar_width: 220,
             tab_colors: Default::default(),
             emmet_tab: true,
+            format_bar: true,
         }
     }
 }

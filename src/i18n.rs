@@ -171,7 +171,37 @@ const DE: &[(&str, &str)] = &[
     ("{} words  ·  {} characters  ·  {} paragraphs", "{} Wörter  ·  {} Zeichen  ·  {} Absätze"),
     ("Selection: {}", "Auswahl: {}"),
     ("✓ {} of {} done", "✓ {} von {} erledigt"),
-    ("Toggle Checklist Item", "Checklisten-Eintrag umschalten"),
+    ("Heading {}", "Überschrift {}"),
+    ("Normal Text", "Normaler Text"),
+    ("Heading", "Überschrift"),
+    ("Bold (Ctrl+B)", "Fett (Strg+B)"),
+    ("Italic (Ctrl+I)", "Kursiv (Strg+I)"),
+    ("Strikethrough", "Durchgestrichen"),
+    ("Inline Code", "Code im Text"),
+    ("Bulleted List", "Aufzählung"),
+    ("Numbered List", "Nummerierte Liste"),
+    ("Checklist", "Checkliste"),
+    ("Quote", "Zitat"),
+    ("Code Block", "Codeblock"),
+    ("Horizontal Rule", "Trennlinie"),
+    ("Link (Ctrl+K)", "Link (Strg+K)"),
+    ("Remove Colour", "Farbe entfernen"),
+    ("Formatting Toolbar", "Formatierungsleiste"),
+    ("Red", "Rot"),
+    ("Orange", "Orange"),
+    ("Yellow", "Gelb"),
+    ("Green", "Grün"),
+    ("Teal", "Petrol"),
+    ("Blue", "Blau"),
+    ("Purple", "Lila"),
+    ("Pink", "Rosa"),
+    ("Brown", "Braun"),
+    ("Gray", "Grau"),
+    ("Cut", "Ausschneiden"),
+    ("Copy", "Kopieren"),
+    ("Paste", "Einfügen"),
+    ("Select All", "Alles auswählen"),
+    ("Insert Emoji", "Emoji einfügen"),
     ("Tables work in notes, Markdown and presentations", "Tabellen gibt es in Notizen, Markdown und Präsentationen"),
     ("Insert Table", "Tabelle einfügen"),
     ("New Kanban Board", "Neues Kanban-Board"),
@@ -274,7 +304,6 @@ const DE: &[(&str, &str)] = &[
     ("Collapse / expand", "Ein-/ausklappen"),
     ("Add a column to start.", "Füge eine Spalte hinzu, um zu beginnen."),
     ("Column {}", "Spalte {}"),
-    ("Table", "Tabelle"),
     ("Format Table", "Tabelle formatieren"),
     ("Insert Row Above", "Zeile darüber einfügen"),
     ("Insert Row Below", "Zeile darunter einfügen"),
@@ -738,6 +767,7 @@ mod tests {
             include_str!("table.rs"),
             include_str!("kanban.rs"),
             include_str!("crypto.rs"),
+            include_str!("format_bar.rs"),
         ];
         let mut keys = Vec::new();
         for src in sources {
@@ -783,6 +813,13 @@ mod tests {
             for label in labels.into_iter().filter(|l| !l.starts_with("ROT") || l.contains('(')) {
                 assert!(german().contains_key(label), "missing German translation: {label}");
             }
+        }
+    }
+
+    #[test]
+    fn text_colours_are_translated() {
+        for (label, _) in crate::md_format::COLORS {
+            assert!(german().contains_key(label), "missing German translation: {label}");
         }
     }
 

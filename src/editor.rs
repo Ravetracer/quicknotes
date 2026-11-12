@@ -4,7 +4,7 @@
 use crate::store::{TabKind, TabMeta};
 use crate::calc::{self, LineResult};
 use crate::themes::Theme;
-use crate::{checklist, crypto, emmet, html, kanban, langs, markdown, plantuml, rst, slides, table};
+use crate::{checklist, crypto, emmet, format_bar, html, kanban, langs, markdown, md_format, plantuml, rst, slides, table};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use sourceview5::prelude::*;
@@ -24,6 +24,8 @@ pub struct Shared {
     /// Preview zoom factor, follows the editor font size.
     pub zoom: Cell<f64>,
     pub plantuml_command: RefCell<Option<String>>,
+    /// Formatting toolbar above Markdown editors.
+    pub format_bar: Cell<bool>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -148,6 +150,7 @@ pub struct EditorTab {
     /// Switches between the editor (`root`) and the password prompt of a locked tab.
     pub frame: gtk::Stack,
     pub root: gtk::Paned,
+    format_bar: gtk::Box,
     pub view: sourceview5::View,
     pub buffer: sourceview5::Buffer,
     pub path: RefCell<Option<PathBuf>>,
@@ -189,6 +192,9 @@ pub struct EditorTab {
     task_timer: RefCell<Option<glib::SourceId>>,
     task_hover: Cell<bool>,
     completion_open: Cell<bool>,
+    /// Extra right-click menu entries: in general and with the cursor in a table.
+    context_menu: RefCell<Option<gio::MenuModel>>,
+    table_menu: RefCell<Option<gio::MenuModel>>,
 }
 
 impl EditorTab {
@@ -223,8 +229,13 @@ impl EditorTab {
             .vexpand(true)
             .build();
 
+        let format_bar = format_bar::build();
+        let source = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        source.append(&format_bar);
+        source.append(&scrolled);
+
         let root = gtk::Paned::new(gtk::Orientation::Horizontal);
-        root.set_start_child(Some(&scrolled));
+        root.set_start_child(Some(&source));
         root.set_shrink_start_child(false);
         root.set_shrink_end_child(false);
         root.set_widget_name(&id);
@@ -258,6 +269,7 @@ impl EditorTab {
             id,
             frame,
             root,
+            format_bar,
             view,
             buffer,
             path: RefCell::new(None),
@@ -289,6 +301,8 @@ impl EditorTab {
             task_timer: RefCell::new(None),
             task_hover: Cell::new(false),
             completion_open: Cell::new(false),
+            context_menu: RefCell::new(None),
+            table_menu: RefCell::new(None),
         });
         let weak = Rc::downgrade(&tab);
         lock_entry.connect_activate(move |_| {
@@ -408,7 +422,7 @@ impl EditorTab {
         right.set_button(gdk::BUTTON_SECONDARY);
         right.set_propagation_phase(gtk::PropagationPhase::Capture);
         let weak = Rc::downgrade(&tab);
-        right.connect_pressed(move |_, _, x, y| {
+        right.connect_pressed(move |g, _, x, y| {
             let Some(t) = weak.upgrade() else { return };
             let (bx, by) = t.view.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
             // Right of the text: end of that line.
@@ -419,14 +433,29 @@ impl EditorTab {
                 }
                 it
             });
-            if let Some((s, e)) = t.buffer.selection_bounds() {
-                if iter.in_range(&s, &e) {
-                    return;
-                }
+            let in_selection = t.buffer.selection_bounds().is_some_and(|(s, e)| iter.in_range(&s, &e));
+            if !in_selection {
+                t.buffer.place_cursor(&iter);
             }
-            t.buffer.place_cursor(&iter);
+            g.set_state(gtk::EventSequenceState::Claimed);
+            t.popup_context_menu(x as i32, y as i32);
         });
         tab.view.add_controller(right);
+        // Keyboard: the same menu at the cursor.
+        let keys = gtk::ShortcutController::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(&tab);
+        keys.add_shortcut(gtk::Shortcut::new(
+            gtk::ShortcutTrigger::parse_string("<Shift>F10|Menu"),
+            Some(gtk::CallbackAction::new(move |_, _| {
+                let Some(t) = weak.upgrade() else { return glib::Propagation::Proceed };
+                let rect = t.view.iter_location(&t.buffer.iter_at_mark(&t.buffer.get_insert()));
+                let (x, y) = t.view.buffer_to_window_coords(gtk::TextWindowType::Widget, rect.x(), rect.y() + rect.height());
+                t.popup_context_menu(x, y);
+                glib::Propagation::Stop
+            })),
+        ));
+        tab.view.add_controller(keys);
         let motion = gtk::EventControllerMotion::new();
         let weak = Rc::downgrade(&tab);
         motion.connect_motion(move |_, x, y| {
@@ -725,6 +754,101 @@ impl EditorTab {
         let task = checklist::parse(&self.line_text(iter.line())?)?;
         let offset = iter.line_offset() as usize;
         (task.box_start..task.box_start + 3).contains(&offset).then_some(iter.line())
+    }
+
+    // ----- context menu --------------------------------------------------
+
+    /// Sets the extra right-click entries; `table` replaces them while the
+    /// cursor is in a table.
+    pub fn set_context_menus(&self, general: gio::MenuModel, table: Option<gio::MenuModel>) {
+        *self.context_menu.borrow_mut() = Some(general);
+        *self.table_menu.borrow_mut() = table;
+    }
+
+    /// Own right-click menu instead of GtkTextView's, so submenus open beside
+    /// it instead of replacing it.
+    fn popup_context_menu(&self, x: i32, y: i32) {
+        let view = &self.view;
+        let has_selection = self.buffer.has_selection();
+        let editable = view.is_editable();
+        let can_paste = view.clipboard().formats().contains_type(glib::Type::STRING);
+        view.action_set_enabled("clipboard.cut", editable && has_selection);
+        view.action_set_enabled("clipboard.copy", has_selection);
+        view.action_set_enabled("clipboard.paste", editable && can_paste);
+        view.action_set_enabled("selection.delete", editable && has_selection);
+        view.action_set_enabled("selection.select-all", self.buffer.char_count() > 0);
+
+        let menu = gio::Menu::new();
+        let clipboard = gio::Menu::new();
+        clipboard.append(Some(t!("Cut")), Some("clipboard.cut"));
+        clipboard.append(Some(t!("Copy")), Some("clipboard.copy"));
+        clipboard.append(Some(t!("Paste")), Some("clipboard.paste"));
+        clipboard.append(Some(t!("Delete")), Some("selection.delete"));
+        menu.append_section(None, &clipboard);
+        // In a table only the table commands, besides the clipboard.
+        let table = self.table_at_cursor().and_then(|_| self.table_menu.borrow().clone());
+        if let Some(table) = table {
+            menu.append_section(None, &table);
+        } else {
+            let more = gio::Menu::new();
+            more.append(Some(t!("Select All")), Some("selection.select-all"));
+            more.append(Some(t!("Insert Emoji")), Some("misc.insert-emoji"));
+            menu.append_section(None, &more);
+            if let Some(extra) = self.context_menu.borrow().clone() {
+                menu.append_section(None, &extra);
+            }
+        }
+
+        let popover = gtk::PopoverMenu::from_model_full(&menu, gtk::PopoverMenuFlags::NESTED);
+        popover.set_parent(view);
+        popover.set_has_arrow(false);
+        popover.set_halign(gtk::Align::Start);
+        popover.set_position(gtk::PositionType::Bottom);
+        popover.set_pointing_to(Some(&gdk::Rectangle::new(x, y, 1, 1)));
+        popover.connect_closed(|p| {
+            let p = p.clone();
+            glib::idle_add_local_once(move || p.unparent());
+        });
+        popover.popup();
+    }
+
+    // ----- Markdown formatting --------------------------------------------
+
+    /// Applies a formatting command to the selection (or the cursor's word / line).
+    pub fn md_format(&self, op: md_format::Op) {
+        let buf = &self.buffer;
+        let (s, e) = buf.selection_bounds().unwrap_or_else(|| {
+            let it = buf.iter_at_mark(&buf.get_insert());
+            (it, it)
+        });
+        let mut last = e.line();
+        if last > s.line() && e.starts_line() {
+            last -= 1;
+        }
+        let Some(start) = buf.iter_at_line(s.line()) else { return };
+        let Some(mut end) = buf.iter_at_line(last) else { return };
+        if !end.ends_line() {
+            end.forward_to_line_end();
+        }
+        let old = buf.text(&start, &end, true).to_string();
+        let to_byte = |chars: i32| old.char_indices().nth(chars.max(0) as usize).map_or(old.len(), |(i, _)| i);
+        let sel = (to_byte(s.offset() - start.offset()), to_byte(e.offset().min(end.offset()) - start.offset()));
+        let edit = md_format::apply(&old, sel, op);
+
+        let base = start.offset();
+        if edit.text != old {
+            let (mut start, mut end) = (start, end);
+            buf.begin_user_action();
+            buf.delete(&mut start, &mut end);
+            buf.insert(&mut start, &edit.text);
+            buf.end_user_action();
+        }
+        let to_char = |byte: usize| edit.text[..byte].chars().count() as i32;
+        let a = buf.iter_at_offset(base + to_char(edit.sel.0));
+        let b = buf.iter_at_offset(base + to_char(edit.sel.1));
+        buf.select_range(&b, &a);
+        self.view.scroll_mark_onscreen(&buf.get_insert());
+        self.view.grab_focus();
     }
 
     // ----- tables --------------------------------------------------------
@@ -1351,7 +1475,15 @@ impl EditorTab {
         self.sync_preview();
     }
 
+    /// Shows the formatting toolbar for Markdown and presentations (not in
+    /// distraction-free mode).
+    pub fn sync_format_bar(&self) {
+        let markdown = matches!(self.preview_kind(), Some(PreviewKind::Markdown | PreviewKind::Slides));
+        self.format_bar.set_visible(markdown && self.shared.format_bar.get() && !self.focus.get());
+    }
+
     fn sync_preview(self: &Rc<Self>) {
+        self.sync_format_bar();
         let kanban = self.is_kanban();
         if let Some(source) = self.root.start_child() {
             source.set_visible(!kanban || (self.preview_on.get() && !self.focus.get()));

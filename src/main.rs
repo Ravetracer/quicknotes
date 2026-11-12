@@ -9,6 +9,7 @@ mod editor;
 mod emmet;
 mod export;
 mod format;
+mod format_bar;
 mod geocaching;
 mod help;
 mod html;
@@ -18,6 +19,7 @@ mod kanban;
 mod langs;
 mod mongo;
 mod markdown;
+mod md_format;
 mod plantuml;
 mod prefs;
 mod presenter;
@@ -67,6 +69,12 @@ GtkSourceAssistant.completion list { min-width: 240px; min-height: 24px; }
 .tab-sidebar row .tab-close { min-width: 24px; min-height: 24px; padding: 0; opacity: 0; }
 .tab-sidebar row:hover .tab-close, .tab-sidebar row:selected .tab-close { opacity: 0.7; }
 .tab-sidebar row .tab-close:hover { opacity: 1; }
+
+/* Markdown formatting toolbar (swatch colours: format_bar.rs). */
+.format-bar { padding: 3px 6px; border-bottom: 1px solid alpha(currentColor, 0.12); }
+.format-bar > button, .format-bar > menubutton > button { min-height: 28px; min-width: 28px; padding: 0 6px; }
+.format-bar separator { margin: 6px 4px; }
+.color-swatch { min-width: 22px; min-height: 22px; border-radius: 50%; }
 "#;
 
 fn main() -> glib::ExitCode {

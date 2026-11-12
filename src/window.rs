@@ -9,7 +9,7 @@ use crate::presenter::{self, Presentation};
 use crate::prefs::{self, MAX_FONT, MIN_FONT};
 use crate::tab_list::TabList;
 use crate::themes::{self, Theme};
-use crate::{checklist, crypto, format, html, kanban, langs, slides, stats, table, APP_ID};
+use crate::{checklist, crypto, format, format_bar, html, kanban, langs, md_format, slides, stats, table, APP_ID};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use sourceview5::prelude::*;
@@ -318,13 +318,13 @@ impl Window {
         fill_main_menu(&main_menu, MenuContext { style: None, has_file: false, emmet: false, app_password: false, lock: None });
         let menu_btn = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
-            .menu_model(&main_menu)
+            .popover(&nested_menu(&main_menu))
             .primary(true)
             .tooltip_text(t!("Main menu"))
             .build();
         let tools_btn = gtk::MenuButton::builder()
             .icon_name("format-justify-left-symbolic")
-            .menu_model(&tools_menu())
+            .popover(&nested_menu(&tools_menu()))
             .tooltip_text(t!("Format & tools"))
             .build();
         let preview_btn = gtk::ToggleButton::builder()
@@ -342,7 +342,7 @@ impl Window {
             .tooltip_text(t!("Start presentation (Ctrl+F5)"))
             .dropdown_tooltip(t!("Presentation options"))
             .action_name("win.present")
-            .menu_model(&present_menu)
+            .popover(&nested_menu(&present_menu))
             .visible(false)
             .build();
         header.pack_end(&menu_btn);
@@ -490,6 +490,7 @@ impl Window {
             emmet_tab: Cell::new(settings.emmet_tab),
             zoom: Cell::new(settings.font_size / BASE_FONT),
             plantuml_command: RefCell::new(settings.plantuml_command.clone()),
+            format_bar: Cell::new(settings.format_bar),
         });
 
         let this = Rc::new(Self {
@@ -586,6 +587,16 @@ impl Window {
     fn set_enabled(&self, name: &str, enabled: bool) {
         if let Some(a) = self.win.lookup_action(name).and_downcast::<gio::SimpleAction>() {
             a.set_enabled(enabled);
+        }
+    }
+
+    /// Markdown formatting commands (toolbar and shortcuts).
+    fn set_format_enabled(&self, enabled: bool) {
+        for (name, _, _) in FORMAT_ACTIONS {
+            self.set_enabled(name, enabled);
+        }
+        for (label, _) in md_format::COLORS {
+            self.set_enabled(&format_bar::color_action(label), enabled);
         }
     }
 
@@ -756,6 +767,27 @@ impl Window {
             }
         });
         self.toggle_action("focus-mode", &["<Alt>Return"], |w, on| w.set_focus_mode(on));
+        self.toggle_action("format-bar", &[], |w, on| {
+            w.settings.borrow_mut().format_bar = on;
+            w.set_format_bar(on);
+            w.schedule_persist();
+        });
+        let format_bar = self.settings.borrow().format_bar;
+        self.set_toggle("format-bar", true, format_bar);
+        for (name, accels, op) in FORMAT_ACTIONS {
+            self.action(name, accels, move |w| {
+                if let Some(t) = w.current_text() {
+                    t.md_format(*op);
+                }
+            });
+        }
+        for (label, color) in md_format::COLORS {
+            self.action(&format_bar::color_action(label), &[], move |w| {
+                if let Some(t) = w.current_text() {
+                    t.md_format(md_format::Op::Color(Some(color)));
+                }
+            });
+        }
 
         let tool = gio::SimpleAction::new("tool", Some(glib::VariantTy::STRING));
         let weak = self.weak();
@@ -1087,6 +1119,15 @@ impl Window {
         self.view
             .selected_page()
             .is_some_and(|p| p.child().widget_name() == id)
+    }
+
+    /// Shows or hides the formatting toolbar of all Markdown tabs.
+    fn set_format_bar(&self, on: bool) {
+        self.shared.format_bar.set(on);
+        self.set_toggle("format-bar", true, on);
+        for t in self.text_tabs() {
+            t.sync_format_bar();
+        }
     }
 
     fn text_tabs(&self) -> Vec<Rc<EditorTab>> {
@@ -2189,6 +2230,7 @@ impl Window {
         *self.shared.plantuml_command.borrow_mut() = restored.plantuml_command.clone();
         self.set_theme(&restored.theme);
         self.shared.emmet_tab.set(restored.emmet_tab);
+        self.set_format_bar(restored.format_bar);
         self.apply_font();
         self.apply_tab_colors();
         self.sync_layout();
@@ -2918,6 +2960,8 @@ impl Window {
                 self.set_enabled("export-pdf", exportable);
                 let slides = t.preview_kind() == Some(PreviewKind::Slides);
                 self.set_presentable(slides);
+                let markdown = matches!(t.preview_kind(), Some(PreviewKind::Markdown | PreviewKind::Slides));
+                self.set_format_enabled(markdown);
                 let emmet = t.emmet_syntax();
                 self.set_enabled("emmet-expand", emmet.is_some());
                 self.set_enabled("emmet-wrap", emmet.is_some_and(|s| !s.stylesheet));
@@ -2931,6 +2975,7 @@ impl Window {
                 self.set_enabled("gc", false);
                 self.set_enabled("emmet-expand", false);
                 self.set_enabled("emmet-wrap", false);
+                self.set_format_enabled(false);
                 self.set_presentable(false);
             }
         }
@@ -2978,7 +3023,7 @@ impl Window {
             let Tab::Text(t) = &entry.tab else { continue };
             let key = (TabStyle::of(&entry.tab), t.emmet_syntax().is_some());
             if styles.get(id) != Some(&key) {
-                t.view.set_extra_menu(Some(&editor_context_menu(key.0, key.1)));
+                t.set_context_menus(editor_context_menu(key.0, key.1).upcast(), Some(table_menu().upcast()));
                 styles.insert(id.clone(), key);
             }
         }
@@ -3883,6 +3928,11 @@ fn lock_items(all: bool, state: Option<LockState>) -> gio::Menu {
     menu_section(&items)
 }
 
+/// Popover for a menu button whose submenus open beside the menu.
+fn nested_menu(model: &impl IsA<gio::MenuModel>) -> gtk::PopoverMenu {
+    gtk::PopoverMenu::from_model_full(model, gtk::PopoverMenuFlags::NESTED)
+}
+
 fn menu_section(items: &[(&str, &str)]) -> gio::Menu {
     let s = gio::Menu::new();
     for (label, action) in items {
@@ -3956,6 +4006,9 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
     if text {
         view.push((t!("Word Wrap"), "win.wrap"));
     }
+    if matches!(context.style, Some(TabStyle::Document | TabStyle::Slides)) {
+        view.push((t!("Formatting Toolbar"), "win.format-bar"));
+    }
     view.push((t!("Distraction-Free Mode"), "win.focus-mode"));
     menu.append_section(None, &menu_section(&view));
 
@@ -3983,9 +4036,7 @@ fn editor_context_menu(style: TabStyle, emmet: bool) -> gio::Menu {
         menu.append_section(None, &emmet_section());
     }
     if matches!(style, TabStyle::Note | TabStyle::Document | TabStyle::Slides) {
-        let section = menu_section(&[(t!("Toggle Checklist Item"), "win.toggle-task"), (t!("Insert Table"), "win.table-insert")]);
-        section.append_submenu(Some(t!("Table")), &table_menu());
-        menu.append_section(None, &section);
+        menu.append_section(None, &menu_section(&[(t!("Insert Table"), "win.table-insert")]));
     }
     menu.append_section(None, &quick_tools());
     menu.append_section(None, &tool_submenus());
@@ -3998,6 +4049,31 @@ fn editor_context_menu(style: TabStyle, emmet: bool) -> gio::Menu {
     menu.append_section(None, &geocaching_menu());
     menu
 }
+
+/// Markdown formatting commands: action name, accelerators and operation
+/// (text colours are added from [`md_format::COLORS`]).
+const FORMAT_ACTIONS: &[(&str, &[&str], md_format::Op)] = &[
+    ("md-bold", &["<Control>b"], md_format::Op::Bold),
+    ("md-italic", &["<Control>i"], md_format::Op::Italic),
+    ("md-strike", &[], md_format::Op::Strike),
+    ("md-code", &[], md_format::Op::Code),
+    ("md-h1", &[], md_format::Op::Heading(1)),
+    ("md-h2", &[], md_format::Op::Heading(2)),
+    ("md-h3", &[], md_format::Op::Heading(3)),
+    ("md-h4", &[], md_format::Op::Heading(4)),
+    ("md-h5", &[], md_format::Op::Heading(5)),
+    ("md-h6", &[], md_format::Op::Heading(6)),
+    ("md-paragraph", &[], md_format::Op::Heading(0)),
+    ("md-quote", &[], md_format::Op::Quote),
+    ("md-bullet", &[], md_format::Op::Bullet),
+    ("md-numbered", &[], md_format::Op::Numbered),
+    ("md-task", &[], md_format::Op::Task),
+    ("md-code-block", &[], md_format::Op::CodeBlock),
+    ("md-link", &["<Control>k"], md_format::Op::Link),
+    ("md-image", &[], md_format::Op::Image),
+    ("md-rule", &[], md_format::Op::Rule),
+    ("md-color-none", &[], md_format::Op::Color(None)),
+];
 
 /// Table commands: action name, accelerators and operation.
 const TABLE_ACTIONS: &[(&str, &[&str], table::Op)] = &[
@@ -4020,7 +4096,7 @@ const TABLE_ACTIONS: &[(&str, &[&str], table::Op)] = &[
     ("table-align-none", &[], table::Op::Align(table::Align::None)),
 ];
 
-/// "Table" submenu for the editor's context menu.
+/// Table commands for the editor's context menu (cursor in a table).
 fn table_menu() -> gio::Menu {
     let menu = gio::Menu::new();
     menu.append_section(None, &menu_section(&[(t!("Format Table"), "win.table-format")]));

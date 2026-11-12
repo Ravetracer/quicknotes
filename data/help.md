@@ -1,6 +1,6 @@
 # QuickNotes Help {#top}
 
-**Contents:** [Notes & tabs](#notes) · [Checklists](#checklists) · [Tables](#tables) · [Kanban](#kanban) · [Calculations](#calc) · [Templates](#templates) ·
+**Contents:** [Notes & tabs](#notes) · [Checklists](#checklists) · [Tables](#tables) · [Formatting](#formatting) · [Kanban](#kanban) · [Calculations](#calc) · [Templates](#templates) ·
 [Previews & export](#previews) · [Presentations](#slides) · [Tools](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Security](#security) · [Backup](#backup) ·
 [Shortcuts](#shortcuts)
@@ -52,7 +52,7 @@ format, so they stay readable everywhere (GitHub, Obsidian, …):
   uncheck an item. Done items are struck through.
 - **Ctrl+Enter** checks the item on the cursor line (or all selected items; unchecks them when
   all are done). On lines that are no items yet it turns them into items – select a few lines
-  of ideas and press Ctrl+Enter to get a checklist. Also in the context menu.
+  of ideas and press Ctrl+Enter to get a checklist.
 - **Enter** at the end of an item starts the next, unchecked item; Enter on an empty item ends
   the list. This also works for normal bullet and numbered lists.
 - The status bar shows the progress, e.g. *✓ 3 of 7 done* (of the selection, if any).
@@ -70,11 +70,28 @@ columns always line up – also with umlauts and wide characters.
   replaces it. Tab in the last cell of a row adds a new column.
 - **Enter** moves to the same column in the next row and adds a row at the end. Enter in an
   empty last row removes it and leaves the table.
-- The context menu (right click into a cell) has a **Table** submenu: format, insert, move and
-  delete rows and columns, **sort** the rows by the column (numbers numerically, text
-  alphabetically) and **align** the column left, centred or right (`:--`, `:-:`, `--:`).
+- Inside a table the context menu (right click into a cell, or Shift+F10) shows only the table
+  commands: format, insert, move and delete rows and columns, **sort** the rows by the column
+  (numbers numerically, text alphabetically) and **align** the column left, centred or right
+  (`:--`, `:-:`, `--:`).
 - **Shift+Alt+↑/↓** move the row, **Shift+Alt+←/→** move the column.
 - *Beautify* (Ctrl+Alt+B) in a Markdown document formats all its tables at once.
+
+## Formatting {#formatting}
+
+Markdown documents and presentations have a **formatting toolbar** above the text. It writes
+the Markdown for you, so you don't need to remember the syntax:
+
+- **Headings** 1–6 (and back to normal text), **bold** (Ctrl+B), *italic* (Ctrl+I),
+  ~~strikethrough~~ and `inline code`. Without a selection they apply to the word at the
+  cursor. Applying a style again removes it.
+- **Text colour**: wraps the selection in `<span style="color: …">`, shown in the preview and
+  in HTML/PDF exports. *Remove Colour* takes it off again.
+- Bulleted and numbered lists, checklists and quotes for the selected lines (again to remove),
+  code blocks, horizontal rules and tables.
+- **Link** (Ctrl+K) and **image**: the selection becomes the text, a selected URL the target.
+
+*Main menu → Formatting Toolbar* hides the toolbar; the shortcuts keep working.
 
 ## Kanban boards {#kanban}
 
@@ -533,6 +550,7 @@ file. *Restore Backup…* either **adds** the tabs of a backup to the current on
 | Ctrl+Shift+E, Ctrl+Shift+P | Export as HTML, PDF |
 | Ctrl+F5, Shift+F5 | Start presentation from the beginning, from the current slide |
 | Ctrl+Shift+F5 | Present in a window |
+| Ctrl+B, Ctrl+I, Ctrl+K | Markdown: bold, italic, link |
 | Ctrl+Enter | Check/uncheck checklist item, turn lines into a checklist |
 | Tab, Shift+Tab, Enter | Tables: next/previous cell, next row |
 | Shift+Alt+arrow keys | Tables: move row or column |
