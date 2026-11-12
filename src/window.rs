@@ -9,7 +9,7 @@ use crate::presenter::{self, Presentation};
 use crate::prefs::{self, MAX_FONT, MIN_FONT};
 use crate::tab_list::TabList;
 use crate::themes::{self, Theme};
-use crate::{format, html, langs, slides, stats, APP_ID};
+use crate::{checklist, format, html, langs, slides, stats, APP_ID};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use sourceview5::prelude::*;
@@ -237,7 +237,7 @@ impl Window {
             .ellipsize(gtk::pango::EllipsizeMode::Middle)
             .build();
         let status_pos = gtk::Label::new(None);
-        let status_counts = gtk::Label::new(None);
+        let status_counts = gtk::Label::builder().margin_start(12).margin_end(12).build();
         let zoom_btn = gtk::Button::builder()
             .label("12 pt")
             .tooltip_text(t!("Font size – Ctrl+wheel or Ctrl+/−, click to reset"))
@@ -540,6 +540,13 @@ impl Window {
             }
         });
         self.action("emmet-wrap", &["<Control><Shift>g"], |w| w.emmet_wrap_popover());
+        self.action("toggle-task", &["<Control>Return", "<Control>KP_Enter"], |w| {
+            match w.current_text() {
+                Some(t) if t.tasks_enabled() => t.toggle_tasks_in_selection(),
+                Some(_) => w.toast(t!("Checklists work in notes, Markdown and presentations")),
+                None => {}
+            }
+        });
         self.action("about", &[], |w| {
             let about = adw::AboutDialog::builder()
                 .application_name("QuickNotes")
@@ -2493,6 +2500,12 @@ impl Window {
         if selected {
             label = t!("Selection: {}", label);
         }
+        if t.tasks_enabled() {
+            let (done, total) = checklist::progress(&text);
+            if total > 0 {
+                label = format!("{label}  ·  {}", t!("✓ {} of {} done", done, total));
+            }
+        }
         self.status_counts.set_text(&label);
     }
 
@@ -3210,6 +3223,9 @@ fn editor_context_menu(style: TabStyle, emmet: bool) -> gio::Menu {
     let menu = gio::Menu::new();
     if emmet {
         menu.append_section(None, &emmet_section());
+    }
+    if matches!(style, TabStyle::Note | TabStyle::Document | TabStyle::Slides) {
+        menu.append_section(None, &menu_section(&[(t!("Toggle Checklist Item"), "win.toggle-task")]));
     }
     menu.append_section(None, &quick_tools());
     menu.append_section(None, &tool_submenus());

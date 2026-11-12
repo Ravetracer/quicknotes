@@ -1,6 +1,6 @@
 # QuickNotes-Hilfe {#top}
 
-**Inhalt:** [Notizen & Tabs](#notes) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
+**Inhalt:** [Notizen & Tabs](#notes) · [Checklisten](#checklists) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
 [Vorschau & Export](#previews) · [Präsentationen](#slides) · [Werkzeuge](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Sicherung](#backup) ·
 [Tastenkürzel](#shortcuts)
@@ -39,6 +39,27 @@ Tab-Farben fest und bietet Sicherung und Wiederherstellung der Notizen (*Import/
 Dayle-Rees-Farbschemata und dem VSCode Ultimate Themes Pack. Ein Klick wendet ein Design sofort
 auf Editor, Fenster und Vorschau an; Strg+F sucht in den Einstellungen nach Designnamen. Die Schriftgröße lässt sich auch
 mit Strg+Mausrad oder Strg +/−/0 ändern.
+
+## Checklisten {#checklists}
+
+Notizen, Markdown-Dokumente und Präsentationen verstehen Aufgabenlisten im üblichen
+Markdown-Format, sodass sie überall lesbar bleiben (GitHub, Obsidian, …):
+
+```
+- [ ] offener Eintrag
+- [x] erledigter Eintrag
+```
+
+- **Klick auf das Kästchen** `[ ]` im Editor oder auf die Checkbox in der Markdown-Vorschau
+  hakt einen Eintrag ab oder wieder an. Erledigte Einträge werden durchgestrichen.
+- **Strg+Enter** hakt den Eintrag in der Cursorzeile ab (bzw. alle markierten; sind schon alle
+  erledigt, werden sie wieder geöffnet). Zeilen, die noch keine Einträge sind, werden zu
+  Einträgen – ein paar Zeilen Ideen markieren und Strg+Enter drücken ergibt eine Checkliste.
+  Auch im Kontextmenü.
+- **Enter** am Ende eines Eintrags beginnt den nächsten, offenen Eintrag; Enter in einem leeren
+  Eintrag beendet die Liste. Das funktioniert auch für normale Aufzählungen und nummerierte Listen.
+- Die Statusleiste zeigt den Fortschritt, z. B. *✓ 3 von 7 erledigt* (der Auswahl, falls
+  vorhanden). Einträge in Codeblöcken zählen nicht mit.
 
 ## Berechnungen {#calc}
 
@@ -445,6 +466,7 @@ automatischen Sicherung abgelegt).
 | Strg+Umschalt+E, Strg+Umschalt+P | Als HTML, PDF exportieren |
 | Strg+F5, Umschalt+F5 | Präsentation von Anfang an, ab aktueller Folie starten |
 | Strg+Umschalt+F5 | In einem Fenster präsentieren |
+| Strg+Enter | Checklisten-Eintrag abhaken, Zeilen zur Checkliste machen |
 | Alt+Z | Zeilenumbruch ein/aus |
 | Alt+Enter, Esc | Ablenkungsfreier Modus ein/aus, verlassen |
 | Tab / Strg+E, Strg+Umschalt+G | Emmet-Abkürzung erweitern, mit Abkürzung umschließen (HTML, CSS, …) |

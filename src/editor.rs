@@ -4,7 +4,7 @@
 use crate::store::{TabKind, TabMeta};
 use crate::calc::{self, LineResult};
 use crate::themes::Theme;
-use crate::{emmet, html, langs, markdown, plantuml, rst, slides};
+use crate::{checklist, emmet, html, langs, markdown, plantuml, rst, slides};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use sourceview5::prelude::*;
@@ -104,6 +104,8 @@ struct CalcColumn {
 }
 
 const CALC_LANGUAGE: &str = "calc";
+const TASK_DONE_TAG: &str = "qn-task-done";
+const TASK_BOX_TAG: &str = "qn-task-box";
 const CALC_PAD: i32 = 14;
 const TOP_MARGIN: i32 = 6;
 const FOCUS_TOP_MARGIN: i32 = 48;
@@ -147,6 +149,10 @@ pub struct EditorTab {
     shown_slide: Cell<usize>,
     /// Last inserted Emmet snippet; while it is active, Tab moves between its fields.
     snippet: RefCell<Option<sourceview5::Snippet>>,
+    /// Checklists: pending re-scan, pointer over a task box, completion popup shown.
+    task_timer: RefCell<Option<glib::SourceId>>,
+    task_hover: Cell<bool>,
+    completion_open: Cell<bool>,
 }
 
 impl EditorTab {
@@ -214,7 +220,12 @@ impl EditorTab {
             slide_lines: RefCell::new(Vec::new()),
             shown_slide: Cell::new(0),
             snippet: RefCell::new(None),
+            task_timer: RefCell::new(None),
+            task_hover: Cell::new(false),
+            completion_open: Cell::new(false),
         });
+        tab.buffer.create_tag(Some(TASK_DONE_TAG), &[("strikethrough", &true)]);
+        tab.buffer.create_tag(Some(TASK_BOX_TAG), &[("weight", &700)]);
 
         let weak = Rc::downgrade(&tab);
         tab.buffer.connect_changed(move |_| {
@@ -226,6 +237,7 @@ impl EditorTab {
                     if t.is_calc() {
                         t.schedule_calc();
                     }
+                    t.schedule_tasks();
                 }
             }
         });
@@ -258,7 +270,16 @@ impl EditorTab {
                 | gdk::ModifierType::ALT_MASK
                 | gdk::ModifierType::SHIFT_MASK
                 | gdk::ModifierType::SUPER_MASK;
-            if key != gdk::Key::Tab || mods.intersects(modifiers) {
+            if mods.intersects(modifiers) {
+                return glib::Propagation::Proceed;
+            }
+            if matches!(key, gdk::Key::Return | gdk::Key::KP_Enter) {
+                return match weak.upgrade() {
+                    Some(t) if t.continue_list() => glib::Propagation::Stop,
+                    _ => glib::Propagation::Proceed,
+                };
+            }
+            if key != gdk::Key::Tab {
                 return glib::Propagation::Proceed;
             }
             match weak.upgrade() {
@@ -269,6 +290,54 @@ impl EditorTab {
             }
         });
         tab.view.add_controller(keys);
+
+        // Checklists: a click on `[ ]` toggles the task.
+        let click = gtk::GestureClick::new();
+        click.set_button(gdk::BUTTON_PRIMARY);
+        click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(&tab);
+        click.connect_pressed(move |g, n, x, y| {
+            let Some(t) = weak.upgrade() else { return };
+            let mods = g.current_event_state();
+            if n != 1 || mods.intersects(gdk::ModifierType::SHIFT_MASK | gdk::ModifierType::CONTROL_MASK) {
+                return;
+            }
+            if let Some(line) = t.task_box_at(x, y) {
+                g.set_state(gtk::EventSequenceState::Claimed);
+                t.toggle_task(line);
+            }
+        });
+        tab.view.add_controller(click);
+        let motion = gtk::EventControllerMotion::new();
+        let weak = Rc::downgrade(&tab);
+        motion.connect_motion(move |_, x, y| {
+            let Some(t) = weak.upgrade() else { return };
+            let over = t.task_box_at(x, y).is_some();
+            if t.task_hover.replace(over) != over {
+                t.view.set_cursor_from_name(Some(if over { "pointer" } else { "text" }));
+            }
+        });
+        let weak = Rc::downgrade(&tab);
+        motion.connect_leave(move |_| {
+            if let Some(t) = weak.upgrade() {
+                if t.task_hover.replace(false) {
+                    t.view.set_cursor_from_name(Some("text"));
+                }
+            }
+        });
+        tab.view.add_controller(motion);
+        let weak = Rc::downgrade(&tab);
+        completion.connect_show(move |_| {
+            if let Some(t) = weak.upgrade() {
+                t.completion_open.set(true);
+            }
+        });
+        let weak = Rc::downgrade(&tab);
+        completion.connect_hide(move |_| {
+            if let Some(t) = weak.upgrade() {
+                t.completion_open.set(false);
+            }
+        });
 
         // Distraction-free mode centres the text; follow the visible width.
         let weak = Rc::downgrade(&tab);
@@ -391,6 +460,174 @@ impl EditorTab {
         active
     }
 
+    // ----- checklists ----------------------------------------------------
+
+    /// Task items are recognised in plain notes, Markdown and presentations.
+    pub fn tasks_enabled(&self) -> bool {
+        !self.large.get() && matches!(self.language_id().as_deref(), None | Some("markdown") | Some(slides::LANGUAGE))
+    }
+
+    fn line_text(&self, line: i32) -> Option<String> {
+        let start = self.buffer.iter_at_line(line)?;
+        let mut end = start;
+        if !end.ends_line() {
+            end.forward_to_line_end();
+        }
+        Some(self.buffer.text(&start, &end, false).into())
+    }
+
+    /// Line whose task box is under the widget position `x`, `y`.
+    fn task_box_at(&self, x: f64, y: f64) -> Option<i32> {
+        if !self.tasks_enabled() {
+            return None;
+        }
+        let (bx, by) = self.view.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
+        let iter = self.view.iter_at_location(bx, by)?;
+        let task = checklist::parse(&self.line_text(iter.line())?)?;
+        let offset = iter.line_offset() as usize;
+        (task.box_start..task.box_start + 3).contains(&offset).then_some(iter.line())
+    }
+
+    /// Toggles the task on `line` (also used by clicks in the preview).
+    pub fn toggle_task(&self, line: i32) {
+        let Some(text) = self.line_text(line) else { return };
+        let Some(new) = checklist::toggle(&text) else { return };
+        self.replace_line(line, &text, &new);
+    }
+
+    /// Replaces a line, touching only the part that differs so the cursor,
+    /// selection and undo history stay as precise as possible.
+    fn replace_line(&self, line: i32, old: &str, new: &str) {
+        if old == new {
+            return;
+        }
+        let (old_c, new_c): (Vec<char>, Vec<char>) = (old.chars().collect(), new.chars().collect());
+        let prefix = old_c.iter().zip(&new_c).take_while(|(a, b)| a == b).count();
+        let max_suffix = old_c.len().min(new_c.len()) - prefix;
+        let suffix = old_c.iter().rev().zip(new_c.iter().rev()).take(max_suffix).take_while(|(a, b)| a == b).count();
+        let Some(mut start) = self.buffer.iter_at_line_offset(line, prefix as i32) else { return };
+        let Some(mut end) = self.buffer.iter_at_line_offset(line, (old_c.len() - suffix) as i32) else { return };
+        let insert: String = new_c[prefix..new_c.len() - suffix].iter().collect();
+        self.buffer.begin_user_action();
+        self.buffer.delete(&mut start, &mut end);
+        self.buffer.insert(&mut start, &insert);
+        self.buffer.end_user_action();
+    }
+
+    /// Ctrl+Enter: checks/unchecks the tasks on the selected lines (or the
+    /// cursor line), or turns them into tasks.
+    pub fn toggle_tasks_in_selection(&self) {
+        let (start, end) = match self.buffer.selection_bounds() {
+            Some((s, mut e)) => {
+                // A selection ending at the start of a line does not include it.
+                if e.line() > s.line() && e.starts_line() {
+                    e.backward_char();
+                }
+                (s.line(), e.line())
+            }
+            None => {
+                let line = self.buffer.iter_at_mark(&self.buffer.get_insert()).line();
+                (line, line)
+            }
+        };
+        let old: Vec<String> = (start..=end).filter_map(|l| self.line_text(l)).collect();
+        let refs: Vec<&str> = old.iter().map(String::as_str).collect();
+        let new = checklist::toggle_lines(&refs);
+        self.buffer.begin_user_action();
+        for (i, (o, n)) in old.iter().zip(&new).enumerate() {
+            self.replace_line(start + i as i32, o, n);
+        }
+        self.buffer.end_user_action();
+    }
+
+    /// Enter in a list item starts the next item (an unchecked task after a
+    /// task); Enter in an empty item ends the list.
+    fn continue_list(&self) -> bool {
+        if !self.tasks_enabled() || self.buffer.has_selection() || self.completion_open.get() || self.snippet_active() {
+            return false;
+        }
+        let cursor = self.buffer.iter_at_mark(&self.buffer.get_insert());
+        let mut line_start = cursor;
+        line_start.set_line_offset(0);
+        let before = self.buffer.text(&line_start, &cursor, false).to_string();
+        let Some(next) = checklist::continuation(&before) else { return false };
+        let mut line_end = cursor;
+        if !line_end.ends_line() {
+            line_end.forward_to_line_end();
+        }
+        let after = self.buffer.text(&cursor, &line_end, false);
+        self.buffer.begin_user_action();
+        match next {
+            checklist::Continue::Item(prefix) => {
+                let mut at = cursor;
+                self.buffer.insert(&mut at, &format!("\n{prefix}"));
+            }
+            checklist::Continue::End if after.trim().is_empty() => {
+                let (mut s, mut e) = (line_start, line_end);
+                self.buffer.delete(&mut s, &mut e);
+            }
+            checklist::Continue::End => {
+                self.buffer.end_user_action();
+                return false;
+            }
+        }
+        self.buffer.end_user_action();
+        self.view.scroll_mark_onscreen(&self.buffer.get_insert());
+        true
+    }
+
+    fn schedule_tasks(self: &Rc<Self>) {
+        if let Some(id) = self.task_timer.borrow_mut().take() {
+            id.remove();
+        }
+        let weak = Rc::downgrade(self);
+        let id = glib::timeout_add_local_once(Duration::from_millis(120), move || {
+            if let Some(t) = weak.upgrade() {
+                t.task_timer.borrow_mut().take();
+                t.update_tasks();
+            }
+        });
+        *self.task_timer.borrow_mut() = Some(id);
+    }
+
+    /// Strikes through done tasks and emphasises the boxes.
+    fn update_tasks(&self) {
+        let (start, end) = self.buffer.bounds();
+        self.buffer.remove_tag_by_name(TASK_DONE_TAG, &start, &end);
+        self.buffer.remove_tag_by_name(TASK_BOX_TAG, &start, &end);
+        if !self.tasks_enabled() {
+            return;
+        }
+        let text = self.text();
+        for (line, content) in text.lines().enumerate() {
+            let Some(task) = checklist::parse(content) else { continue };
+            let line = line as i32;
+            let at = |offset: usize| self.buffer.iter_at_line_offset(line, offset as i32);
+            if let (Some(s), Some(e)) = (at(task.box_start), at(task.box_start + 3)) {
+                self.buffer.apply_tag_by_name(TASK_BOX_TAG, &s, &e);
+            }
+            if task.checked {
+                if let (Some(s), Some(mut e)) = (at(task.text_start), at(task.text_start)) {
+                    if !e.ends_line() {
+                        e.forward_to_line_end();
+                    }
+                    self.buffer.apply_tag_by_name(TASK_DONE_TAG, &s, &e);
+                }
+            }
+        }
+    }
+
+    /// Done tasks are dimmed with the theme's text colour.
+    fn apply_task_style(&self) {
+        let theme = self.shared.theme.get();
+        let fg = theme.editor.as_ref().map(|e| e.fg.as_str()).unwrap_or(if theme.dark { "#ffffff" } else { "#000000" });
+        let mut rgba = gdk::RGBA::parse(fg).unwrap_or(gdk::RGBA::BLACK);
+        rgba.set_alpha(0.45);
+        if let Some(tag) = self.buffer.tag_table().lookup(TASK_DONE_TAG) {
+            tag.set_foreground_rgba(Some(&rgba));
+        }
+    }
+
     // ----- distraction-free mode ----------------------------------------
 
     pub fn set_focus_mode(self: &Rc<Self>, on: bool) {
@@ -436,6 +673,7 @@ impl EditorTab {
         self.buffer.end_irreversible_action();
         self.loading.set(was_loading);
         self.recalc();
+        self.update_tasks();
     }
 
     pub fn is_empty(&self) -> bool {
@@ -510,6 +748,7 @@ impl EditorTab {
         self.place_cursor(cursor);
         self.schedule_render(0);
         self.recalc();
+        self.update_tasks();
         Ok(())
     }
 
@@ -578,6 +817,7 @@ impl EditorTab {
         self.buffer.set_language(lang);
         self.sync_preview();
         self.sync_calc();
+        self.update_tasks();
     }
 
     // ----- calculations --------------------------------------------------
@@ -703,6 +943,7 @@ impl EditorTab {
             .or_else(|| sm.scheme(fallback[0]))
             .or_else(|| sm.scheme(fallback[1]));
         self.buffer.set_style_scheme(scheme.as_ref());
+        self.apply_task_style();
         if let Some(p) = self.preview.borrow().as_ref() {
             if p.shell.get() != Shell::None {
                 p.webview.set_background_color(&preview_bg(theme));
@@ -880,10 +1121,18 @@ impl EditorTab {
             ucm.connect_script_message_received(Some("qn"), move |_, value| {
                 let Some(t) = weak.upgrade() else { return };
                 let Ok(msg) = serde_json::from_str::<serde_json::Value>(&value.to_str()) else { return };
-                if msg.get("type").and_then(|v| v.as_str()) == Some("goto") {
-                    if let Some(i) = msg.get("slide").and_then(|v| v.as_i64()) {
-                        t.goto_slide(i);
+                match msg.get("type").and_then(|v| v.as_str()) {
+                    Some("goto") => {
+                        if let Some(i) = msg.get("slide").and_then(|v| v.as_i64()) {
+                            t.goto_slide(i);
+                        }
                     }
+                    Some("task") => {
+                        if let Some(line) = msg.get("line").and_then(|v| v.as_i64()) {
+                            t.toggle_task(line as i32);
+                        }
+                    }
+                    _ => {}
                 }
             });
         }
@@ -1073,7 +1322,7 @@ impl EditorTab {
 
     fn render(self: &Rc<Self>) {
         match self.preview_kind() {
-            Some(PreviewKind::Markdown) => self.set_preview_html(&markdown::to_html(&self.text())),
+            Some(PreviewKind::Markdown) => self.set_preview_html(&markdown::to_html_interactive(&self.text())),
             Some(PreviewKind::Rst) => self.set_preview_html(&rst::to_html(&self.text(), self.base_dir().as_deref())),
             Some(PreviewKind::PlantUml) => self.render_plantuml(),
             Some(PreviewKind::Html) => self.render_html_page(),

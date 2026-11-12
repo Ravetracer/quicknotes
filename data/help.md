@@ -1,6 +1,6 @@
 # QuickNotes Help {#top}
 
-**Contents:** [Notes & tabs](#notes) · [Calculations](#calc) · [Templates](#templates) ·
+**Contents:** [Notes & tabs](#notes) · [Checklists](#checklists) · [Calculations](#calc) · [Templates](#templates) ·
 [Previews & export](#previews) · [Presentations](#slides) · [Tools](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Backup](#backup) ·
 [Shortcuts](#shortcuts)
@@ -37,6 +37,26 @@ colours, and offers backup and restore of the notes (*Import/Export*).
 colour schemes and the VSCode Ultimate Themes Pack. A click applies a theme right away to the
 editor, the window and the preview; Ctrl+F in the preferences searches themes by name. The font size can also be changed with
 Ctrl+mouse wheel or Ctrl +/−/0.
+
+## Checklists {#checklists}
+
+Notes, Markdown documents and presentations understand task lists in the common Markdown
+format, so they stay readable everywhere (GitHub, Obsidian, …):
+
+```
+- [ ] open item
+- [x] done item
+```
+
+- **Click the box** `[ ]` in the editor or the checkbox in the Markdown preview to check or
+  uncheck an item. Done items are struck through.
+- **Ctrl+Enter** checks the item on the cursor line (or all selected items; unchecks them when
+  all are done). On lines that are no items yet it turns them into items – select a few lines
+  of ideas and press Ctrl+Enter to get a checklist. Also in the context menu.
+- **Enter** at the end of an item starts the next, unchecked item; Enter on an empty item ends
+  the list. This also works for normal bullet and numbered lists.
+- The status bar shows the progress, e.g. *✓ 3 of 7 done* (of the selection, if any).
+  Items in code blocks are not counted.
 
 ## Calculations {#calc}
 
@@ -428,6 +448,7 @@ file. *Restore Backup…* either **adds** the tabs of a backup to the current on
 | Ctrl+Shift+E, Ctrl+Shift+P | Export as HTML, PDF |
 | Ctrl+F5, Shift+F5 | Start presentation from the beginning, from the current slide |
 | Ctrl+Shift+F5 | Present in a window |
+| Ctrl+Enter | Check/uncheck checklist item, turn lines into a checklist |
 | Alt+Z | Toggle word wrap |
 | Alt+Enter, Esc | Distraction-free mode on/off, leave |
 | Tab / Ctrl+E, Ctrl+Shift+G | Expand Emmet abbreviation, wrap with abbreviation (HTML, CSS, …) |

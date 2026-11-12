@@ -2,6 +2,7 @@
 mod i18n;
 mod backup;
 mod calc;
+mod checklist;
 mod completion;
 mod editor;
 mod emmet;

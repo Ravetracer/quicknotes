@@ -26,6 +26,8 @@ after a restart.
   (pipeline stages one per line), conversion mongosh ↔ Extended JSON v2 (relaxed and canonical)
   and PHP arrays (MongoDB PHP library / Doctrine) ↔ Extended JSON / mongosh, with placeholders
   for PHP variables
+- **Checklists** (`- [ ]` / `- [x]`): check items with a click in the editor or the Markdown preview,
+  Ctrl+Enter, list continuation on Enter, progress in the status bar
 - Find & replace (case, whole word, regex)
 - Word, character and paragraph count in the status bar (of the selection, if any)
 - Drag & drop: files open in new tabs, dropped text (e.g. from a browser) is inserted into the note
@@ -67,6 +69,7 @@ after a restart.
 | Ctrl+Shift+E / Ctrl+Shift+P | Export as HTML / PDF (Markdown, reStructuredText, presentations) |
 | Ctrl+F5 / Shift+F5 | Start presentation from the beginning / from the current slide |
 | Ctrl+Shift+F5 | Present in a window |
+| Ctrl+Enter | Check/uncheck checklist item, turn lines into a checklist |
 | Alt+Z | Toggle word wrap |
 | Alt+Enter / Esc | Distraction-free mode / leave it |
 | Tab, Ctrl+E / Ctrl+Shift+G | Expand Emmet abbreviation / wrap with abbreviation (HTML, CSS, …) |

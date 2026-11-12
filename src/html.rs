@@ -37,6 +37,14 @@ th { background: var(--code-bg); }
 img { max-width: 100%; }
 hr { border: none; border-top: 1px solid var(--border); }
 li > input[type=checkbox] { margin-right: .4em; }
+li:has(> input.task), li:has(> p > input.task) { list-style: none; margin-left: -1.4em; }
+input.task {
+  appearance: none; cursor: pointer; width: 1em; height: 1em; vertical-align: -.15em; margin: 0 .5em 0 0;
+  border: 1.5px solid var(--muted); border-radius: 4px; background: transparent; display: inline-block; position: relative; box-sizing: border-box;
+}
+input.task:checked { background: var(--link); border-color: var(--link); }
+input.task:checked::after { content: ""; position: absolute; left: .3em; top: .08em; width: .22em; height: .48em; border: solid var(--bg); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+li:has(> input.task:checked), li:has(> p > input.task:checked) { opacity: .6; text-decoration: line-through; }
 li > p { margin: .2em 0; }
 
 /* reStructuredText (docutils) */
@@ -116,6 +124,12 @@ pub fn preview_shell(theme: &Theme) -> String {
 <style>{DOC_CSS}</style>
 <script>
 window.setContent = function (html) {{ document.getElementById('content').innerHTML = html; }};
+document.addEventListener('click', function (e) {{
+  var t = e.target;
+  if (t.matches && t.matches('input.task') && window.webkit) {{
+    window.webkit.messageHandlers.qn.postMessage(JSON.stringify({{ type: 'task', line: +t.dataset.line }}));
+  }}
+}});
 window.setTheme = function (t, vars) {{
   document.documentElement.dataset.theme = t;
   document.documentElement.style.cssText = vars || '';
