@@ -52,6 +52,7 @@ after a restart.
 - Built-in help (F1) explaining all features, especially calculations and templates
 - **App password**: password prompt at start, tabs and notes stored encrypted (Argon2id +
   XChaCha20-Poly1305), lock at any time
+- **Tab passwords**: single notes encrypted with their own password, open/closed lock on the tab
 - Backup of all notes into a single file and restore (add to or replace the current tabs), optionally
   encrypted with a password (Argon2id + XChaCha20-Poly1305)
 - Editor font selectable in the preferences (e.g. fonts with ligatures like Fira Code); ligatures can be switched off

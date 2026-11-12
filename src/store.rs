@@ -99,6 +99,10 @@ pub struct TabMeta {
     pub cursor: i32,
     /// Editor share of the editor/preview split (0..1); centred when `None`.
     pub split: Option<f64>,
+    /// Tab password: the tab's data key, wrapped with the password's key.
+    /// The content is then stored in `notes/<id>.locked`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lock: Option<Lock>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -217,6 +221,22 @@ fn sealed_note_path(id: &str) -> PathBuf {
     notes_dir().join(format!("{id}.enc"))
 }
 
+fn locked_note_path(id: &str) -> PathBuf {
+    notes_dir().join(format!("{id}.locked"))
+}
+
+/// Content of a password-protected tab (sealed with the tab's key).
+pub fn read_locked(id: &str) -> Option<Vec<u8>> {
+    fs::read(locked_note_path(id)).ok()
+}
+
+pub fn write_locked(id: &str, sealed: &[u8]) -> io::Result<()> {
+    write_atomic(&locked_note_path(id), sealed)?;
+    let _ = fs::remove_file(note_path(id));
+    let _ = fs::remove_file(sealed_note_path(id));
+    Ok(())
+}
+
 pub fn read_note(id: &str) -> Option<String> {
     if let Ok(data) = fs::read(sealed_note_path(id)) {
         let key = app_key()?;
@@ -245,12 +265,14 @@ pub fn write_note(id: &str, content: &str) -> io::Result<()> {
             let _ = fs::remove_file(sealed_note_path(id));
         }
     }
+    let _ = fs::remove_file(locked_note_path(id));
     Ok(())
 }
 
 pub fn delete_note(id: &str) {
     let _ = fs::remove_file(note_path(id));
     let _ = fs::remove_file(sealed_note_path(id));
+    let _ = fs::remove_file(locked_note_path(id));
 }
 
 /// Re-stores every note file with the current app key (or in plain text

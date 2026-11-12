@@ -490,6 +490,20 @@ selected with the mouse. The options are remembered for the next time.
   Note: plain-text copies written before the password was set may remain on the disk until they
   are overwritten.
 
+### Tab password
+
+Single notes can get their own password – with or without the app password:
+
+- *Protect with Password…* (main menu or right click on the tab) encrypts the note with a
+  password of its own. The tab shows an **open lock** while you can read it.
+- *Lock Tab*, and every start of QuickNotes, hides the content: the tab shows a **closed lock**,
+  the title *Locked note* (unless you renamed the tab, F2) and a password prompt instead of the
+  text. Enter the password to open it again.
+- *Change Tab Password…* and *Remove Tab Password…* ask for the current password first.
+- Protected notes stay encrypted in backups, closed tabs and on disk (`.locked` files); only
+  their password opens them. Files opened from disk cannot be protected – only notes.
+- As with the app password, a forgotten tab password cannot be recovered.
+
 ## Backup {#backup}
 
 *Back Up Notes…* in *Preferences → Import/Export* writes all tabs, notes and settings into one

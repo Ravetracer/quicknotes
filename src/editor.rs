@@ -4,7 +4,7 @@
 use crate::store::{TabKind, TabMeta};
 use crate::calc::{self, LineResult};
 use crate::themes::Theme;
-use crate::{checklist, emmet, html, kanban, langs, markdown, plantuml, rst, slides, table};
+use crate::{checklist, crypto, emmet, html, kanban, langs, markdown, plantuml, rst, slides, table};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use sourceview5::prelude::*;
@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 use webkit6::prelude::*;
+use zeroize::Zeroizing;
 
 /// State shared by all tabs of the window.
 pub struct Shared {
@@ -120,8 +121,32 @@ const RIGHT_MARGIN: i32 = 12;
 /// Width of the text column in distraction-free mode, in characters.
 const FOCUS_COLUMNS: i32 = 90;
 
+/// Associated data of password-protected tab contents.
+const TAB_AAD: &[u8] = b"quicknotes-locked-tab";
+
+/// Password protection of a tab.
+pub struct TabLock {
+    pub lock: crypto::Lock,
+    /// The tab's key while unlocked.
+    key: Option<crypto::Key>,
+    /// The sealed content while locked.
+    sealed: Vec<u8>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LockState {
+    /// No tab password.
+    Open,
+    /// Tab password set, content shown.
+    Unlocked,
+    /// Tab password set, content hidden.
+    Locked,
+}
+
 pub struct EditorTab {
     pub id: String,
+    /// Switches between the editor (`root`) and the password prompt of a locked tab.
+    pub frame: gtk::Stack,
     pub root: gtk::Paned,
     pub view: sourceview5::View,
     pub buffer: sourceview5::Buffer,
@@ -155,6 +180,11 @@ pub struct EditorTab {
     shown_slide: Cell<usize>,
     /// Last inserted Emmet snippet; while it is active, Tab moves between its fields.
     snippet: RefCell<Option<sourceview5::Snippet>>,
+    tab_lock: RefCell<Option<TabLock>>,
+    lock_entry: gtk::PasswordEntry,
+    lock_error: gtk::Label,
+    /// Called when the tab was locked, unlocked or its protection changed.
+    pub lock_hook: RefCell<Option<Box<dyn Fn()>>>,
     /// Checklists: pending re-scan, pointer over a task box, completion popup shown.
     task_timer: RefCell<Option<glib::SourceId>>,
     task_hover: Cell<bool>,
@@ -199,8 +229,34 @@ impl EditorTab {
         root.set_shrink_end_child(false);
         root.set_widget_name(&id);
 
+        // Password prompt of a locked tab.
+        let lock_entry = gtk::PasswordEntry::builder().show_peek_icon(true).placeholder_text(t!("Password")).build();
+        let lock_button = gtk::Button::builder().label(t!("Unlock")).halign(gtk::Align::Center).build();
+        lock_button.add_css_class("suggested-action");
+        lock_button.add_css_class("pill");
+        let lock_error = gtk::Label::builder().wrap(true).justify(gtk::Justification::Center).build();
+        lock_error.add_css_class("error");
+        let column = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        column.set_width_request(280);
+        column.set_halign(gtk::Align::Center);
+        column.append(&lock_entry);
+        column.append(&lock_error);
+        column.append(&lock_button);
+        let lock_page = adw::StatusPage::builder()
+            .icon_name("system-lock-screen-symbolic")
+            .title(t!("Locked Note"))
+            .description(t!("This note is protected with a password."))
+            .child(&column)
+            .build();
+        let frame = gtk::Stack::new();
+        frame.add_named(&root, Some("editor"));
+        frame.add_named(&lock_page, Some("locked"));
+        frame.set_visible_child_name("editor");
+        frame.set_widget_name(&id);
+
         let tab = Rc::new(Self {
             id,
+            frame,
             root,
             view,
             buffer,
@@ -226,9 +282,25 @@ impl EditorTab {
             slide_lines: RefCell::new(Vec::new()),
             shown_slide: Cell::new(0),
             snippet: RefCell::new(None),
+            tab_lock: RefCell::new(None),
+            lock_entry: lock_entry.clone(),
+            lock_error,
+            lock_hook: RefCell::new(None),
             task_timer: RefCell::new(None),
             task_hover: Cell::new(false),
             completion_open: Cell::new(false),
+        });
+        let weak = Rc::downgrade(&tab);
+        lock_entry.connect_activate(move |_| {
+            if let Some(t) = weak.upgrade() {
+                t.unlock();
+            }
+        });
+        let weak = Rc::downgrade(&tab);
+        lock_button.connect_clicked(move |_| {
+            if let Some(t) = weak.upgrade() {
+                t.unlock();
+            }
         });
         tab.buffer.create_tag(Some(TASK_DONE_TAG), &[("strikethrough", &true)]);
         tab.buffer.create_tag(Some(TASK_BOX_TAG), &[("weight", &700)]);
@@ -505,6 +577,126 @@ impl EditorTab {
             slot.take();
         }
         active
+    }
+
+    // ----- tab password -------------------------------------------------
+
+    pub fn lock_state(&self) -> LockState {
+        match self.tab_lock.borrow().as_ref() {
+            None => LockState::Open,
+            Some(l) if l.key.is_some() => LockState::Unlocked,
+            Some(_) => LockState::Locked,
+        }
+    }
+
+    pub fn lock(&self) -> Option<crypto::Lock> {
+        self.tab_lock.borrow().as_ref().map(|l| l.lock.clone())
+    }
+
+    /// The tab's key while unlocked.
+    pub fn tab_key(&self) -> Option<crypto::Key> {
+        self.tab_lock.borrow().as_ref().and_then(|l| l.key.clone())
+    }
+
+    fn lock_changed(&self) {
+        if let Some(hook) = self.lock_hook.borrow().as_ref() {
+            hook();
+        }
+    }
+
+    /// Restores a locked tab from its sealed content.
+    pub fn set_locked(&self, lock: crypto::Lock, sealed: Vec<u8>) {
+        *self.tab_lock.borrow_mut() = Some(TabLock { lock, key: None, sealed });
+        self.set_text_irreversible("");
+        self.frame.set_visible_child_name("locked");
+    }
+
+    /// Protects the tab with a password (it stays unlocked).
+    pub fn protect(&self, lock: crypto::Lock, key: crypto::Key) {
+        *self.tab_lock.borrow_mut() = Some(TabLock { lock, key: Some(key), sealed: Vec::new() });
+        self.lock_changed();
+    }
+
+    /// New password, same key.
+    pub fn set_lock(&self, lock: crypto::Lock) {
+        if let Some(l) = self.tab_lock.borrow_mut().as_mut() {
+            l.lock = lock;
+        }
+        self.lock_changed();
+    }
+
+    pub fn unprotect(&self) {
+        if self.lock_state() == LockState::Unlocked {
+            self.tab_lock.borrow_mut().take();
+            self.lock_changed();
+        }
+    }
+
+    /// The content as stored for a protected tab.
+    pub fn sealed_content(&self) -> Option<Vec<u8>> {
+        let lock = self.tab_lock.borrow();
+        let l = lock.as_ref()?;
+        Some(match &l.key {
+            Some(key) => key.seal(self.text().as_bytes(), TAB_AAD),
+            None => l.sealed.clone(),
+        })
+    }
+
+    /// Hides the content again.
+    pub fn lock_now(&self) {
+        let Some(sealed) = self.sealed_content() else { return };
+        if let Some(l) = self.tab_lock.borrow_mut().as_mut() {
+            l.key = None;
+            l.sealed = sealed;
+        }
+        self.set_text_irreversible("");
+        self.lock_error.set_text("");
+        self.frame.set_visible_child_name("locked");
+        self.lock_changed();
+    }
+
+    /// Checks the password from the prompt and shows the content.
+    fn unlock(self: &Rc<Self>) {
+        let password = Zeroizing::new(self.lock_entry.text().to_string());
+        let Some((lock, sealed)) = self.tab_lock.borrow().as_ref().map(|l| (l.lock.clone(), l.sealed.clone())) else {
+            return;
+        };
+        if password.is_empty() || !self.lock_entry.is_sensitive() {
+            return;
+        }
+        self.lock_entry.set_sensitive(false);
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let result = gio::spawn_blocking(move || {
+                let key = lock.open(&password)?;
+                let plain = key.open(&sealed, TAB_AAD)?;
+                Ok::<_, crypto::Error>((key, String::from_utf8_lossy(&plain).into_owned()))
+            })
+            .await;
+            let Some(t) = weak.upgrade() else { return };
+            t.lock_entry.set_sensitive(true);
+            match result {
+                Ok(Ok((key, text))) => {
+                    t.lock_entry.set_text("");
+                    t.lock_error.set_text("");
+                    if let Some(l) = t.tab_lock.borrow_mut().as_mut() {
+                        l.key = Some(key);
+                        l.sealed.clear();
+                    }
+                    t.set_text_irreversible(&text);
+                    t.update_tasks();
+                    t.frame.set_visible_child_name("editor");
+                    t.schedule_render(0);
+                    t.lock_changed();
+                    t.view.grab_focus();
+                }
+                Ok(Err(e)) => {
+                    t.lock_error.set_text(&e.to_string());
+                    t.lock_entry.grab_focus();
+                }
+                Err(_) => {}
+            }
+        });
     }
 
     // ----- checklists ----------------------------------------------------
@@ -899,6 +1091,9 @@ impl EditorTab {
         }
         if let Some(name) = self.path.borrow().as_ref().and_then(|p| p.file_name()) {
             return name.to_string_lossy().into_owned();
+        }
+        if self.lock_state() == LockState::Locked {
+            return t!("Locked note").into();
         }
         if self.is_kanban() {
             if let Some(title) = kanban::title(&self.text()) {
@@ -1574,6 +1769,7 @@ impl EditorTab {
             preview: self.preview_on.get(),
             cursor: self.buffer.cursor_position(),
             split: self.split.get(),
+            lock: self.lock(),
         }
     }
 }

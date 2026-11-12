@@ -4,6 +4,7 @@
 //! - `manifest.json`  format version, app version, creation time
 //! - `session.json`   tabs and settings (same format as the live session)
 //! - `notes/<id>.txt` contents of notes and of unsaved changes to opened files
+//! - `notes/<id>.locked` password-protected tabs, sealed with their own key
 //!
 //! Archives are only read into memory, never extracted to disk, so entry
 //! names cannot write anywhere. Unknown entries are ignored.
@@ -84,6 +85,24 @@ pub struct Backup {
     pub session: Session,
     /// Note contents by tab id.
     pub notes: HashMap<String, String>,
+    /// Sealed contents of password-protected tabs by tab id.
+    pub locked: HashMap<String, Vec<u8>>,
+}
+
+/// What goes into a backup besides the session.
+#[derive(Default)]
+pub struct Contents {
+    pub notes: Vec<(String, String)>,
+    pub locked: Vec<(String, Vec<u8>)>,
+}
+
+impl From<&Backup> for Contents {
+    fn from(b: &Backup) -> Self {
+        Contents {
+            notes: b.notes.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            locked: b.locked.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        }
+    }
 }
 
 /// Writes a backup to `path`, encrypted when `seal` is given.
@@ -91,11 +110,11 @@ pub fn write(
     path: &Path,
     created: &str,
     session: &Session,
-    notes: &[(String, String)],
+    contents: &Contents,
     seal: Option<&Seal>,
 ) -> Result<(), String> {
     let err = |e: std::io::Error| format!("{}: {e}", path.display());
-    let archive = archive(created, session, notes).map_err(err)?;
+    let archive = archive(created, session, contents).map_err(err)?;
     let data = match seal {
         None => archive,
         Some(seal) => {
@@ -118,7 +137,7 @@ pub fn write(
 }
 
 /// The `.tar.gz` archive in memory.
-fn archive(created: &str, session: &Session, notes: &[(String, String)]) -> std::io::Result<Vec<u8>> {
+fn archive(created: &str, session: &Session, contents: &Contents) -> std::io::Result<Vec<u8>> {
     let mut tar = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
     let mut add = |name: &str, data: &[u8]| -> std::io::Result<()> {
         let mut header = tar::Header::new_gnu();
@@ -135,9 +154,14 @@ fn archive(created: &str, session: &Session, notes: &[(String, String)]) -> std:
     };
     add("manifest.json", json(&manifest).as_bytes())?;
     add("session.json", json(session).as_bytes())?;
-    for (id, content) in notes {
+    for (id, content) in &contents.notes {
         if valid_id(id) {
             add(&format!("notes/{id}.txt"), content.as_bytes())?;
+        }
+    }
+    for (id, sealed) in &contents.locked {
+        if valid_id(id) {
+            add(&format!("notes/{id}.locked"), sealed)?;
         }
     }
     tar.into_inner()?.finish()
@@ -187,6 +211,7 @@ fn parse(data: &[u8]) -> Result<Backup, ReadError> {
     let mut manifest = None;
     let mut session = None;
     let mut notes = HashMap::new();
+    let mut locked = HashMap::new();
     let mut total = 0u64;
 
     for entry in archive.entries().map_err(|_| not_backup())? {
@@ -218,6 +243,10 @@ fn parse(data: &[u8]) -> Result<Backup, ReadError> {
                     if valid_id(id) {
                         notes.insert(id.to_owned(), text());
                     }
+                } else if let Some(id) = n.strip_prefix("notes/").and_then(|f| f.strip_suffix(".locked")) {
+                    if valid_id(id) {
+                        locked.insert(id.to_owned(), data.clone());
+                    }
                 }
             }
         }
@@ -228,7 +257,7 @@ fn parse(data: &[u8]) -> Result<Backup, ReadError> {
         return Err(t!("The backup was created by a newer QuickNotes version").to_owned().into());
     }
     let session = session.ok_or_else(not_backup)?;
-    Ok(Backup { manifest, session, notes })
+    Ok(Backup { manifest, session, notes, locked })
 }
 
 /// Tab ids are lowercase hex (see `store::new_id`).
@@ -262,8 +291,11 @@ mod tests {
         let mut session = Session::default();
         session.tabs.push(TabMeta { id: "abc1".into(), ..Default::default() });
         session.settings.font_family = "Fira Code".into();
-        let notes = vec![("abc1".to_owned(), "hello\nwörld".to_owned())];
-        write(&path, "2026-11-05T12:00:00", &session, &notes, None).unwrap();
+        let contents = Contents {
+            notes: vec![("abc1".to_owned(), "hello\nwörld".to_owned())],
+            locked: vec![("abc2".to_owned(), vec![1, 2, 3])],
+        };
+        write(&path, "2026-11-05T12:00:00", &session, &contents, None).unwrap();
         assert!(!is_sealed(&path));
 
         let backup = read(&path, None, None).unwrap();
@@ -272,6 +304,7 @@ mod tests {
         assert_eq!(backup.session.tabs[0].id, "abc1");
         assert_eq!(backup.session.settings.font_family, "Fira Code");
         assert_eq!(backup.notes["abc1"], "hello\nwörld");
+        assert_eq!(backup.locked["abc2"], [1, 2, 3]);
         std::fs::remove_file(path).ok();
     }
 
@@ -280,7 +313,7 @@ mod tests {
         let path = tmp("sealed.qnbackup");
         let mut session = Session::default();
         session.tabs.push(TabMeta { id: "abc1".into(), title: Some("Secret title".into()), ..Default::default() });
-        let notes = vec![("abc1".to_owned(), "the secret note".to_owned())];
+        let notes = Contents { notes: vec![("abc1".to_owned(), "the secret note".to_owned())], locked: Vec::new() };
         let kdf = crate::crypto::tests::fast_kdf();
         let seal = Seal::Password { key: kdf.derive("pw").unwrap(), kdf };
         write(&path, "2026-11-12T10:00:00", &session, &notes, Some(&seal)).unwrap();

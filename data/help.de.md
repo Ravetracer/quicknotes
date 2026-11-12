@@ -513,6 +513,22 @@ Auswahl ein. Die Optionen werden für das nächste Mal gespeichert.
   Hinweis: Unverschlüsselte Kopien von vor dem Festlegen des Passworts können auf der Festplatte
   bleiben, bis sie überschrieben werden.
 
+### Tab-Passwort
+
+Einzelne Notizen können ein eigenes Passwort bekommen – mit oder ohne App-Passwort:
+
+- *Mit Passwort schützen …* (Hauptmenü oder Rechtsklick auf den Tab) verschlüsselt die Notiz mit
+  einem eigenen Passwort. Solange du sie lesen kannst, zeigt der Tab ein **offenes Schloss**.
+- *Tab sperren* und jeder Start von QuickNotes verbergen den Inhalt: Der Tab zeigt ein
+  **geschlossenes Schloss**, den Titel *Gesperrte Notiz* (außer du hast den Tab umbenannt, F2)
+  und statt des Texts eine Passwortabfrage. Mit dem Passwort öffnest du ihn wieder.
+- *Tab-Passwort ändern …* und *Tab-Passwort entfernen …* fragen zuerst nach dem aktuellen
+  Passwort.
+- Geschützte Notizen bleiben in Sicherungen, geschlossenen Tabs und auf der Festplatte
+  (`.locked`-Dateien) verschlüsselt; nur ihr Passwort öffnet sie. Von der Festplatte geöffnete
+  Dateien lassen sich nicht schützen – nur Notizen.
+- Wie beim App-Passwort lässt sich ein vergessenes Tab-Passwort nicht wiederherstellen.
+
 ## Sicherung {#backup}
 
 *Notizen sichern…* unter *Einstellungen → Import/Export* schreibt alle Tabs, Notizen und

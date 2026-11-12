@@ -1,7 +1,7 @@
 //! Main window: tab management, actions, menus, search bar, status bar and
 //! session persistence.
 
-use crate::editor::{CursorTarget, EditorTab, PreviewKind, Shared};
+use crate::editor::{CursorTarget, EditorTab, LockState, PreviewKind, Shared};
 use crate::image_tab::{self, ImageTab};
 use crate::store::{self, Session, Settings, TabKind, TabMeta};
 use crate::geocaching::{self, Field};
@@ -31,7 +31,7 @@ pub enum Tab {
 impl Tab {
     fn widget(&self) -> gtk::Widget {
         match self {
-            Tab::Text(t) => t.root.clone().upcast(),
+            Tab::Text(t) => t.frame.clone().upcast(),
             Tab::Image(i) => i.root.clone().upcast(),
         }
     }
@@ -119,6 +119,9 @@ pub struct Window {
     vault: RefCell<Option<crypto::Lock>>,
     /// The window closes for locking: nothing must be written any more.
     locking: Cell<bool>,
+    /// Sealed contents of password-protected tabs that are not open (closed
+    /// tabs for *Reopen*, tabs of a backup being restored).
+    sealed_tabs: RefCell<HashMap<String, Vec<u8>>>,
 }
 
 thread_local! {
@@ -312,7 +315,7 @@ impl Window {
         header.pack_start(&icon_button("document-save-symbolic", t!("Save to file (Ctrl+S)"), "win.save"));
 
         let main_menu = gio::Menu::new();
-        fill_main_menu(&main_menu, MenuContext { style: None, has_file: false, emmet: false, app_password: false });
+        fill_main_menu(&main_menu, MenuContext { style: None, has_file: false, emmet: false, app_password: false, lock: None });
         let menu_btn = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
             .menu_model(&main_menu)
@@ -353,6 +356,7 @@ impl Window {
         let tab_menu = gio::Menu::new();
         tab_menu.append(Some(t!("Rename…")), Some("win.tab-rename"));
         tab_menu.append(Some(t!("Copy Path")), Some("win.tab-copy-path"));
+        tab_menu.append_section(None, &lock_section(true));
         tab_menu.append(Some(t!("Close Other Tabs")), Some("win.tab-close-others"));
         tab_menu.append(Some(t!("Close")), Some("win.tab-close"));
         view.set_menu_model(Some(&tab_menu));
@@ -527,6 +531,7 @@ impl Window {
             tab_styles: RefCell::new(HashMap::new()),
             vault: RefCell::new(None),
             locking: Cell::new(false),
+            sealed_tabs: RefCell::new(HashMap::new()),
         });
 
         *menu_target.borrow_mut() = Some(this.weak());
@@ -599,6 +604,26 @@ impl Window {
         self.action("new-presentation", &[], |w| w.new_presentation());
         self.action("new-kanban", &["<Control><Shift>k"], |w| w.new_kanban());
         self.action("lock-app", &[], |w| w.lock_app());
+        self.action("tab-protect", &[], |w| {
+            if let Some(t) = w.menu_text_tab() {
+                w.protect_tab(t);
+            }
+        });
+        self.action("tab-lock", &[], |w| {
+            if let Some(t) = w.menu_text_tab() {
+                t.lock_now();
+            }
+        });
+        self.action("tab-change-password", &[], |w| {
+            if let Some(t) = w.menu_text_tab() {
+                w.change_tab_password(t);
+            }
+        });
+        self.action("tab-remove-password", &[], |w| {
+            if let Some(t) = w.menu_text_tab() {
+                w.remove_tab_password(t);
+            }
+        });
         self.action("present", &["<Control>F5"], |w| w.present(false, presenter::Layout::Fullscreen));
         self.action("present-current", &["<Shift>F5"], |w| w.present(true, presenter::Layout::Fullscreen));
         self.action("present-window", &["<Control><Shift>F5"], |w| w.present(true, presenter::Layout::Window));
@@ -1019,13 +1044,17 @@ impl Window {
     /// Page a tab context menu is open for (`None` once the menu closed).
     fn set_menu_page(self: &Rc<Self>, page: Option<&adw::TabPage>) {
         match page {
-            Some(p) => *self.menu_page.borrow_mut() = Some(p.clone()),
+            Some(p) => {
+                *self.menu_page.borrow_mut() = Some(p.clone());
+                self.update_lock_actions();
+            }
             None => {
                 // Clear after the menu action had a chance to run.
                 let weak = self.weak();
                 glib::idle_add_local_once(move || {
                     if let Some(this) = weak.upgrade() {
                         this.menu_page.borrow_mut().take();
+                        this.update_lock_actions();
                     }
                 });
             }
@@ -1093,6 +1122,16 @@ impl Window {
 
     fn connect_text_tab(self: &Rc<Self>, t: &Rc<EditorTab>) {
         let id = t.id.clone();
+        let weak = self.weak();
+        let tab = Rc::downgrade(t);
+        *t.lock_hook.borrow_mut() = Some(Box::new(move || {
+            let (Some(this), Some(t)) = (weak.upgrade(), tab.upgrade()) else { return };
+            this.update_lock_icon(&t);
+            this.refresh_title(&t.id);
+            this.mark_dirty(&t.id);
+            this.sync_ui();
+        }));
+
         let weak = self.weak();
         let tab = Rc::downgrade(t);
         t.buffer.connect_changed(move |_| {
@@ -1275,6 +1314,13 @@ impl Window {
         store::delete_note(&id);
 
         match tab {
+            Tab::Text(t) if t.lock().is_some() => {
+                // Kept sealed for *Reopen Closed Tab*.
+                if let Some(sealed) = t.sealed_content() {
+                    self.sealed_tabs.borrow_mut().insert(id, sealed);
+                    self.closed.borrow_mut().push((TabMeta { lock: t.lock(), ..meta }, None));
+                }
+            }
             Tab::Text(t) => {
                 let content = t.needs_note_file().then(|| t.text());
                 let is_note = t.path.borrow().is_none();
@@ -1393,6 +1439,19 @@ impl Window {
         if let Some(p) = &meta.path {
             t.set_large(self.is_large(p));
         }
+        if let Some(lock) = meta.lock.clone() {
+            let sealed = self.sealed_tabs.borrow_mut().remove(&meta.id).or_else(|| store::read_locked(&meta.id));
+            let Some(sealed) = sealed else {
+                self.toast(&t!("The protected note “{}” is missing", meta.title.as_deref().unwrap_or(&meta.id)));
+                return None;
+            };
+            t.set_locked(lock, sealed);
+            let page = self.add_tab(Tab::Text(t.clone()), false);
+            self.update_lock_icon(&t);
+            self.refresh_title(&t.id);
+            t.set_preview(meta.preview);
+            return Some(page);
+        }
         let page = self.add_tab(Tab::Text(t.clone()), false);
 
         match (content, meta.path) {
@@ -1442,7 +1501,11 @@ impl Window {
             if t.loading.get() {
                 continue;
             }
-            if t.needs_note_file() {
+            if let Some(sealed) = t.sealed_content() {
+                if let Err(e) = store::write_locked(&id, &sealed) {
+                    self.toast(&t!("Cannot store note: {}", e));
+                }
+            } else if t.needs_note_file() {
                 let text = t.text();
                 if let Err(e) = store::write_note(&id, &text) {
                     eprintln!("quicknotes: cannot store note {id}: {e}");
@@ -1502,16 +1565,19 @@ impl Window {
     // ===== backup =========================================================
 
     /// Current session and note contents, straight from the editors.
-    fn backup_contents(&self) -> (Session, Vec<(String, String)>) {
+    fn backup_contents(&self) -> (Session, crate::backup::Contents) {
         // The app password belongs to this installation, not to the backup.
         let session = Session { vault: None, ..self.snapshot() };
-        let notes = self
-            .text_tabs()
-            .into_iter()
-            .filter(|t| t.needs_note_file())
-            .map(|t| (t.id.clone(), t.text()))
-            .collect();
-        (session, notes)
+        let mut contents = crate::backup::Contents::default();
+        for t in self.text_tabs() {
+            // Protected tabs stay encrypted with their own password.
+            if let Some(sealed) = t.sealed_content() {
+                contents.locked.push((t.id.clone(), sealed));
+            } else if t.needs_note_file() {
+                contents.notes.push((t.id.clone(), t.text()));
+            }
+        }
+        (session, contents)
     }
 
     /// Asks for a password in a dialog (twice when `confirm`).
@@ -1601,6 +1667,11 @@ impl Window {
     /// Asks for the current app password; the data key if it is right.
     async fn verify_app_password(&self, heading: &str, body: &str, ok: &str) -> Option<crypto::Key> {
         let lock = self.vault.borrow().clone()?;
+        self.verify_password(lock, heading, body, ok).await
+    }
+
+    /// Asks for the password of `lock` until it is right; its key, or `None` when cancelled.
+    async fn verify_password(&self, lock: crypto::Lock, heading: &str, body: &str, ok: &str) -> Option<crypto::Key> {
         let mut error = None;
         loop {
             let answer = self
@@ -1730,7 +1801,7 @@ impl Window {
                 failed += 1;
                 continue;
             };
-            let notes: Vec<(String, String)> = backup.notes.into_iter().collect();
+            let notes = crate::backup::Contents::from(&backup);
             let seal = new.cloned().map(crate::backup::Seal::AppKey);
             let target = dir.join(format!("{stem}.{}", if seal.is_some() { "qnbackup" } else { "tar.gz" }));
             match crate::backup::write(&target, &backup.manifest.created, &backup.session, &notes, seal.as_ref()) {
@@ -1742,6 +1813,110 @@ impl Window {
             }
         }
         failed
+    }
+
+    // ===== tab password ===================================================
+
+    /// Text tab the tab context menu is open for, or the current one.
+    fn menu_text_tab(&self) -> Option<Rc<EditorTab>> {
+        match self.menu_page().and_then(|p| self.entry_for_page(&p)).map(|e| e.tab) {
+            Some(Tab::Text(t)) => Some(t),
+            _ => None,
+        }
+    }
+
+    fn update_lock_actions(&self) {
+        let tab = self.menu_text_tab();
+        let state = tab.as_ref().map(|t| t.lock_state());
+        let note = tab.as_ref().is_some_and(|t| t.path.borrow().is_none());
+        self.set_enabled("tab-protect", note && state == Some(LockState::Open));
+        for name in ["tab-lock", "tab-change-password", "tab-remove-password"] {
+            self.set_enabled(name, state == Some(LockState::Unlocked));
+        }
+    }
+
+    /// Closed or open lock on the tab.
+    fn update_lock_icon(&self, t: &EditorTab) {
+        let Some(page) = self.tabs.borrow().get(&t.id).map(|e| e.page.clone()) else { return };
+        let (icon, tip) = match t.lock_state() {
+            LockState::Open => (None, ""),
+            LockState::Unlocked => (Some("changes-allow-symbolic"), t!("Protected with a password, unlocked")),
+            LockState::Locked => (Some("changes-prevent-symbolic"), t!("Protected with a password, locked")),
+        };
+        page.set_icon(icon.map(gio::ThemedIcon::new).as_ref());
+        page.set_tooltip(tip);
+    }
+
+    fn protect_tab(self: &Rc<Self>, t: Rc<EditorTab>) {
+        if t.path.borrow().is_some() {
+            self.toast(t!("Only notes (tabs without a file) can be protected with a password"));
+            return;
+        }
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let answer = this
+                .ask_password(PasswordPrompt {
+                    heading: t!("Protect Tab with Password"),
+                    body: t!("The note is then stored encrypted with this password, independent of the app password. If you forget it, the note cannot be recovered."),
+                    confirm: true,
+                    ok: t!("_Protect"),
+                    skip: None,
+                    error: None,
+                })
+                .await;
+            let PasswordAnswer::Password(password) = answer else { return };
+            if let Ok((lock, key)) =
+                gio::spawn_blocking(move || crypto::Lock::create(&password, crypto::Kdf::new())).await
+            {
+                t.protect(lock, key);
+                this.toast(t!("Tab protected – it locks with “Lock Tab” and when QuickNotes closes"));
+            }
+        });
+    }
+
+    fn change_tab_password(self: &Rc<Self>, t: Rc<EditorTab>) {
+        let (Some(lock), Some(key)) = (t.lock(), t.tab_key()) else { return };
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let heading = t!("Change Tab Password");
+            if this.verify_password(lock, heading, t!("Enter the current password of this tab."), t!("_Next")).await.is_none() {
+                return;
+            }
+            let answer = this
+                .ask_password(PasswordPrompt {
+                    heading,
+                    body: t!("Enter the new password of this tab."),
+                    confirm: true,
+                    ok: t!("_Change Password"),
+                    skip: None,
+                    error: None,
+                })
+                .await;
+            let PasswordAnswer::Password(password) = answer else { return };
+            if let Ok(lock) = gio::spawn_blocking(move || crypto::Lock::rewrap(&key, &password, crypto::Kdf::new())).await {
+                t.set_lock(lock);
+                this.toast(t!("Tab password changed"));
+            }
+        });
+    }
+
+    fn remove_tab_password(self: &Rc<Self>, t: Rc<EditorTab>) {
+        let Some(lock) = t.lock() else { return };
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let ok = this
+                .verify_password(
+                    lock,
+                    t!("Remove Tab Password"),
+                    t!("Enter the password of this tab to remove it. The note is then stored like any other note."),
+                    t!("_Remove Password"),
+                )
+                .await;
+            if ok.is_some() {
+                t.unprotect();
+                this.toast(t!("Tab password removed"));
+            }
+        });
     }
 
     /// Saves everything and shows the unlock window instead of the notes.
@@ -1910,6 +2085,20 @@ impl Window {
         let (mut restored, mut missing) = (0, 0);
         for meta in &backup.session.tabs {
             let content = backup.notes.get(&meta.id).cloned();
+            if meta.lock.is_some() {
+                let Some(sealed) = backup.locked.get(&meta.id) else { continue };
+                let mut meta = meta.clone();
+                if merge && self.tabs.borrow().contains_key(&meta.id) {
+                    meta.id = store::new_id();
+                }
+                self.sealed_tabs.borrow_mut().insert(meta.id.clone(), sealed.clone());
+                let id = meta.id.clone();
+                if self.restore_tab(meta, None).is_some() {
+                    restored += 1;
+                    self.mark_dirty(&id);
+                }
+                continue;
+            }
             if content.is_none() {
                 match &meta.path {
                     // Notes without content (empty notes) are not worth restoring.
@@ -2715,6 +2904,7 @@ impl Window {
         self.sync_layout();
 
         self.guard.set(true);
+        self.update_lock_actions();
         match self.current() {
             Some(Tab::Text(t)) => {
                 let lang = t.language_id();
@@ -2771,6 +2961,10 @@ impl Window {
             has_file: matches!(&current, Some(Tab::Text(t)) if t.path.borrow().is_some()),
             emmet: matches!(&current, Some(Tab::Text(t)) if t.emmet_syntax().is_some()),
             app_password: self.vault.borrow().is_some(),
+            lock: match &current {
+                Some(Tab::Text(t)) if t.path.borrow().is_none() || t.lock().is_some() => Some(t.lock_state()),
+                _ => None,
+            },
         };
         if self.menu_context.get() != Some(context) {
             self.menu_context.set(Some(context));
@@ -3662,6 +3856,31 @@ struct MenuContext {
     emmet: bool,
     /// The app password is on (offers *Lock QuickNotes*).
     app_password: bool,
+    /// Password state of the current tab, if it can have one.
+    lock: Option<LockState>,
+}
+
+/// Tab password commands: all of them (tab context menu, enabled per tab) or
+/// those that apply to `state`.
+fn lock_section(all: bool) -> gio::Menu {
+    lock_items(all, None)
+}
+
+fn lock_items(all: bool, state: Option<LockState>) -> gio::Menu {
+    let protect = (t!("Protect with Password…"), "win.tab-protect");
+    let unlocked = [
+        (t!("Lock Tab"), "win.tab-lock"),
+        (t!("Change Tab Password…"), "win.tab-change-password"),
+        (t!("Remove Tab Password…"), "win.tab-remove-password"),
+    ];
+    let mut items = Vec::new();
+    if all || state == Some(LockState::Open) {
+        items.push(protect);
+    }
+    if all || state == Some(LockState::Unlocked) {
+        items.extend(unlocked);
+    }
+    menu_section(&items)
 }
 
 fn menu_section(items: &[(&str, &str)]) -> gio::Menu {
@@ -3704,6 +3923,9 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
         file.push((t!("Reload from Disk"), "win.reload"));
     }
     menu.append_section(None, &menu_section(&file));
+    if let Some(state) = context.lock.filter(|s| *s != LockState::Locked) {
+        menu.append_section(None, &lock_items(false, Some(state)));
+    }
     if context.app_password {
         menu.append_section(None, &menu_section(&[(t!("Lock QuickNotes"), "win.lock-app")]));
     }
