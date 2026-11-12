@@ -4,7 +4,7 @@
 use crate::store::{TabKind, TabMeta};
 use crate::calc::{self, LineResult};
 use crate::themes::Theme;
-use crate::{checklist, emmet, html, langs, markdown, plantuml, rst, slides};
+use crate::{checklist, emmet, html, langs, markdown, plantuml, rst, slides, table};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use sourceview5::prelude::*;
@@ -270,6 +270,22 @@ impl EditorTab {
                 | gdk::ModifierType::ALT_MASK
                 | gdk::ModifierType::SHIFT_MASK
                 | gdk::ModifierType::SUPER_MASK;
+            let Some(t) = weak.upgrade() else { return glib::Propagation::Proceed };
+            // Tables: Tab / Shift+Tab move between cells, Enter to the next row.
+            let table_op = match key {
+                gdk::Key::Tab if !mods.intersects(modifiers) => Some(table::Op::NextCell),
+                gdk::Key::ISO_Left_Tab | gdk::Key::Tab if mods.intersects(modifiers) && (mods & modifiers) == gdk::ModifierType::SHIFT_MASK => {
+                    Some(table::Op::PrevCell)
+                }
+                gdk::Key::Return | gdk::Key::KP_Enter if !mods.intersects(modifiers) => Some(table::Op::NextRow),
+                _ => None,
+            };
+            if let Some(op) = table_op {
+                let one_line = t.buffer.selection_bounds().is_none_or(|(s, e)| s.line() == e.line());
+                if one_line && !t.snippet_active() && !t.completion_open.get() && t.table_op(op) {
+                    return glib::Propagation::Stop;
+                }
+            }
             if mods.intersects(modifiers) {
                 return glib::Propagation::Proceed;
             }
@@ -308,6 +324,31 @@ impl EditorTab {
             }
         });
         tab.view.add_controller(click);
+        // A right click moves the cursor (unless it hits the selection), so the
+        // context menu's table commands act on the clicked cell.
+        let right = gtk::GestureClick::new();
+        right.set_button(gdk::BUTTON_SECONDARY);
+        right.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(&tab);
+        right.connect_pressed(move |_, _, x, y| {
+            let Some(t) = weak.upgrade() else { return };
+            let (bx, by) = t.view.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
+            // Right of the text: end of that line.
+            let iter = t.view.iter_at_location(bx, by).unwrap_or_else(|| {
+                let (mut it, _) = t.view.line_at_y(by);
+                if !it.ends_line() {
+                    it.forward_to_line_end();
+                }
+                it
+            });
+            if let Some((s, e)) = t.buffer.selection_bounds() {
+                if iter.in_range(&s, &e) {
+                    return;
+                }
+            }
+            t.buffer.place_cursor(&iter);
+        });
+        tab.view.add_controller(right);
         let motion = gtk::EventControllerMotion::new();
         let weak = Rc::downgrade(&tab);
         motion.connect_motion(move |_, x, y| {
@@ -486,6 +527,91 @@ impl EditorTab {
         let task = checklist::parse(&self.line_text(iter.line())?)?;
         let offset = iter.line_offset() as usize;
         (task.box_start..task.box_start + 3).contains(&offset).then_some(iter.line())
+    }
+
+    // ----- tables --------------------------------------------------------
+
+    /// First and last line of the table at the cursor.
+    pub fn table_at_cursor(&self) -> Option<(i32, i32)> {
+        if !self.tasks_enabled() {
+            return None;
+        }
+        let line = self.buffer.iter_at_mark(&self.buffer.get_insert()).line();
+        let is_table = |l: i32| self.line_text(l).is_some_and(|t| table::is_table_line(&t));
+        if !is_table(line) {
+            return None;
+        }
+        let (mut first, mut last) = (line, line);
+        while first > 0 && is_table(first - 1) {
+            first -= 1;
+        }
+        while last + 1 < self.buffer.line_count() && is_table(last + 1) {
+            last += 1;
+        }
+        Some((first, last))
+    }
+
+    /// Applies a table operation at the cursor; `false` outside tables.
+    pub fn table_op(&self, op: table::Op) -> bool {
+        let Some((first, last)) = self.table_at_cursor() else { return false };
+        let cursor = self.buffer.iter_at_mark(&self.buffer.get_insert());
+        let old: Vec<String> = (first..=last).filter_map(|l| self.line_text(l)).collect();
+        let refs: Vec<&str> = old.iter().map(String::as_str).collect();
+        let Some(edit) = table::apply(&refs, (cursor.line() - first) as usize, cursor.line_offset() as usize, op) else {
+            return true;
+        };
+        if edit.lines != old {
+            let Some(mut start) = self.buffer.iter_at_line(first) else { return true };
+            let Some(mut end) = self.buffer.iter_at_line(last) else { return true };
+            if !end.ends_line() {
+                end.forward_to_line_end();
+            }
+            self.buffer.begin_user_action();
+            self.buffer.delete(&mut start, &mut end);
+            self.buffer.insert(&mut start, &edit.lines.join("\n"));
+            self.buffer.end_user_action();
+        }
+        let line = first + edit.cursor_line as i32;
+        if let Some(start) = self.buffer.iter_at_line_offset(line, edit.cursor_col as i32) {
+            let mut end = start;
+            end.forward_chars(edit.select as i32);
+            self.buffer.select_range(&end, &start);
+            self.view.scroll_mark_onscreen(&self.buffer.get_insert());
+        }
+        true
+    }
+
+    /// Inserts an empty table below the cursor line.
+    pub fn insert_table(&self) {
+        let cursor = self.buffer.iter_at_mark(&self.buffer.get_insert());
+        let line = cursor.line();
+        let current = self.line_text(line).unwrap_or_default();
+        let indent: String = current.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+        let edit = table::template(3, &indent);
+        let (mut at, prefix, first) = if current.trim().is_empty() {
+            let mut start = cursor;
+            start.set_line_offset(0);
+            let mut end = start;
+            if !end.ends_line() {
+                end.forward_to_line_end();
+            }
+            self.buffer.begin_user_action();
+            self.buffer.delete(&mut start, &mut end);
+            (start, "", line)
+        } else {
+            let mut end = cursor;
+            if !end.ends_line() {
+                end.forward_to_line_end();
+            }
+            self.buffer.begin_user_action();
+            (end, "\n\n", line + 2)
+        };
+        self.buffer.insert(&mut at, &format!("{prefix}{}", edit.lines.join("\n")));
+        self.buffer.end_user_action();
+        if let Some(iter) = self.buffer.iter_at_line_offset(first + edit.cursor_line as i32, edit.cursor_col as i32) {
+            self.buffer.place_cursor(&iter);
+            self.view.scroll_mark_onscreen(&self.buffer.get_insert());
+        }
     }
 
     /// Toggles the task on `line` (also used by clicks in the preview).

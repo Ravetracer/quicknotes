@@ -1,6 +1,6 @@
 # QuickNotes Help {#top}
 
-**Contents:** [Notes & tabs](#notes) · [Checklists](#checklists) · [Calculations](#calc) · [Templates](#templates) ·
+**Contents:** [Notes & tabs](#notes) · [Checklists](#checklists) · [Tables](#tables) · [Calculations](#calc) · [Templates](#templates) ·
 [Previews & export](#previews) · [Presentations](#slides) · [Tools](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Backup](#backup) ·
 [Shortcuts](#shortcuts)
@@ -57,6 +57,24 @@ format, so they stay readable everywhere (GitHub, Obsidian, …):
   the list. This also works for normal bullet and numbered lists.
 - The status bar shows the progress, e.g. *✓ 3 of 7 done* (of the selection, if any).
   Items in code blocks are not counted.
+
+## Tables {#tables}
+
+Markdown tables (in notes, Markdown and presentations) are edited like in Obsidian's
+*Advanced Tables*: the table is formatted automatically while you move through it, so the
+columns always line up – also with umlauts and wide characters.
+
+- Start a table by typing `| Name` and pressing **Tab**: the header gets a new column and the
+  separator line is added. Or use *Insert Table* in the context menu.
+- **Tab** / **Shift+Tab** move to the next / previous cell and select its text, so typing
+  replaces it. Tab in the last cell of a row adds a new column.
+- **Enter** moves to the same column in the next row and adds a row at the end. Enter in an
+  empty last row removes it and leaves the table.
+- The context menu (right click into a cell) has a **Table** submenu: format, insert, move and
+  delete rows and columns, **sort** the rows by the column (numbers numerically, text
+  alphabetically) and **align** the column left, centred or right (`:--`, `:-:`, `--:`).
+- **Shift+Alt+↑/↓** move the row, **Shift+Alt+←/→** move the column.
+- *Beautify* (Ctrl+Alt+B) in a Markdown document formats all its tables at once.
 
 ## Calculations {#calc}
 
@@ -449,6 +467,8 @@ file. *Restore Backup…* either **adds** the tabs of a backup to the current on
 | Ctrl+F5, Shift+F5 | Start presentation from the beginning, from the current slide |
 | Ctrl+Shift+F5 | Present in a window |
 | Ctrl+Enter | Check/uncheck checklist item, turn lines into a checklist |
+| Tab, Shift+Tab, Enter | Tables: next/previous cell, next row |
+| Shift+Alt+arrow keys | Tables: move row or column |
 | Alt+Z | Toggle word wrap |
 | Alt+Enter, Esc | Distraction-free mode on/off, leave |
 | Tab / Ctrl+E, Ctrl+Shift+G | Expand Emmet abbreviation, wrap with abbreviation (HTML, CSS, …) |

@@ -1,6 +1,6 @@
 # QuickNotes-Hilfe {#top}
 
-**Inhalt:** [Notizen & Tabs](#notes) · [Checklisten](#checklists) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
+**Inhalt:** [Notizen & Tabs](#notes) · [Checklisten](#checklists) · [Tabellen](#tables) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
 [Vorschau & Export](#previews) · [Präsentationen](#slides) · [Werkzeuge](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Sicherung](#backup) ·
 [Tastenkürzel](#shortcuts)
@@ -60,6 +60,25 @@ Markdown-Format, sodass sie überall lesbar bleiben (GitHub, Obsidian, …):
   Eintrag beendet die Liste. Das funktioniert auch für normale Aufzählungen und nummerierte Listen.
 - Die Statusleiste zeigt den Fortschritt, z. B. *✓ 3 von 7 erledigt* (der Auswahl, falls
   vorhanden). Einträge in Codeblöcken zählen nicht mit.
+
+## Tabellen {#tables}
+
+Markdown-Tabellen (in Notizen, Markdown und Präsentationen) werden wie mit *Advanced Tables*
+aus Obsidian bearbeitet: Die Tabelle wird beim Bewegen durch die Zellen automatisch
+formatiert, sodass die Spalten immer bündig sind – auch mit Umlauten und breiten Zeichen.
+
+- Eine Tabelle beginnt man mit `| Name` und **Tab**: Die Kopfzeile bekommt eine neue Spalte und
+  die Trennzeile wird ergänzt. Oder *Tabelle einfügen* im Kontextmenü.
+- **Tab** / **Umschalt+Tab** springen zur nächsten / vorigen Zelle und markieren ihren Text,
+  sodass Tippen ihn ersetzt. Tab in der letzten Zelle einer Zeile fügt eine neue Spalte an.
+- **Enter** springt in derselben Spalte zur nächsten Zeile und fügt am Ende eine Zeile an.
+  Enter in einer leeren letzten Zeile entfernt sie und verlässt die Tabelle.
+- Das Kontextmenü (Rechtsklick in eine Zelle) hat ein Untermenü **Tabelle**: formatieren,
+  Zeilen und Spalten einfügen, verschieben und löschen, die Zeilen nach der Spalte
+  **sortieren** (Zahlen numerisch, Text alphabetisch) und die Spalte links, zentriert oder
+  rechts **ausrichten** (`:--`, `:-:`, `--:`).
+- **Umschalt+Alt+↑/↓** verschieben die Zeile, **Umschalt+Alt+←/→** die Spalte.
+- *Formatieren* (Strg+Alt+B) formatiert in einem Markdown-Dokument alle Tabellen auf einmal.
 
 ## Berechnungen {#calc}
 
@@ -467,6 +486,8 @@ automatischen Sicherung abgelegt).
 | Strg+F5, Umschalt+F5 | Präsentation von Anfang an, ab aktueller Folie starten |
 | Strg+Umschalt+F5 | In einem Fenster präsentieren |
 | Strg+Enter | Checklisten-Eintrag abhaken, Zeilen zur Checkliste machen |
+| Tab, Umschalt+Tab, Enter | Tabellen: nächste/vorige Zelle, nächste Zeile |
+| Umschalt+Alt+Pfeiltasten | Tabellen: Zeile bzw. Spalte verschieben |
 | Alt+Z | Zeilenumbruch ein/aus |
 | Alt+Enter, Esc | Ablenkungsfreier Modus ein/aus, verlassen |
 | Tab / Strg+E, Strg+Umschalt+G | Emmet-Abkürzung erweitern, mit Abkürzung umschließen (HTML, CSS, …) |

@@ -28,6 +28,8 @@ after a restart.
   for PHP variables
 - **Checklists** (`- [ ]` / `- [x]`): check items with a click in the editor or the Markdown preview,
   Ctrl+Enter, list continuation on Enter, progress in the status bar
+- **Markdown tables** like Obsidian's *Advanced Tables*: automatic formatting, Tab/Enter
+  navigation, insert/delete/move rows and columns, sorting, column alignment
 - Find & replace (case, whole word, regex)
 - Word, character and paragraph count in the status bar (of the selection, if any)
 - Drag & drop: files open in new tabs, dropped text (e.g. from a browser) is inserted into the note
@@ -70,6 +72,8 @@ after a restart.
 | Ctrl+F5 / Shift+F5 | Start presentation from the beginning / from the current slide |
 | Ctrl+Shift+F5 | Present in a window |
 | Ctrl+Enter | Check/uncheck checklist item, turn lines into a checklist |
+| Tab, Shift+Tab, Enter | Tables: next/previous cell, next row |
+| Shift+Alt+arrow keys | Tables: move row or column |
 | Alt+Z | Toggle word wrap |
 | Alt+Enter / Esc | Distraction-free mode / leave it |
 | Tab, Ctrl+E / Ctrl+Shift+G | Expand Emmet abbreviation / wrap with abbreviation (HTML, CSS, …) |

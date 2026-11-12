@@ -9,7 +9,7 @@ use crate::presenter::{self, Presentation};
 use crate::prefs::{self, MAX_FONT, MIN_FONT};
 use crate::tab_list::TabList;
 use crate::themes::{self, Theme};
-use crate::{checklist, format, html, langs, slides, stats, APP_ID};
+use crate::{checklist, format, html, langs, slides, stats, table, APP_ID};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use sourceview5::prelude::*;
@@ -540,6 +540,20 @@ impl Window {
             }
         });
         self.action("emmet-wrap", &["<Control><Shift>g"], |w| w.emmet_wrap_popover());
+        self.action("table-insert", &[], |w| {
+            match w.current_text() {
+                Some(t) if t.tasks_enabled() => t.insert_table(),
+                Some(_) => w.toast(t!("Tables work in notes, Markdown and presentations")),
+                None => {}
+            }
+        });
+        for (name, accels, op) in TABLE_ACTIONS {
+            self.action(name, accels, move |w| {
+                if let Some(t) = w.current_text() {
+                    t.table_op(*op);
+                }
+            });
+        }
         self.action("toggle-task", &["<Control>Return", "<Control>KP_Enter"], |w| {
             match w.current_text() {
                 Some(t) if t.tasks_enabled() => t.toggle_tasks_in_selection(),
@@ -2541,6 +2555,10 @@ impl Window {
         let iter = buf.iter_at_mark(&buf.get_insert());
         let mut text = t!("Ln {}, Col {}", iter.line() + 1, iter.line_offset() + 1);
         self.set_enabled("gc", buf.has_selection());
+        let in_table = t.table_at_cursor().is_some();
+        for (name, _, _) in TABLE_ACTIONS {
+            self.set_enabled(name, in_table);
+        }
         if t.preview_kind() == Some(PreviewKind::Slides) {
             let lines = slides::slide_lines(&t.text());
             if !lines.is_empty() {
@@ -3225,7 +3243,9 @@ fn editor_context_menu(style: TabStyle, emmet: bool) -> gio::Menu {
         menu.append_section(None, &emmet_section());
     }
     if matches!(style, TabStyle::Note | TabStyle::Document | TabStyle::Slides) {
-        menu.append_section(None, &menu_section(&[(t!("Toggle Checklist Item"), "win.toggle-task")]));
+        let section = menu_section(&[(t!("Toggle Checklist Item"), "win.toggle-task"), (t!("Insert Table"), "win.table-insert")]);
+        section.append_submenu(Some(t!("Table")), &table_menu());
+        menu.append_section(None, &section);
     }
     menu.append_section(None, &quick_tools());
     menu.append_section(None, &tool_submenus());
@@ -3236,6 +3256,70 @@ fn editor_context_menu(style: TabStyle, emmet: bool) -> gio::Menu {
         menu.append_section(None, &presentation_section());
     }
     menu.append_section(None, &geocaching_menu());
+    menu
+}
+
+/// Table commands: action name, accelerators and operation.
+const TABLE_ACTIONS: &[(&str, &[&str], table::Op)] = &[
+    ("table-format", &[], table::Op::Format),
+    ("table-row-above", &[], table::Op::InsertRowAbove),
+    ("table-row-below", &[], table::Op::InsertRowBelow),
+    ("table-row-delete", &[], table::Op::DeleteRow),
+    ("table-row-up", &["<Alt><Shift>Up"], table::Op::MoveRowUp),
+    ("table-row-down", &["<Alt><Shift>Down"], table::Op::MoveRowDown),
+    ("table-col-left", &[], table::Op::InsertColumnLeft),
+    ("table-col-right", &[], table::Op::InsertColumnRight),
+    ("table-col-delete", &[], table::Op::DeleteColumn),
+    ("table-col-move-left", &["<Alt><Shift>Left"], table::Op::MoveColumnLeft),
+    ("table-col-move-right", &["<Alt><Shift>Right"], table::Op::MoveColumnRight),
+    ("table-sort-asc", &[], table::Op::Sort(true)),
+    ("table-sort-desc", &[], table::Op::Sort(false)),
+    ("table-align-left", &[], table::Op::Align(table::Align::Left)),
+    ("table-align-center", &[], table::Op::Align(table::Align::Center)),
+    ("table-align-right", &[], table::Op::Align(table::Align::Right)),
+    ("table-align-none", &[], table::Op::Align(table::Align::None)),
+];
+
+/// "Table" submenu for the editor's context menu.
+fn table_menu() -> gio::Menu {
+    let menu = gio::Menu::new();
+    menu.append_section(None, &menu_section(&[(t!("Format Table"), "win.table-format")]));
+    menu.append_section(
+        None,
+        &menu_section(&[
+            (t!("Insert Row Above"), "win.table-row-above"),
+            (t!("Insert Row Below"), "win.table-row-below"),
+            (t!("Move Row Up"), "win.table-row-up"),
+            (t!("Move Row Down"), "win.table-row-down"),
+            (t!("Delete Row"), "win.table-row-delete"),
+        ]),
+    );
+    menu.append_section(
+        None,
+        &menu_section(&[
+            (t!("Insert Column Left"), "win.table-col-left"),
+            (t!("Insert Column Right"), "win.table-col-right"),
+            (t!("Move Column Left"), "win.table-col-move-left"),
+            (t!("Move Column Right"), "win.table-col-move-right"),
+            (t!("Delete Column"), "win.table-col-delete"),
+        ]),
+    );
+    menu.append_section(
+        None,
+        &menu_section(&[
+            (t!("Sort Ascending by Column"), "win.table-sort-asc"),
+            (t!("Sort Descending by Column"), "win.table-sort-desc"),
+        ]),
+    );
+    menu.append_section(
+        None,
+        &menu_section(&[
+            (t!("Align Column Left"), "win.table-align-left"),
+            (t!("Align Column Center"), "win.table-align-center"),
+            (t!("Align Column Right"), "win.table-align-right"),
+            (t!("Remove Column Alignment"), "win.table-align-none"),
+        ]),
+    );
     menu
 }
 

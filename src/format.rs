@@ -25,6 +25,10 @@ pub fn output_language(tool: &str) -> Option<&'static str> {
 /// `language` is the current language id and is used by `beautify`/`minify` to pick a format.
 pub fn apply(tool: &str, input: &str, language: Option<&str>) -> Result<(String, Option<&'static str>), String> {
     let tool = match tool {
+        "beautify" if matches!(language, Some("markdown") | Some(crate::slides::LANGUAGE)) => "md-tables",
+        "beautify" if language.is_none() && input.lines().any(crate::table::is_table_line) && detect(input, language).is_none() => {
+            "md-tables"
+        }
         "beautify" => detect(input, language)
             .map(|f| match f {
                 Format::Json => "json-pretty",
@@ -57,6 +61,7 @@ pub fn apply(tool: &str, input: &str, language: Option<&str>) -> Result<(String,
         "xml-minify" => xml_reformat(input, false),
         "yaml-pretty" => yaml_pretty(input),
         "sql-pretty" => Ok(sql_pretty(input)),
+        "md-tables" => Ok(crate::table::format_all(input)),
         "json-to-yaml" => json_to_yaml(input),
         "yaml-to-json" => yaml_to_json(input),
         "sort-lines" => Ok(map_lines(input, |l| l.sort())),

@@ -23,6 +23,7 @@ mod rst;
 mod slides;
 mod slides_assist;
 mod stats;
+mod table;
 mod store;
 mod tab_list;
 mod themes;
