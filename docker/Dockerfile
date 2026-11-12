@@ -27,8 +27,3 @@ RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-too
     && chmod -R a+rX /usr/local/rustup /usr/local/cargo
 
 WORKDIR /src
-
-# Secret Service (GNOME keyring) for the Google Drive token. Separate layer so
-# adding it does not invalidate the toolchain layers above.
-RUN apt-get update && apt-get install -y --no-install-recommends libsecret-1-dev \
-    && rm -rf /var/lib/apt/lists/*

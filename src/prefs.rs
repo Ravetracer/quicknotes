@@ -26,11 +26,6 @@ pub trait Handler {
     fn backup(&self);
     fn restore_backup(&self);
     fn open_data_dir(&self);
-    /// Stores the client and signs in in the browser; `done` gets the account or an error.
-    fn drive_connect(&self, client_id: String, client_secret: String, done: Box<dyn Fn(Result<String, String>)>);
-    fn drive_disconnect(&self);
-    fn set_drive_sync(&self, on: bool);
-    fn drive_sync_now(&self);
 }
 
 /// A tab type with a configurable colour.
@@ -46,13 +41,12 @@ pub fn show(parent: &impl IsA<gtk::Widget>, settings: &Settings, colors: Vec<Tab
     let dialog = adw::PreferencesDialog::new();
     dialog.set_title(t!("Preferences"));
     dialog.set_search_enabled(true);
-    // Room for five page titles; low enough to keep the window visible behind it.
-    dialog.set_content_width(840);
+    // Room for four page titles; low enough to keep the window visible behind it.
+    dialog.set_content_width(760);
     dialog.set_content_height(620);
     dialog.add(&general_page(parent, settings, &handler));
     dialog.add(&themes_page(settings, &handler));
     dialog.add(&tabs_page(settings, colors, &handler));
-    dialog.add(&sync_page(settings, &handler));
     dialog.add(&import_export_page(&dialog, &handler));
     dialog.present(Some(parent));
 }
@@ -286,112 +280,6 @@ fn tabs_page(settings: &Settings, colors: Vec<TabColor>, handler: &Rc<dyn Handle
     }
     page.add(&group);
     page
-}
-
-fn sync_page(settings: &Settings, handler: &Rc<dyn Handler>) -> adw::PreferencesPage {
-    let page = adw::PreferencesPage::builder()
-        .title(t!("Sync"))
-        .icon_name("emblem-synchronizing-symbolic")
-        .build();
-    let group = adw::PreferencesGroup::builder()
-        .title("Google Drive")
-        .description(t!("All tabs are kept in the folder “QuickNotes” of your Google Drive: changes are fetched when QuickNotes starts and sent when it closes. You need your own OAuth client (“Desktop app”) – the help (F1, Sync) explains the setup step by step."))
-        .build();
-
-    let client_id = adw::EntryRow::builder().title(t!("Client ID")).text(&settings.drive_client_id).build();
-    group.add(&client_id);
-    let secret = adw::PasswordEntryRow::builder().title(t!("Client secret (stored in the keyring)")).build();
-    group.add(&secret);
-
-    let connected = !settings.drive_account.is_empty();
-    let account = adw::ActionRow::builder().title(t!("Account")).build();
-    let connect = gtk::Button::builder().label(t!("Connect…")).valign(gtk::Align::Center).build();
-    connect.add_css_class("suggested-action");
-    let disconnect = gtk::Button::builder().label(t!("Disconnect")).valign(gtk::Align::Center).build();
-    account.add_suffix(&connect);
-    account.add_suffix(&disconnect);
-    group.add(&account);
-
-    let auto = adw::SwitchRow::builder()
-        .title(t!("Sync Automatically"))
-        .subtitle(t!("Fetch changes at start, send them when closing"))
-        .active(settings.drive_sync)
-        .build();
-    let h = handler.clone();
-    auto.connect_active_notify(move |row| h.set_drive_sync(row.is_active()));
-    group.add(&auto);
-
-    let now = button_row(t!("Sync Now"), t!("Fetch and send changes right away"), "emblem-synchronizing-symbolic");
-    let h = handler.clone();
-    now.connect_activated(move |_| h.drive_sync_now());
-    group.add(&now);
-    page.add(&group);
-
-    // Shows the connection state in the rows.
-    // An error keeps the account that was connected before.
-    let current: Rc<std::cell::RefCell<Option<String>>> = Rc::default();
-    let show: Rc<dyn Fn(Option<&str>, Option<&str>)> = {
-        let (account, connect, disconnect, auto, now) =
-            (account.clone(), connect.clone(), disconnect.clone(), auto.clone(), now.clone());
-        let current = current.clone();
-        Rc::new(move |email: Option<&str>, error: Option<&str>| {
-            if error.is_none() {
-                *current.borrow_mut() = email.map(str::to_owned);
-            }
-            let kept = current.borrow().clone();
-            let email = if error.is_some() { kept.as_deref() } else { email };
-            let subtitle = match (email, error) {
-                (_, Some(e)) => format!("⚠ {}", glib::markup_escape_text(e)),
-                (Some(e), None) => glib::markup_escape_text(&t!("Connected as {}", e)).to_string(),
-                (None, None) => t!("Not connected").to_owned(),
-            };
-            account.set_subtitle(&subtitle);
-            connect.set_label(if email.is_some() { t!("Reconnect…") } else { t!("Connect…") });
-            connect.set_sensitive(true);
-            disconnect.set_visible(email.is_some());
-            auto.set_sensitive(email.is_some());
-            now.set_sensitive(email.is_some());
-        })
-    };
-    show(connected.then_some(settings.drive_account.as_str()), None);
-    if connected {
-        auto.set_active(settings.drive_sync);
-    }
-
-    let h = handler.clone();
-    let (show_c, id_row, secret_row, auto_c) = (show.clone(), client_id.clone(), secret.clone(), auto.clone());
-    connect.connect_clicked(move |button| {
-        button.set_sensitive(false);
-        account_waiting(&button.parent().and_then(|p| p.ancestor(adw::ActionRow::static_type())));
-        let show = show_c.clone();
-        let (secret_row, auto) = (secret_row.clone(), auto_c.clone());
-        h.drive_connect(
-            id_row.text().to_string(),
-            secret_row.text().to_string(),
-            Box::new(move |result| match result {
-                Ok(email) => {
-                    secret_row.set_text("");
-                    auto.set_active(true);
-                    show(Some(&email), None);
-                }
-                Err(e) => show(None, Some(&e)),
-            }),
-        );
-    });
-    let h = handler.clone();
-    let show_d = show.clone();
-    disconnect.connect_clicked(move |_| {
-        h.drive_disconnect();
-        show_d(None, None);
-    });
-    page
-}
-
-/// Tells the user to continue in the browser.
-fn account_waiting(row: &Option<gtk::Widget>) {
-    if let Some(row) = row.as_ref().and_then(|r| r.downcast_ref::<adw::ActionRow>()) {
-        row.set_subtitle(t!("Waiting for the sign-in in the browser…"));
-    }
 }
 
 fn import_export_page(dialog: &adw::PreferencesDialog, handler: &Rc<dyn Handler>) -> adw::PreferencesPage {

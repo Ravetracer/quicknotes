@@ -26,10 +26,6 @@ dirs = "5"
 tar = "0.4"
 flate2 = "1"
 unicode-width = "0.2"
-ureq = { version = "2.12", features = ["json"] }
-sha2 = "0.10"
-getrandom = "0.2"
-libsecret = "0.6"
 
 [profile.release]
 opt-level = 3

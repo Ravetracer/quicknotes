@@ -50,8 +50,6 @@ after a restart.
   Roman numerals, Morse code, phone keypad — results are inserted below the selection
 - User interface in English or German (*Preferences*, applies after a restart)
 - Built-in help (F1) explaining all features, especially calculations and templates
-- **Google Drive sync** of all tabs (folder `QuickNotes`, scope `drive.file`): fetched at start,
-  sent when closing, conflicts kept as copies; own OAuth client, tokens in the system keyring
 - Backup of all notes into a single `.tar.gz` and restore (add to or replace the current tabs)
 - Editor font selectable in the preferences (e.g. fonts with ligatures like Fira Code); ligatures can be switched off
 
@@ -108,7 +106,7 @@ that ship with an Ubuntu 24.04 desktop.
 ```
 
 Runtime libraries used (all part of Ubuntu 24.04): GTK 4.14, libadwaita 1.5,
-GtkSourceView 5.12, WebKitGTK 6.0, libsecret (keyring for the Google Drive token).
+GtkSourceView 5.12, WebKitGTK 6.0.
 
 ## AppImage (other distributions)
 

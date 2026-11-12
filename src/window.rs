@@ -9,7 +9,7 @@ use crate::presenter::{self, Presentation};
 use crate::prefs::{self, MAX_FONT, MIN_FONT};
 use crate::tab_list::TabList;
 use crate::themes::{self, Theme};
-use crate::{checklist, format, gdrive, html, kanban, langs, slides, stats, table, APP_ID};
+use crate::{checklist, format, html, kanban, langs, slides, stats, table, APP_ID};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use sourceview5::prelude::*;
@@ -17,8 +17,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 
 const BASE_FONT: f64 = 12.0;
@@ -116,11 +114,6 @@ pub struct Window {
     menu_context: Cell<Option<MenuContext>>,
     /// Style each text tab's context menu was last built for.
     tab_styles: RefCell<HashMap<String, (TabStyle, bool)>>,
-    /// Google Drive: a sync is running; the window closes after syncing;
-    /// cancels a pending browser sign-in.
-    drive_busy: Cell<bool>,
-    drive_closing: Cell<bool>,
-    drive_auth_cancel: RefCell<Option<Arc<AtomicBool>>>,
 }
 
 thread_local! {
@@ -137,7 +130,6 @@ pub fn present(app: &adw::Application, files: &[gio::File]) {
             let w = Window::new(app, session.settings.clone());
             WINDOW.with(|c| *c.borrow_mut() = Some(w.clone()));
             w.restore(session);
-            w.drive_startup();
             w
         }
     };
@@ -400,9 +392,6 @@ impl Window {
             main_menu,
             menu_context: Cell::new(None),
             tab_styles: RefCell::new(HashMap::new()),
-            drive_busy: Cell::new(false),
-            drive_closing: Cell::new(false),
-            drive_auth_cancel: RefCell::new(None),
         });
 
         *menu_target.borrow_mut() = Some(this.weak());
@@ -474,7 +463,6 @@ impl Window {
         self.action("new-calculation", &["<Control><Shift>n"], |w| w.new_calculation());
         self.action("new-presentation", &[], |w| w.new_presentation());
         self.action("new-kanban", &["<Control><Shift>k"], |w| w.new_kanban());
-        self.action("drive-sync", &[], |w| w.drive_sync_now());
         self.action("present", &["<Control>F5"], |w| w.present(false, presenter::Layout::Fullscreen));
         self.action("present-current", &["<Shift>F5"], |w| w.present(true, presenter::Layout::Fullscreen));
         self.action("present-window", &["<Control><Shift>F5"], |w| w.present(true, presenter::Layout::Window));
@@ -744,10 +732,6 @@ impl Window {
         self.win.connect_close_request(move |_| {
             if let Some(this) = weak.upgrade() {
                 this.persist_all();
-                if this.drive_ready() && !this.drive_closing.replace(true) {
-                    this.close_with_sync();
-                    return glib::Propagation::Stop;
-                }
             }
             WINDOW.with(|w| w.borrow_mut().take());
             glib::Propagation::Proceed
@@ -1116,313 +1100,6 @@ impl Window {
         self.mark_dirty(&t.id);
         self.refresh_title(&t.id);
         self.sync_ui();
-    }
-
-    // ===== Google Drive =====================================================
-
-    fn drive_connected(&self) -> bool {
-        let s = self.settings.borrow();
-        !s.drive_account.is_empty() && !s.drive_client_id.is_empty()
-    }
-
-    /// Automatic sync (start, close) is on.
-    fn drive_ready(&self) -> bool {
-        self.drive_connected() && self.settings.borrow().drive_sync
-    }
-
-    /// File name of a tab on Drive.
-    fn drive_name(t: &EditorTab) -> String {
-        if let Some(name) = t.path.borrow().as_ref().and_then(|p| p.file_name()) {
-            return name.to_string_lossy().into_owned();
-        }
-        let ext = match t.language_id().as_deref() {
-            Some(kanban::LANGUAGE) => "kanban.md".to_owned(),
-            Some(slides::LANGUAGE) => "slides.md".to_owned(),
-            Some(lang) => langs::extension(lang).unwrap_or_else(|| "txt".into()),
-            None => "txt".into(),
-        };
-        format!("{}.{ext}", file_name_for(&t.title()))
-    }
-
-    fn drive_note(t: &EditorTab) -> gdrive::Note {
-        gdrive::Note {
-            id: t.id.clone(),
-            name: Self::drive_name(t),
-            title: t.custom_title.borrow().clone(),
-            language: t.language_id(),
-            content: t.text(),
-        }
-    }
-
-    /// Fetches changes after the start, once all files are loaded.
-    fn drive_startup(self: &Rc<Self>) {
-        if !self.drive_ready() {
-            return;
-        }
-        let weak = self.weak();
-        let tries = Cell::new(0);
-        glib::timeout_add_local(Duration::from_millis(300), move || {
-            let Some(this) = weak.upgrade() else { return glib::ControlFlow::Break };
-            tries.set(tries.get() + 1);
-            if this.text_tabs().iter().any(|t| t.loading.get()) && tries.get() < 60 {
-                return glib::ControlFlow::Continue;
-            }
-            this.drive_sync(gdrive::Mode::Pull, |_, _| {});
-            glib::ControlFlow::Break
-        });
-    }
-
-    /// *Sync with Google Drive*: fetch, then send.
-    fn drive_sync_now(self: &Rc<Self>) {
-        if !self.drive_connected() {
-            self.toast(t!("Set up Google Drive in the preferences (Sync)"));
-            return;
-        }
-        self.drive_sync(gdrive::Mode::Pull, |this, ok| {
-            if ok {
-                this.drive_sync(gdrive::Mode::Push, |this, ok| {
-                    if ok {
-                        this.toast(t!("Synced with Google Drive"));
-                    }
-                });
-            }
-        });
-    }
-
-    /// Runs a sync in a worker thread; `done` gets whether it succeeded.
-    fn drive_sync(self: &Rc<Self>, mode: gdrive::Mode, done: impl FnOnce(&Rc<Self>, bool) + 'static) {
-        if self.drive_busy.get() {
-            // Wait for the running sync (e.g. the start-up fetch when closing early).
-            let weak = self.weak();
-            glib::timeout_add_local_once(Duration::from_millis(250), move || {
-                if let Some(this) = weak.upgrade() {
-                    this.drive_sync(mode, done);
-                }
-            });
-            return;
-        }
-        self.drive_busy.set(true);
-        let mut notes = Vec::new();
-        let mut skip = HashSet::new();
-        let mut snapshot = HashMap::new();
-        for t in self.text_tabs() {
-            if t.loading.get() || t.large.get() {
-                skip.insert(t.id.clone());
-                continue;
-            }
-            let note = Self::drive_note(&t);
-            snapshot.insert(note.id.clone(), note.hash());
-            notes.push(note);
-        }
-        let creds = {
-            let s = self.settings.borrow();
-            gdrive::Credentials { client_id: s.drive_client_id.clone(), account: s.drive_account.clone() }
-        };
-        let state = gdrive::load_state();
-        let this = self.clone();
-        glib::spawn_future_local(async move {
-            let result = gio::spawn_blocking(move || gdrive::sync(&creds, notes, skip, state, mode)).await;
-            this.drive_busy.set(false);
-            let ok = match result {
-                Ok(Ok(outcome)) => {
-                    this.drive_apply(outcome, &snapshot);
-                    true
-                }
-                Ok(Err(gdrive::Error::Auth(e))) => {
-                    eprintln!("quicknotes: Google Drive: {e}");
-                    this.toast(t!("Google Drive: please connect again in the preferences"));
-                    false
-                }
-                Ok(Err(e)) => {
-                    this.toast(&t!("Google Drive sync failed: {}", e));
-                    false
-                }
-                Err(_) => false,
-            };
-            done(&this, ok);
-        });
-    }
-
-    /// Shows downloaded notes and closes notes deleted on Drive.
-    fn drive_apply(self: &Rc<Self>, outcome: gdrive::Outcome, snapshot: &HashMap<String, String>) {
-        let unchanged = |t: &EditorTab| snapshot.get(&t.id) == Some(&Self::drive_note(t).hash());
-        let find = |id: &str| self.text_tabs().into_iter().find(|t| t.id == id);
-        let (mut down, mut copies) = (0, outcome.conflicts);
-        for p in outcome.pulled {
-            let existing = find(&p.id);
-            let copy = match (&existing, p.apply) {
-                (_, gdrive::Apply::Copy | gdrive::Apply::Link) => true,
-                // Edited while syncing: keep the edit, show the Drive version next to it.
-                (Some(t), _) if !unchanged(t) => {
-                    copies += 1;
-                    true
-                }
-                _ => false,
-            };
-            if let (Some(t), false) = (&existing, copy) {
-                *t.custom_title.borrow_mut() = p.title.clone();
-                if t.language_id() != p.language {
-                    t.set_language_id(p.language.as_deref());
-                }
-                let (mut start, mut end) = t.buffer.bounds();
-                t.buffer.begin_user_action();
-                t.buffer.delete(&mut start, &mut end);
-                t.buffer.insert(&mut start, &p.content);
-                t.buffer.end_user_action();
-                self.mark_dirty(&t.id);
-                self.refresh_title(&t.id);
-            } else {
-                let (id, title) = if copy {
-                    let base = p.title.clone().unwrap_or_else(|| p.name.clone());
-                    (store::new_id(), Some(format!("{base} ({})", t!("Google Drive version"))))
-                } else {
-                    (p.id.clone(), p.title.clone())
-                };
-                let meta = TabMeta { id: id.clone(), title, language: p.language.clone(), wrap: true, ..Default::default() };
-                self.restore_tab(meta, Some(p.content));
-                self.mark_dirty(&id);
-            }
-            down += 1;
-        }
-        let mut closed = 0;
-        for id in &outcome.closed {
-            let page = self.tabs.borrow().get(id).map(|e| e.page.clone());
-            if let (Some(page), Some(t)) = (page, find(id)) {
-                if unchanged(&t) {
-                    self.view.close_page(&page);
-                    closed += 1;
-                }
-            }
-        }
-        gdrive::save_state(&outcome.state);
-        self.persist_all();
-        self.sync_ui();
-        let mut parts = Vec::new();
-        if down > 0 {
-            parts.push(t!("{} received", down));
-        }
-        if outcome.uploaded > 0 {
-            parts.push(t!("{} sent", outcome.uploaded));
-        }
-        if closed > 0 {
-            parts.push(t!("{} deleted on Drive and closed", closed));
-        }
-        if copies > 0 {
-            parts.push(t!("{} conflicts kept as copies", copies));
-        }
-        if !parts.is_empty() && !self.drive_closing.get() {
-            self.toast(&format!("Google Drive: {}", parts.join(", ")));
-        }
-    }
-
-    /// Sends the notes to Drive before the window closes.
-    fn close_with_sync(self: &Rc<Self>) {
-        let dialog = adw::AlertDialog::new(
-            Some(t!("Syncing with Google Drive…")),
-            Some(t!("Your notes are sent to Google Drive. The window closes afterwards.")),
-        );
-        let spinner = gtk::Spinner::builder().spinning(true).width_request(32).height_request(32).build();
-        dialog.set_extra_child(Some(&spinner));
-        dialog.add_responses(&[("skip", t!("Close Without Syncing"))]);
-        dialog.set_close_response("skip");
-        let weak = self.weak();
-        dialog.connect_response(None, move |_, _| {
-            if let Some(this) = weak.upgrade() {
-                this.win.close();
-            }
-        });
-        dialog.present(Some(&self.win));
-        let finished = Rc::new(Cell::new(false));
-        let finish = {
-            let finished = finished.clone();
-            let dialog = dialog.clone();
-            move |this: &Rc<Self>| {
-                if !finished.replace(true) {
-                    dialog.force_close();
-                    this.win.close();
-                }
-            }
-        };
-        let on_timeout = finish.clone();
-        let weak = self.weak();
-        glib::timeout_add_local_once(Duration::from_secs(60), move || {
-            if let Some(this) = weak.upgrade() {
-                on_timeout(&this);
-            }
-        });
-        self.drive_sync(gdrive::Mode::Push, move |this, _| finish(this));
-    }
-
-    /// Connects an account: stores the client, signs in in the browser.
-    fn drive_connect(self: &Rc<Self>, client_id: String, client_secret: String, done: Box<dyn Fn(Result<String, String>)>) {
-        let client_id = client_id.trim().to_owned();
-        let client_secret = client_secret.trim().to_owned();
-        if client_id.is_empty() {
-            done(Err(t!("Enter the client ID first").into()));
-            return;
-        }
-        if !client_secret.is_empty() {
-            if let Err(e) = gdrive::secret::store(gdrive::secret::CLIENT_SECRET, &client_secret) {
-                done(Err(t!("Cannot store the secret in the keyring: {}", e)));
-                return;
-            }
-        }
-        let Some(client_secret) = gdrive::secret::load(gdrive::secret::CLIENT_SECRET) else {
-            done(Err(t!("Enter the client secret first").into()));
-            return;
-        };
-        self.settings.borrow_mut().drive_client_id = client_id.clone();
-        self.schedule_persist();
-        let request = match gdrive::begin_auth(&client_id) {
-            Ok(r) => r,
-            Err(e) => {
-                done(Err(e.to_string()));
-                return;
-            }
-        };
-        gtk::UriLauncher::new(&request.url).launch(Some(&self.win), None::<&gio::Cancellable>, |_| {});
-        let cancel = Arc::new(AtomicBool::new(false));
-        if let Some(old) = self.drive_auth_cancel.replace(Some(cancel.clone())) {
-            old.store(true, Ordering::Relaxed);
-        }
-        let this = self.clone();
-        glib::spawn_future_local(async move {
-            let result =
-                gio::spawn_blocking(move || gdrive::finish_auth(request, &client_id, &client_secret, cancel)).await;
-            match result {
-                Ok(Ok(account)) => {
-                    if let Err(e) = gdrive::secret::store(gdrive::secret::REFRESH_TOKEN, &account.refresh_token) {
-                        done(Err(t!("Cannot store the secret in the keyring: {}", e)));
-                        return;
-                    }
-                    let email = if account.email.is_empty() { "Google Drive".to_owned() } else { account.email };
-                    {
-                        let mut s = this.settings.borrow_mut();
-                        s.drive_account = email.clone();
-                        s.drive_sync = true;
-                    }
-                    this.persist_all();
-                    done(Ok(email));
-                    this.drive_sync_now();
-                }
-                Ok(Err(gdrive::Error::Cancelled)) => done(Err(t!("Sign-in cancelled or timed out").into())),
-                Ok(Err(e)) => done(Err(e.to_string())),
-                Err(_) => done(Err(t!("Sign-in failed").into())),
-            }
-        });
-    }
-
-    fn drive_disconnect(self: &Rc<Self>) {
-        if let Some(token) = gdrive::secret::load(gdrive::secret::REFRESH_TOKEN) {
-            std::thread::spawn(move || gdrive::revoke(&token));
-        }
-        gdrive::secret::clear(gdrive::secret::REFRESH_TOKEN);
-        {
-            let mut s = self.settings.borrow_mut();
-            s.drive_account.clear();
-            s.drive_sync = false;
-        }
-        self.persist_all();
     }
 
     /// Starts the presentation of the current tab.
@@ -3401,21 +3078,6 @@ impl PrefsBridge {
 }
 
 impl prefs::Handler for PrefsBridge {
-    fn drive_connect(&self, client_id: String, client_secret: String, done: Box<dyn Fn(Result<String, String>)>) {
-        self.with(|w| w.drive_connect(client_id, client_secret, done));
-    }
-    fn drive_disconnect(&self) {
-        self.with(|w| w.drive_disconnect());
-    }
-    fn set_drive_sync(&self, on: bool) {
-        self.with(|w| {
-            w.settings.borrow_mut().drive_sync = on;
-            w.persist_all();
-        });
-    }
-    fn drive_sync_now(&self) {
-        self.with(|w| w.drive_sync_now());
-    }
     fn set_theme(&self, id: &str) {
         self.with(|w| w.set_theme(id));
     }
@@ -3551,7 +3213,6 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
         file.push((t!("Reload from Disk"), "win.reload"));
     }
     menu.append_section(None, &menu_section(&file));
-    menu.append_section(None, &menu_section(&[(t!("Sync with Google Drive"), "win.drive-sync")]));
 
     if let Some(style) = context.style {
         if style.exportable() {
