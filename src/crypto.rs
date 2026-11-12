@@ -10,8 +10,6 @@
 //!
 //! Sealed data: `QNE1` | 24-byte nonce | ciphertext with 16-byte tag.
 
-// The app and tab passwords (next steps) use the rest of this module.
-#![allow(dead_code)]
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::Engine;

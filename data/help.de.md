@@ -2,7 +2,7 @@
 
 **Inhalt:** [Notizen & Tabs](#notes) · [Checklisten](#checklists) · [Tabellen](#tables) · [Kanban](#kanban) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
 [Vorschau & Export](#previews) · [Präsentationen](#slides) · [Werkzeuge](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
-[Sicherung](#backup) ·
+[Sicherheit](#security) · [Sicherung](#backup) ·
 [Tastenkürzel](#shortcuts)
 
 ## Notizen & Tabs {#notes}
@@ -487,6 +487,31 @@ Auswahl ein. Die Optionen werden für das nächste Mal gespeichert.
 - Die Quersumme von 1432 ist 10, die iterierte (einstellige) Quersumme ist 1.
 - Römische Zahlen ab 4000: Ein tausendfacher Wert wird mit Überstrich (`X̄L̄` = 40000) oder in
   Klammern (`(XL)` = 40000) geschrieben. Beide Schreibweisen werden gelesen.
+
+## Sicherheit {#security}
+
+### App-Passwort
+
+*Einstellungen → Sicherheit → App-Passwort → Festlegen …* schützt QuickNotes mit einem Passwort:
+
+- Bei jedem Start zeigt QuickNotes zuerst eine Passwortabfrage; die Tabs öffnen sich erst nach
+  dem richtigen Passwort. *Hauptmenü → QuickNotes sperren* (oder *Jetzt sperren* in den
+  Einstellungen) holt die Abfrage jederzeit zurück, z. B. bevor du den Rechner verlässt.
+- Die Tabs (Titel, Dateipfade, Einstellungen je Tab) und alle Notizen werden **verschlüsselt** in
+  `~/.local/share/quicknotes` gespeichert. Ohne Passwort sind sie nicht lesbar – auch nicht aus
+  einer Kopie des Ordners. Allgemeine Einstellungen wie das Design bleiben lesbar, damit die
+  Abfrage angezeigt werden kann.
+- Von der Festplatte geöffnete Dateien bleiben dort unverändert (nur ungespeicherte Änderungen an
+  ihnen werden verschlüsselt).
+- *Ändern …* setzt ein neues Passwort, *Entfernen …* speichert wieder alles unverschlüsselt;
+  beides fragt zuerst nach dem aktuellen Passwort.
+- So funktioniert es: Ein zufälliger 256-Bit-Schlüssel verschlüsselt die Daten (XChaCha20-Poly1305,
+  das auch jede Veränderung der Dateien erkennt). Dieser Schlüssel ist selbst mit einem Schlüssel
+  verschlüsselt, der mit Argon2id (64 MiB, 3 Durchläufe) aus deinem Passwort abgeleitet wird –
+  das macht das Erraten von Passwörtern langsam. Das Passwort selbst wird nie gespeichert.
+- **Ein vergessenes Passwort lässt sich nicht wiederherstellen** – auch nicht vom Entwickler.
+  Hinweis: Unverschlüsselte Kopien von vor dem Festlegen des Passworts können auf der Festplatte
+  bleiben, bis sie überschrieben werden.
 
 ## Sicherung {#backup}
 

@@ -2,7 +2,7 @@
 
 **Contents:** [Notes & tabs](#notes) · [Checklists](#checklists) · [Tables](#tables) · [Kanban](#kanban) · [Calculations](#calc) · [Templates](#templates) ·
 [Previews & export](#previews) · [Presentations](#slides) · [Tools](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
-[Backup](#backup) ·
+[Security](#security) · [Backup](#backup) ·
 [Shortcuts](#shortcuts)
 
 ## Notes & tabs {#notes}
@@ -466,6 +466,29 @@ selected with the mouse. The options are remembered for the next time.
 - The checksum of 1432 is 10, the single-digit checksum is 1.
 - Roman numerals from 4000 on: a thousand-fold value is written with an overline (`X̄L̄` =
   40000) or in brackets (`(XL)` = 40000). Both forms are read.
+
+## Security {#security}
+
+### App password
+
+*Preferences → Security → App Password → Set…* protects QuickNotes with a password:
+
+- At every start QuickNotes shows a password prompt first; the tabs open only after the right
+  password. *Main menu → Lock QuickNotes* (or *Lock Now* in the preferences) brings the prompt
+  back at any time, e.g. before leaving the computer.
+- The tabs (titles, file paths, settings of each tab) and all notes are stored **encrypted**
+  in `~/.local/share/quicknotes`. Without the password they cannot be read – also not from a
+  copy of the folder. General settings like the theme stay readable so the prompt can be shown.
+- Files you opened from disk stay unchanged on disk (only unsaved changes to them are encrypted).
+- *Change…* sets a new password, *Remove…* stores everything unencrypted again; both ask for the
+  current password first.
+- How it works: a random 256-bit key encrypts the data (XChaCha20-Poly1305, which also detects
+  any change to the files). This key is itself encrypted with a key derived from your password
+  with Argon2id (64 MiB, 3 passes), which makes guessing passwords slow. The password itself is
+  never stored.
+- **A forgotten password cannot be recovered** – not even by the developer. Keep it safe.
+  Note: plain-text copies written before the password was set may remain on the disk until they
+  are overwritten.
 
 ## Backup {#backup}
 

@@ -3,8 +3,14 @@
 //! Layout below `$XDG_DATA_HOME/quicknotes` (usually `~/.local/share/quicknotes`):
 //! - `session.json`   tab order, per-tab metadata and global settings
 //! - `notes/<id>.txt` content of notes and of unsaved changes to opened files
+//!
+//! With the app password on, the tabs part of the session is stored sealed in
+//! `session.json` (settings stay readable for the unlock screen) and notes are
+//! stored as `notes/<id>.enc`, both encrypted with the app's data key.
 
+use crate::crypto::{self, Key, Lock};
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -95,13 +101,54 @@ pub struct TabMeta {
     pub split: Option<f64>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(default)]
 pub struct Session {
     pub version: u32,
     pub active: usize,
     pub tabs: Vec<TabMeta>,
     pub settings: Settings,
+    /// App password: the data key, wrapped with the password's key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vault: Option<Lock>,
+    /// With the app password: `active` and `tabs`, encrypted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sealed: Option<String>,
+}
+
+/// The encrypted part of a session.
+#[derive(Serialize, Deserialize)]
+struct SealedTabs {
+    active: usize,
+    tabs: Vec<TabMeta>,
+}
+
+const SESSION_AAD: &[u8] = b"quicknotes-session";
+
+thread_local! {
+    /// The app's data key while the app password is on (and entered).
+    static APP_KEY: RefCell<Option<Key>> = const { RefCell::new(None) };
+}
+
+pub fn set_app_key(key: Option<Key>) {
+    APP_KEY.with(|k| *k.borrow_mut() = key);
+}
+
+pub fn app_key() -> Option<Key> {
+    APP_KEY.with(|k| k.borrow().clone())
+}
+
+impl Session {
+    /// Decrypts the tabs of a locked session.
+    pub fn unseal(&mut self, key: &Key) -> Result<(), crypto::Error> {
+        let Some(sealed) = &self.sealed else { return Ok(()) };
+        let json = key.open_text(sealed, SESSION_AAD)?;
+        let part: SealedTabs = serde_json::from_str(&json).map_err(|_| crypto::Error::Format)?;
+        self.active = part.active;
+        self.tabs = part.tabs;
+        self.sealed = None;
+        Ok(())
+    }
 }
 
 pub fn data_dir() -> PathBuf {
@@ -146,22 +193,95 @@ pub fn load_session() -> Session {
 }
 
 pub fn save_session(session: &Session) -> io::Result<()> {
-    let json = serde_json::to_vec_pretty(session).map_err(io::Error::other)?;
+    let json = match (&session.vault, app_key()) {
+        (Some(_), Some(key)) => {
+            let part = SealedTabs { active: session.active, tabs: session.tabs.clone() };
+            let plain = zeroize::Zeroizing::new(serde_json::to_string(&part).map_err(io::Error::other)?);
+            let sealed = Session {
+                version: session.version,
+                active: 0,
+                tabs: Vec::new(),
+                settings: session.settings.clone(),
+                vault: session.vault.clone(),
+                sealed: Some(key.seal_text(&plain, SESSION_AAD)),
+            };
+            serde_json::to_vec_pretty(&sealed)
+        }
+        _ => serde_json::to_vec_pretty(session),
+    }
+    .map_err(io::Error::other)?;
     write_atomic(&session_path(), &json)
 }
 
+fn sealed_note_path(id: &str) -> PathBuf {
+    notes_dir().join(format!("{id}.enc"))
+}
+
 pub fn read_note(id: &str) -> Option<String> {
+    if let Ok(data) = fs::read(sealed_note_path(id)) {
+        let key = app_key()?;
+        return match key.open(&data, id.as_bytes()) {
+            Ok(plain) => Some(String::from_utf8_lossy(&plain).into_owned()),
+            Err(e) => {
+                eprintln!("quicknotes: cannot decrypt note {id}: {e}");
+                None
+            }
+        };
+    }
     fs::read(note_path(id))
         .ok()
         .map(|b| String::from_utf8(b).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
 }
 
+/// Stores a note, encrypted while the app password is on.
 pub fn write_note(id: &str, content: &str) -> io::Result<()> {
-    write_atomic(&note_path(id), content.as_bytes())
+    match app_key() {
+        Some(key) => {
+            write_atomic(&sealed_note_path(id), &key.seal(content.as_bytes(), id.as_bytes()))?;
+            let _ = fs::remove_file(note_path(id));
+        }
+        None => {
+            write_atomic(&note_path(id), content.as_bytes())?;
+            let _ = fs::remove_file(sealed_note_path(id));
+        }
+    }
+    Ok(())
 }
 
 pub fn delete_note(id: &str) {
     let _ = fs::remove_file(note_path(id));
+    let _ = fs::remove_file(sealed_note_path(id));
+}
+
+/// Re-stores every note file with the current app key (or in plain text
+/// without one), also notes of no open tab. Returns the number of failures.
+pub fn convert_notes(old_key: Option<&Key>) -> usize {
+    let Ok(entries) = fs::read_dir(notes_dir()) else { return 0 };
+    let mut failed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let (Some(id), Some(ext)) = (path.file_stem().and_then(|s| s.to_str()), path.extension().and_then(|s| s.to_str()))
+        else {
+            continue;
+        };
+        let content = match (ext, old_key) {
+            ("txt", _) => fs::read(&path).ok().map(|b| String::from_utf8_lossy(&b).into_owned()),
+            ("enc", Some(key)) => fs::read(&path)
+                .ok()
+                .and_then(|data| key.open(&data, id.as_bytes()).ok())
+                .map(|plain| String::from_utf8_lossy(&plain).into_owned()),
+            _ => continue,
+        };
+        match content {
+            Some(c) => {
+                if write_note(id, &c).is_err() {
+                    failed += 1;
+                }
+            }
+            None => failed += 1,
+        }
+    }
+    failed
 }
 
 pub fn new_id() -> String {
@@ -182,6 +302,29 @@ mod tests {
         let s: Session = serde_json::from_str(r#"{"tabs":[{"id":"a"}]}"#).unwrap();
         assert_eq!(s.tabs[0].kind, TabKind::Text);
         assert_eq!(s.settings.font_size, 12.0);
+    }
+
+    #[test]
+    fn sealed_sessions() {
+        let key = Key::random();
+        let (lock, _) = Lock::create("pw", crate::crypto::tests::fast_kdf());
+        let mut session = Session { vault: Some(lock), ..Default::default() };
+        session.tabs.push(TabMeta { id: "a1".into(), title: Some("Secret plans".into()), ..Default::default() });
+        session.active = 0;
+        let part = SealedTabs { active: 0, tabs: session.tabs.clone() };
+        let sealed = Session {
+            sealed: Some(key.seal_text(&serde_json::to_string(&part).unwrap(), SESSION_AAD)),
+            tabs: Vec::new(),
+            ..session.clone()
+        };
+        let json = serde_json::to_string(&sealed).unwrap();
+        assert!(!json.contains("Secret plans"));
+        let mut loaded: Session = serde_json::from_str(&json).unwrap();
+        assert!(loaded.tabs.is_empty());
+        assert_eq!(loaded.clone().unseal(&Key::random()), Err(crate::crypto::Error::Decrypt));
+        loaded.unseal(&key).unwrap();
+        assert_eq!(loaded.tabs[0].title.as_deref(), Some("Secret plans"));
+        assert!(loaded.sealed.is_none());
     }
 
     #[test]

@@ -115,6 +115,10 @@ pub struct Window {
     menu_context: Cell<Option<MenuContext>>,
     /// Style each text tab's context menu was last built for.
     tab_styles: RefCell<HashMap<String, (TabStyle, bool)>>,
+    /// The app password (wrapped data key); `None` when off.
+    vault: RefCell<Option<crypto::Lock>>,
+    /// The window closes for locking: nothing must be written any more.
+    locking: Cell<bool>,
 }
 
 thread_local! {
@@ -122,22 +126,150 @@ thread_local! {
 }
 
 /// Shows the window (creating and restoring it on first call) and opens `files`.
+/// With the app password on, the unlock window comes first.
 pub fn present(app: &adw::Application, files: &[gio::File]) {
-    let existing = WINDOW.with(|w| w.borrow().clone());
-    let window = match existing {
-        Some(w) => w,
-        None => {
-            let session = store::load_session();
-            let w = Window::new(app, session.settings.clone());
-            WINDOW.with(|c| *c.borrow_mut() = Some(w.clone()));
-            w.restore(session);
-            w
+    let paths: Vec<PathBuf> = files.iter().filter_map(|f| f.path()).collect();
+    if let Some(w) = WINDOW.with(|w| w.borrow().clone()) {
+        for path in paths {
+            w.open_path(path);
         }
-    };
-    for path in files.iter().filter_map(|f| f.path()) {
-        window.open_path(path);
+        w.win.present();
+        return;
     }
-    window.win.present();
+    if UNLOCK.with(|u| u.borrow().is_some()) {
+        UNLOCK.with(|u| {
+            if let Some(unlock) = u.borrow_mut().as_mut() {
+                unlock.files.extend(paths);
+                unlock.win.present();
+            }
+        });
+        return;
+    }
+    let session = store::load_session();
+    if session.vault.is_some() && store::app_key().is_none() {
+        show_unlock(app, session, paths);
+    } else {
+        open_main(app, session, paths);
+    }
+}
+
+fn open_main(app: &adw::Application, session: Session, files: Vec<PathBuf>) {
+    let w = Window::new(app, session.settings.clone());
+    WINDOW.with(|c| *c.borrow_mut() = Some(w.clone()));
+    *w.vault.borrow_mut() = session.vault.clone();
+    w.restore(session);
+    for path in files {
+        w.open_path(path);
+    }
+    w.win.present();
+}
+
+/// The unlock window shown instead of the notes while the app password is on.
+struct Unlock {
+    win: adw::ApplicationWindow,
+    /// Files to open once unlocked.
+    files: Vec<PathBuf>,
+}
+
+thread_local! {
+    static UNLOCK: RefCell<Option<Unlock>> = const { RefCell::new(None) };
+}
+
+fn show_unlock(app: &adw::Application, session: Session, files: Vec<PathBuf>) {
+    crate::i18n::init(&session.settings.language);
+    let scheme = if session.settings.dark { adw::ColorScheme::ForceDark } else { adw::ColorScheme::ForceLight };
+    adw::StyleManager::default().set_color_scheme(scheme);
+    let win = adw::ApplicationWindow::builder()
+        .application(app)
+        .title("QuickNotes")
+        .default_width(480)
+        .default_height(560)
+        .build();
+    let entry = gtk::PasswordEntry::builder()
+        .show_peek_icon(true)
+        .placeholder_text(t!("App password"))
+        .build();
+    let button = gtk::Button::builder().label(t!("Unlock")).halign(gtk::Align::Center).build();
+    button.add_css_class("suggested-action");
+    button.add_css_class("pill");
+    let error = gtk::Label::new(None);
+    error.add_css_class("error");
+    let spinner = gtk::Spinner::new();
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    column.set_width_request(300);
+    column.set_halign(gtk::Align::Center);
+    error.set_wrap(true);
+    error.set_justify(gtk::Justification::Center);
+    for w in [entry.upcast_ref::<gtk::Widget>(), error.upcast_ref(), button.upcast_ref(), spinner.upcast_ref()] {
+        column.append(w);
+    }
+    let page = adw::StatusPage::builder()
+        .icon_name("system-lock-screen-symbolic")
+        .title(t!("QuickNotes Is Locked"))
+        .description(t!("Enter the app password to open your notes."))
+        .child(&column)
+        .build();
+    let toolbar = adw::ToolbarView::new();
+    toolbar.add_top_bar(&adw::HeaderBar::new());
+    toolbar.set_content(Some(&page));
+    win.set_content(Some(&toolbar));
+    win.connect_close_request(|_| {
+        UNLOCK.with(|u| u.borrow_mut().take());
+        glib::Propagation::Proceed
+    });
+    UNLOCK.with(|u| *u.borrow_mut() = Some(Unlock { win: win.clone(), files }));
+
+    let session = Rc::new(RefCell::new(Some(session)));
+    let attempt = {
+        let (app, win, entry, button, error, spinner) =
+            (app.clone(), win.clone(), entry.clone(), button.clone(), error.clone(), spinner.clone());
+        Rc::new(move || {
+            let password = Zeroizing::new(entry.text().to_string());
+            let Some(lock) = session.borrow().as_ref().and_then(|s| s.vault.clone()) else { return };
+            if password.is_empty() {
+                return;
+            }
+            entry.set_sensitive(false);
+            button.set_sensitive(false);
+            spinner.start();
+            error.set_text("");
+            let (app, win, entry, button, error, spinner, session) =
+                (app.clone(), win.clone(), entry.clone(), button.clone(), error.clone(), spinner.clone(), session.clone());
+            glib::spawn_future_local(async move {
+                let result = gio::spawn_blocking(move || lock.open(&password)).await;
+                spinner.stop();
+                let opened = match result {
+                    Ok(Ok(key)) => {
+                        let mut s = session.borrow().clone().unwrap_or_default();
+                        s.unseal(&key).map(|()| (s, key))
+                    }
+                    Ok(Err(e)) => Err(e),
+                    Err(_) => Err(crypto::Error::Format),
+                };
+                match opened {
+                    Ok((s, key)) => {
+                        entry.set_text("");
+                        store::set_app_key(Some(key));
+                        let files = UNLOCK.with(|u| u.borrow_mut().take()).map(|u| u.files).unwrap_or_default();
+                        open_main(&app, s, files);
+                        win.destroy();
+                    }
+                    Err(e) => {
+                        error.set_text(&e.to_string());
+                        entry.set_sensitive(true);
+                        button.set_sensitive(true);
+                        entry.select_region(0, -1);
+                        entry.grab_focus();
+                    }
+                }
+            });
+        })
+    };
+    let a = attempt.clone();
+    entry.connect_activate(move |_| a());
+    button.connect_clicked(move |_| attempt());
+    win.present();
+    entry.grab_focus();
 }
 
 /// Persists everything; used on SIGTERM/SIGINT.
@@ -180,7 +312,7 @@ impl Window {
         header.pack_start(&icon_button("document-save-symbolic", t!("Save to file (Ctrl+S)"), "win.save"));
 
         let main_menu = gio::Menu::new();
-        fill_main_menu(&main_menu, MenuContext { style: None, has_file: false, emmet: false });
+        fill_main_menu(&main_menu, MenuContext { style: None, has_file: false, emmet: false, app_password: false });
         let menu_btn = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
             .menu_model(&main_menu)
@@ -393,6 +525,8 @@ impl Window {
             main_menu,
             menu_context: Cell::new(None),
             tab_styles: RefCell::new(HashMap::new()),
+            vault: RefCell::new(None),
+            locking: Cell::new(false),
         });
 
         *menu_target.borrow_mut() = Some(this.weak());
@@ -464,6 +598,7 @@ impl Window {
         self.action("new-calculation", &["<Control><Shift>n"], |w| w.new_calculation());
         self.action("new-presentation", &[], |w| w.new_presentation());
         self.action("new-kanban", &["<Control><Shift>k"], |w| w.new_kanban());
+        self.action("lock-app", &[], |w| w.lock_app());
         self.action("present", &["<Control>F5"], |w| w.present(false, presenter::Layout::Fullscreen));
         self.action("present-current", &["<Shift>F5"], |w| w.present(true, presenter::Layout::Fullscreen));
         self.action("present-window", &["<Control><Shift>F5"], |w| w.present(true, presenter::Layout::Window));
@@ -732,7 +867,9 @@ impl Window {
         let weak = self.weak();
         self.win.connect_close_request(move |_| {
             if let Some(this) = weak.upgrade() {
-                this.persist_all();
+                if !this.locking.get() {
+                    this.persist_all();
+                }
             }
             WINDOW.with(|w| w.borrow_mut().take());
             glib::Propagation::Proceed
@@ -1359,14 +1496,15 @@ impl Window {
             settings.width = w;
             settings.height = h;
         }
-        Session { version: 1, active, tabs, settings }
+        Session { version: 1, active, tabs, settings, vault: self.vault.borrow().clone(), sealed: None }
     }
 
     // ===== backup =========================================================
 
     /// Current session and note contents, straight from the editors.
     fn backup_contents(&self) -> (Session, Vec<(String, String)>) {
-        let session = self.snapshot();
+        // The app password belongs to this installation, not to the backup.
+        let session = Session { vault: None, ..self.snapshot() };
         let notes = self
             .text_tabs()
             .into_iter()
@@ -1455,7 +1593,171 @@ impl Window {
 
     /// The app's data key while the app password is on.
     fn app_key(&self) -> Option<crypto::Key> {
-        None
+        self.vault.borrow().as_ref().and(store::app_key())
+    }
+
+    // ===== app password ===================================================
+
+    /// Asks for the current app password; the data key if it is right.
+    async fn verify_app_password(&self, heading: &str, body: &str, ok: &str) -> Option<crypto::Key> {
+        let lock = self.vault.borrow().clone()?;
+        let mut error = None;
+        loop {
+            let answer = self
+                .ask_password(PasswordPrompt { heading, body, confirm: false, ok, skip: None, error })
+                .await;
+            let PasswordAnswer::Password(password) = answer else { return None };
+            let lock = lock.clone();
+            match gio::spawn_blocking(move || lock.open(&password)).await {
+                Ok(Ok(key)) => return Some(key),
+                _ => error = Some(t!("Wrong password – please try again")),
+            }
+        }
+    }
+
+    fn set_app_password(self: &Rc<Self>, done: Box<dyn Fn(bool)>) {
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let answer = this
+                .ask_password(PasswordPrompt {
+                    heading: t!("Set App Password"),
+                    body: t!("QuickNotes will ask for this password at every start and keep your tabs and notes encrypted on disk. If you forget it, your notes cannot be recovered."),
+                    confirm: true,
+                    ok: t!("_Set Password"),
+                    skip: None,
+                    error: None,
+                })
+                .await;
+            let PasswordAnswer::Password(password) = answer else {
+                done(false);
+                return;
+            };
+            let Ok((lock, key)) = gio::spawn_blocking(move || crypto::Lock::create(&password, crypto::Kdf::new())).await
+            else {
+                done(false);
+                return;
+            };
+            this.persist_all();
+            store::set_app_key(Some(key.clone()));
+            *this.vault.borrow_mut() = Some(lock);
+            let failed = store::convert_notes(None) + this.reseal_auto_backups(None, Some(&key));
+            this.persist_all();
+            this.menu_context.set(None);
+            this.sync_ui();
+            if failed > 0 {
+                this.toast(&t!("App password set, but {} files could not be encrypted", failed));
+            } else {
+                this.toast(t!("App password set – your notes are now stored encrypted"));
+            }
+            done(true);
+        });
+    }
+
+    fn change_app_password(self: &Rc<Self>, done: Box<dyn Fn(bool)>) {
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let Some(key) = this
+                .verify_app_password(t!("Change App Password"), t!("Enter the current app password."), t!("_Next"))
+                .await
+            else {
+                done(true);
+                return;
+            };
+            let answer = this
+                .ask_password(PasswordPrompt {
+                    heading: t!("Change App Password"),
+                    body: t!("Enter the new app password."),
+                    confirm: true,
+                    ok: t!("_Change Password"),
+                    skip: None,
+                    error: None,
+                })
+                .await;
+            if let PasswordAnswer::Password(password) = answer {
+                // Only the wrapped data key changes; the notes stay as they are.
+                if let Ok(lock) =
+                    gio::spawn_blocking(move || crypto::Lock::rewrap(&key, &password, crypto::Kdf::new())).await
+                {
+                    *this.vault.borrow_mut() = Some(lock);
+                    this.persist_all();
+                    this.toast(t!("App password changed"));
+                }
+            }
+            done(true);
+        });
+    }
+
+    fn remove_app_password(self: &Rc<Self>, done: Box<dyn Fn(bool)>) {
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let Some(key) = this
+                .verify_app_password(
+                    t!("Remove App Password"),
+                    t!("Enter the app password to remove it. Your tabs and notes are then stored unencrypted again."),
+                    t!("_Remove Password"),
+                )
+                .await
+            else {
+                done(true);
+                return;
+            };
+            this.persist_all();
+            store::set_app_key(None);
+            *this.vault.borrow_mut() = None;
+            let failed = store::convert_notes(Some(&key)) + this.reseal_auto_backups(Some(&key), None);
+            this.persist_all();
+            this.menu_context.set(None);
+            this.sync_ui();
+            if failed > 0 {
+                this.toast(&t!("App password removed, but {} files could not be decrypted", failed));
+            } else {
+                this.toast(t!("App password removed"));
+            }
+            done(false);
+        });
+    }
+
+    /// Re-encrypts the automatic backups (made before restores) for a new
+    /// app key, or stores them unencrypted. Returns the number of failures.
+    fn reseal_auto_backups(&self, old: Option<&crypto::Key>, new: Option<&crypto::Key>) -> usize {
+        let dir = store::data_dir().join("backups");
+        let Ok(entries) = std::fs::read_dir(&dir) else { return 0 };
+        let mut failed = 0;
+        for path in entries.flatten().map(|e| e.path()) {
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let Some(stem) = name.strip_suffix(".tar.gz").or_else(|| name.strip_suffix(".qnbackup")) else { continue };
+            let Ok(backup) = crate::backup::read(&path, None, old) else {
+                failed += 1;
+                continue;
+            };
+            let notes: Vec<(String, String)> = backup.notes.into_iter().collect();
+            let seal = new.cloned().map(crate::backup::Seal::AppKey);
+            let target = dir.join(format!("{stem}.{}", if seal.is_some() { "qnbackup" } else { "tar.gz" }));
+            match crate::backup::write(&target, &backup.manifest.created, &backup.session, &notes, seal.as_ref()) {
+                Ok(()) if target != path => {
+                    let _ = std::fs::remove_file(&path);
+                }
+                Ok(()) => {}
+                Err(_) => failed += 1,
+            }
+        }
+        failed
+    }
+
+    /// Saves everything and shows the unlock window instead of the notes.
+    fn lock_app(self: &Rc<Self>) {
+        if self.vault.borrow().is_none() {
+            return;
+        }
+        let Some(app) = self.win.application().and_downcast::<adw::Application>() else { return };
+        self.persist_all();
+        if let Some(running) = self.presentation.borrow_mut().take() {
+            running.end();
+        }
+        show_unlock(&app, store::load_session(), Vec::new());
+        self.locking.set(true);
+        self.win.close();
+        store::set_app_key(None);
     }
 
     fn backup(self: &Rc<Self>) {
@@ -1465,7 +1767,11 @@ impl Window {
             let answer = this
                 .ask_password(PasswordPrompt {
                     heading: t!("Back Up Notes"),
-                    body: t!("Encrypt the backup with a password? It can then only be restored with this password – a forgotten password cannot be recovered."),
+                    body: if this.vault.borrow().is_some() {
+                        t!("Encrypt the backup with a password? Your notes are protected by the app password – without a password they would be stored readable in the backup. A forgotten password cannot be recovered.")
+                    } else {
+                        t!("Encrypt the backup with a password? It can then only be restored with this password – a forgotten password cannot be recovered.")
+                    },
                     confirm: true,
                     ok: t!("_Encrypt"),
                     skip: Some(t!("_Without Password")),
@@ -2391,7 +2697,8 @@ impl Window {
             .collect();
         let mut settings = self.settings.borrow().clone();
         settings.theme = self.shared.theme.get().id.clone();
-        prefs::show(&self.win, &settings, colors, Rc::new(PrefsBridge(self.weak())));
+        let app_password = self.vault.borrow().is_some();
+        prefs::show(&self.win, &settings, app_password, colors, Rc::new(PrefsBridge(self.weak())));
     }
 
     fn toast(&self, text: &str) {
@@ -2463,6 +2770,7 @@ impl Window {
             style: current.as_ref().map(TabStyle::of),
             has_file: matches!(&current, Some(Tab::Text(t)) if t.path.borrow().is_some()),
             emmet: matches!(&current, Some(Tab::Text(t)) if t.emmet_syntax().is_some()),
+            app_password: self.vault.borrow().is_some(),
         };
         if self.menu_context.get() != Some(context) {
             self.menu_context.set(Some(context));
@@ -3304,6 +3612,18 @@ impl prefs::Handler for PrefsBridge {
         self.with(|w| w.restore_backup());
     }
 
+    fn app_password(&self, action: prefs::PasswordAction, done: Box<dyn Fn(bool)>) {
+        self.with(|w| match action {
+            prefs::PasswordAction::Set => w.set_app_password(done),
+            prefs::PasswordAction::Change => w.change_app_password(done),
+            prefs::PasswordAction::Remove => w.remove_app_password(done),
+        });
+    }
+
+    fn lock_app(&self) {
+        self.with(|w| w.lock_app());
+    }
+
     fn open_data_dir(&self) {
         self.with(|w| {
             let launcher = gtk::FileLauncher::new(Some(&gio::File::for_path(store::data_dir())));
@@ -3340,6 +3660,8 @@ struct MenuContext {
     has_file: bool,
     /// Emmet is available for the current tab's language.
     emmet: bool,
+    /// The app password is on (offers *Lock QuickNotes*).
+    app_password: bool,
 }
 
 fn menu_section(items: &[(&str, &str)]) -> gio::Menu {
@@ -3382,6 +3704,9 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
         file.push((t!("Reload from Disk"), "win.reload"));
     }
     menu.append_section(None, &menu_section(&file));
+    if context.app_password {
+        menu.append_section(None, &menu_section(&[(t!("Lock QuickNotes"), "win.lock-app")]));
+    }
 
     if let Some(style) = context.style {
         if style.exportable() {

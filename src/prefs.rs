@@ -26,6 +26,16 @@ pub trait Handler {
     fn backup(&self);
     fn restore_backup(&self);
     fn open_data_dir(&self);
+    /// Sets, changes or removes the app password; `done` gets whether it is on afterwards.
+    fn app_password(&self, action: PasswordAction, done: Box<dyn Fn(bool)>);
+    fn lock_app(&self);
+}
+
+#[derive(Clone, Copy)]
+pub enum PasswordAction {
+    Set,
+    Change,
+    Remove,
 }
 
 /// A tab type with a configurable colour.
@@ -37,16 +47,23 @@ pub struct TabColor {
 
 const LANGUAGES: [&str; 3] = ["system", "en", "de"];
 
-pub fn show(parent: &impl IsA<gtk::Widget>, settings: &Settings, colors: Vec<TabColor>, handler: Rc<dyn Handler>) {
+pub fn show(
+    parent: &impl IsA<gtk::Widget>,
+    settings: &Settings,
+    app_password: bool,
+    colors: Vec<TabColor>,
+    handler: Rc<dyn Handler>,
+) {
     let dialog = adw::PreferencesDialog::new();
     dialog.set_title(t!("Preferences"));
     dialog.set_search_enabled(true);
-    // Room for four page titles; low enough to keep the window visible behind it.
-    dialog.set_content_width(760);
+    // Room for five page titles; low enough to keep the window visible behind it.
+    dialog.set_content_width(840);
     dialog.set_content_height(620);
     dialog.add(&general_page(parent, settings, &handler));
     dialog.add(&themes_page(settings, &handler));
     dialog.add(&tabs_page(settings, colors, &handler));
+    dialog.add(&security_page(&dialog, app_password, &handler));
     dialog.add(&import_export_page(&dialog, &handler));
     dialog.present(Some(parent));
 }
@@ -279,6 +296,58 @@ fn tabs_page(settings: &Settings, colors: Vec<TabColor>, handler: &Rc<dyn Handle
         group.add(&row);
     }
     page.add(&group);
+    page
+}
+
+fn security_page(dialog: &adw::PreferencesDialog, on: bool, handler: &Rc<dyn Handler>) -> adw::PreferencesPage {
+    let page = adw::PreferencesPage::builder()
+        .title(t!("Security"))
+        .icon_name("system-lock-screen-symbolic")
+        .build();
+    let group = adw::PreferencesGroup::builder()
+        .title(t!("App Password"))
+        .description(t!("With an app password QuickNotes asks for it at every start and stores your tabs and notes encrypted (Argon2id, XChaCha20-Poly1305). Files opened from disk stay as they are. A forgotten password cannot be recovered."))
+        .build();
+    let status = adw::ActionRow::builder().title(t!("App password")).build();
+    let set = gtk::Button::builder().label(t!("Set…")).valign(gtk::Align::Center).build();
+    set.add_css_class("suggested-action");
+    let change = gtk::Button::builder().label(t!("Change…")).valign(gtk::Align::Center).build();
+    let remove = gtk::Button::builder().label(t!("Remove…")).valign(gtk::Align::Center).build();
+    remove.add_css_class("destructive-action");
+    for b in [&set, &change, &remove] {
+        status.add_suffix(b);
+    }
+    group.add(&status);
+    let lock = button_row(t!("Lock Now"), t!("Show the password prompt instead of the notes"), "system-lock-screen-symbolic");
+    group.add(&lock);
+    page.add(&group);
+
+    let show: Rc<dyn Fn(bool)> = {
+        let (status, set, change, remove, lock) = (status.clone(), set.clone(), change.clone(), remove.clone(), lock.clone());
+        Rc::new(move |on: bool| {
+            status.set_subtitle(if on { t!("On – tabs and notes are stored encrypted") } else { t!("Off") });
+            set.set_visible(!on);
+            change.set_visible(on);
+            remove.set_visible(on);
+            lock.set_visible(on);
+        })
+    };
+    show(on);
+    for (button, action) in [(&set, PasswordAction::Set), (&change, PasswordAction::Change), (&remove, PasswordAction::Remove)] {
+        let (h, show) = (handler.clone(), show.clone());
+        button.connect_clicked(move |_| {
+            let show = show.clone();
+            h.app_password(action, Box::new(move |on| show(on)));
+        });
+    }
+    let h = handler.clone();
+    let dlg = dialog.downgrade();
+    lock.connect_activated(move |_| {
+        if let Some(d) = dlg.upgrade() {
+            d.close();
+        }
+        h.lock_app();
+    });
     page
 }
 
