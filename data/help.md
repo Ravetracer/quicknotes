@@ -2,7 +2,7 @@
 
 **Contents:** [Notes & tabs](#notes) · [Checklists](#checklists) · [Tables](#tables) · [Kanban](#kanban) · [Calculations](#calc) · [Templates](#templates) ·
 [Previews & export](#previews) · [Presentations](#slides) · [Tools](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
-[Backup](#backup) ·
+[Sync](#sync) · [Backup](#backup) ·
 [Shortcuts](#shortcuts)
 
 ## Notes & tabs {#notes}
@@ -466,6 +466,43 @@ selected with the mouse. The options are remembered for the next time.
 - The checksum of 1432 is 10, the single-digit checksum is 1.
 - Roman numerals from 4000 on: a thousand-fold value is written with an overline (`X̄L̄` =
   40000) or in brackets (`(XL)` = 40000). Both forms are read.
+
+## Google Drive sync {#sync}
+
+QuickNotes can keep all tabs in your Google Drive, in the folder **QuickNotes** – notes as well
+as tabs of opened files (their current content). Changes are **fetched when QuickNotes starts**
+and **sent when it closes** (a short "Syncing…" dialog; *Close Without Syncing* skips it).
+*Main menu → Sync with Google Drive* does both right away.
+
+### Setup (once)
+
+QuickNotes talks to Google with your own OAuth client, so no third party is involved:
+
+1. Open <https://console.cloud.google.com/>, sign in and **create a project** (e.g. "QuickNotes").
+2. *APIs & Services → Library*: search for **Google Drive API** and click *Enable*.
+3. *Google Auth Platform* (or *OAuth consent screen*): click *Get started*, enter an app name and
+   your e-mail address, choose **External** as audience and finish.
+4. *Audience*: click **Publish app** (status *In production*). Otherwise Google ends the
+   connection after 7 days. QuickNotes only uses the scope `drive.file` (it sees nothing but its
+   own files), for which no review by Google is needed.
+5. *Clients*: **Create client** → application type **Desktop app** → *Create*. Copy the
+   **Client ID** and the **Client secret**.
+6. In QuickNotes: *Preferences → Sync*: paste both and click **Connect…**. Your browser opens;
+   sign in and allow access (Google may warn that the app is unverified: *Advanced → Go to …*).
+   Back in QuickNotes the account is shown and the first sync runs.
+
+The client secret and the access token are kept in the system keyring (GNOME Keyring /
+KWallet via Secret Service), never in QuickNotes' files. *Disconnect* revokes the access.
+
+### How syncing works
+
+- Every tab is one file in the folder; the file name follows the tab title (`.txt`, `.md`,
+  `.kanban.md`, …). Notes created on another computer appear as new tabs.
+- **Closed tabs** are moved to the Drive trash when QuickNotes closes, and tabs closed on another
+  computer are closed here, too (*Reopen Closed Tab* brings them back).
+- **Conflicts** (the same note changed on two computers in between) never lose text: the other
+  version is kept as an extra tab or file marked *Google Drive version* or *conflict*.
+- Images and very large files (see *large files* in the status bar) are not synced.
 
 ## Backup {#backup}
 

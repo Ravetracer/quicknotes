@@ -2,7 +2,7 @@
 
 **Inhalt:** [Notizen & Tabs](#notes) · [Checklisten](#checklists) · [Tabellen](#tables) · [Kanban](#kanban) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
 [Vorschau & Export](#previews) · [Präsentationen](#slides) · [Werkzeuge](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
-[Sicherung](#backup) ·
+[Sync](#sync) · [Sicherung](#backup) ·
 [Tastenkürzel](#shortcuts)
 
 ## Notizen & Tabs {#notes}
@@ -487,6 +487,48 @@ Auswahl ein. Die Optionen werden für das nächste Mal gespeichert.
 - Die Quersumme von 1432 ist 10, die iterierte (einstellige) Quersumme ist 1.
 - Römische Zahlen ab 4000: Ein tausendfacher Wert wird mit Überstrich (`X̄L̄` = 40000) oder in
   Klammern (`(XL)` = 40000) geschrieben. Beide Schreibweisen werden gelesen.
+
+## Google-Drive-Sync {#sync}
+
+QuickNotes kann alle Tabs in deinem Google Drive im Ordner **QuickNotes** ablegen – Notizen
+ebenso wie Tabs geöffneter Dateien (mit ihrem aktuellen Inhalt). Änderungen werden **beim Start
+von QuickNotes geholt** und **beim Schließen gesendet** (ein kurzer Dialog „Synchronisiere …“;
+*Ohne Synchronisation schließen* überspringt das). *Hauptmenü → Mit Google Drive
+synchronisieren* erledigt beides sofort.
+
+### Einrichtung (einmalig)
+
+QuickNotes spricht mit deinem eigenen OAuth-Client mit Google – kein Dritter ist beteiligt:
+
+1. <https://console.cloud.google.com/> öffnen, anmelden und ein **Projekt anlegen** (z. B.
+   „QuickNotes“).
+2. *APIs & Dienste → Bibliothek*: nach **Google Drive API** suchen und *Aktivieren*.
+3. *Google Auth Platform* (bzw. *OAuth-Zustimmungsbildschirm*): *Jetzt starten*, App-Name und
+   E-Mail-Adresse eintragen, als Zielgruppe **Extern** wählen und abschließen.
+4. *Zielgruppe*: **App veröffentlichen** (Status *In Produktion*). Sonst beendet Google die
+   Verbindung nach 7 Tagen. QuickNotes nutzt nur den Bereich `drive.file` (es sieht nur seine
+   eigenen Dateien), dafür ist keine Prüfung durch Google nötig.
+5. *Clients*: **Client erstellen** → Anwendungstyp **Desktop-App** → *Erstellen*. **Client-ID**
+   und **Clientschlüssel** (Client-Secret) kopieren.
+6. In QuickNotes: *Einstellungen → Sync*: beides einfügen und **Verbinden …** klicken. Der
+   Browser öffnet sich; anmelden und Zugriff erlauben (Google warnt evtl., dass die App nicht
+   bestätigt ist: *Erweitert → Weiter zu …*). Zurück in QuickNotes wird das Konto angezeigt und
+   die erste Synchronisation läuft.
+
+Client-Secret und Zugriffstoken liegen im Schlüsselbund des Systems (GNOME Keyring / KWallet über
+Secret Service), nie in den Dateien von QuickNotes. *Trennen* widerruft den Zugriff.
+
+### So funktioniert die Synchronisation
+
+- Jeder Tab ist eine Datei im Ordner; der Dateiname folgt dem Tab-Titel (`.txt`, `.md`,
+  `.kanban.md`, …). Auf einem anderen Rechner angelegte Notizen erscheinen als neue Tabs.
+- **Geschlossene Tabs** wandern beim Beenden in den Papierkorb von Drive, und auf einem anderen
+  Rechner geschlossene Tabs werden auch hier geschlossen (*Geschlossenen Tab wiederherstellen*
+  holt sie zurück).
+- **Konflikte** (dieselbe Notiz zwischendurch auf zwei Rechnern geändert) verlieren nie Text: die
+  andere Version bleibt als zusätzlicher Tab bzw. als Datei mit *Version aus Google Drive* oder
+  *Konflikt* im Namen erhalten.
+- Bilder und sehr große Dateien werden nicht synchronisiert.
 
 ## Sicherung {#backup}
 

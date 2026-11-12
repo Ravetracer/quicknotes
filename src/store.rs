@@ -42,6 +42,12 @@ pub struct Settings {
     pub tab_colors: std::collections::BTreeMap<String, String>,
     /// Tab expands Emmet abbreviations in HTML, XML and CSS files.
     pub emmet_tab: bool,
+    /// Google Drive: OAuth client id (the secret is in the keyring).
+    pub drive_client_id: String,
+    /// Google Drive: connected account (e-mail); empty when not connected.
+    pub drive_account: String,
+    /// Google Drive: sync at start and when closing.
+    pub drive_sync: bool,
 }
 
 impl Default for Settings {
@@ -63,6 +69,9 @@ impl Default for Settings {
             sidebar_width: 220,
             tab_colors: Default::default(),
             emmet_tab: true,
+            drive_client_id: String::new(),
+            drive_account: String::new(),
+            drive_sync: false,
         }
     }
 }

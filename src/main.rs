@@ -8,6 +8,7 @@ mod editor;
 mod emmet;
 mod export;
 mod format;
+mod gdrive;
 mod geocaching;
 mod help;
 mod html;
