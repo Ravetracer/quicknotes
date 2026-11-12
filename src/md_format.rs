@@ -18,6 +18,12 @@ pub enum Op {
     Numbered,
     Task,
     CodeBlock,
+    /// LaTeX formula in the text (`$…$`).
+    Math,
+    /// LaTeX formula on its own lines (`$$ … $$`).
+    MathBlock,
+    /// Tune in ABC music notation (```` ```abc ```` block).
+    Music,
     Link,
     Image,
     Rule,
@@ -50,13 +56,17 @@ pub const COLORS: &[(&str, &str)] = &[
 const COLOR_OPEN: &str = "<span style=\"color: ";
 const SPAN_CLOSE: &str = "</span>";
 const URL_PLACEHOLDER: &str = "https://";
+/// New tune: index, title, metre, note length and key, then the melody.
+const ABC_TEMPLATE: &str = "X:1\nT:Title\nM:4/4\nL:1/8\nK:C\nCDEF GABc | c2B2 A2G2 |";
 
 pub fn apply(text: &str, sel: (usize, usize), op: Op) -> Edit {
     let sel = (sel.0.min(text.len()), sel.1.min(text.len()));
     let sel = (sel.0.min(sel.1), sel.0.max(sel.1));
     match op {
         Op::Heading(_) | Op::Quote | Op::Bullet | Op::Numbered | Op::Task => lines_op(text, sel, op),
-        Op::CodeBlock => code_block(text, sel),
+        Op::CodeBlock => fenced(text, sel, "```", "```", None),
+        Op::MathBlock => fenced(text, sel, "$$", "$$", None),
+        Op::Music => fenced(text, sel, "```abc", "```", Some(ABC_TEMPLATE)),
         Op::Rule => rule(text),
         Op::Link | Op::Image => inline_line(text, sel, op),
         _ if text[sel.0..sel.1].contains('\n') => per_line(text, sel, op),
@@ -145,6 +155,7 @@ fn inline_line(line: &str, sel: (usize, usize), op: Op) -> Edit {
         Op::Italic => toggle_stars(line, sel, 1),
         Op::Strike => toggle_wrap(line, sel, "~~"),
         Op::Code => toggle_wrap(line, sel, "`"),
+        Op::Math => toggle_wrap(line, sel, "$"),
         Op::Color(color) => toggle_color(line, sel, color),
         Op::Link | Op::Image => link(line, sel, op == Op::Image),
         _ => Edit { text: line.to_owned(), sel },
@@ -159,6 +170,7 @@ fn insert_empty(line: &str, pos: usize, op: Op) -> Edit {
         Op::Italic => ("*".into(), "*".into()),
         Op::Strike => ("~~".into(), "~~".into()),
         Op::Code => ("`".into(), "`".into()),
+        Op::Math => ("$".into(), "$".into()),
         Op::Link => ("[".into(), format!("]({URL_PLACEHOLDER})")),
         Op::Image => ("![".into(), format!("]({URL_PLACEHOLDER})")),
         Op::Color(Some(c)) => (color_open(c), SPAN_CLOSE.into()),
@@ -430,16 +442,22 @@ fn marker_free(line: &str, op: Op) -> &str {
     }
 }
 
-fn code_block(text: &str, sel: (usize, usize)) -> Edit {
+/// Puts the lines between fence lines (`open`, `close`), or removes the
+/// fences if they are already there. Empty lines get `template`, if any.
+fn fenced(text: &str, sel: (usize, usize), open: &str, close: &str, template: Option<&str>) -> Edit {
     let lines: Vec<&str> = text.split('\n').collect();
-    let fenced = lines.len() >= 2 && lines[0].trim_start().starts_with("```") && lines[lines.len() - 1].trim() == "```";
+    let fenced = lines.len() >= 2 && lines[0].trim().starts_with(open) && lines[lines.len() - 1].trim() == close;
     if fenced {
         let inner = lines[1..lines.len() - 1].join("\n");
         let len = inner.len();
         return Edit { text: inner, sel: (0, len) };
     }
-    let out = format!("```\n{text}\n```");
-    let start = 4;
+    let start = open.len() + 1;
+    if let Some(template) = template.filter(|_| text.trim().is_empty()) {
+        let end = start + template.len();
+        return Edit { text: format!("{open}\n{template}\n{close}"), sel: (end, end) };
+    }
+    let out = format!("{open}\n{text}\n{close}");
     let sel = if sel.0 == sel.1 { (start + sel.0, start + sel.0) } else { (start, start + text.len()) };
     Edit { text: out, sel }
 }
@@ -549,6 +567,17 @@ mod tests {
         assert_eq!(run("«a\nb»", Op::CodeBlock), "```\n«a\nb»\n```");
         assert_eq!(run("«```\na\n```»", Op::CodeBlock), "«a»");
         assert_eq!(run("|", Op::CodeBlock), "```\n|\n```");
+    }
+
+    #[test]
+    fn math_and_music() {
+        assert_eq!(run("so «E=mc^2» holds", Op::Math), "so $«E=mc^2»$ holds");
+        assert_eq!(run("so $«E=mc^2»$ holds", Op::Math), "so «E=mc^2» holds");
+        assert_eq!(run("«x^2»", Op::MathBlock), "$$\n«x^2»\n$$");
+        assert_eq!(run("«$$\nx^2\n$$»", Op::MathBlock), "«x^2»");
+        assert_eq!(run("|", Op::Music), format!("```abc\n{ABC_TEMPLATE}|\n```"));
+        assert_eq!(run("«X:1\nK:G\nGABc|»", Op::Music), "```abc\n«X:1\nK:G\nGABc|»\n```");
+        assert_eq!(run("«```abc\nX:1\n```»", Op::Music), "«X:1»");
     }
 
     #[test]

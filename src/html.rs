@@ -1,5 +1,6 @@
 //! HTML pages for the preview pane and for exported documents.
 
+use crate::notation::Libs;
 use crate::themes::Theme;
 
 /// Document styles shared by preview and export. Colors come from CSS
@@ -113,17 +114,23 @@ pub fn escape(text: &str) -> String {
 }
 
 /// The preview page shell. Content is swapped via `setContent()` so the
-/// scroll position survives updates.
+/// scroll position survives updates. Notation libraries are added on demand
+/// (see [`Libs::inject_js`]).
 pub fn preview_shell(theme: &Theme) -> String {
     let (vars, theme) = (theme.preview_vars(), if theme.dark { "dark" } else { "light" });
+    let notation = Libs::default().head();
     format!(
         r#"<!DOCTYPE html>
 <html data-theme="{theme}" style="{vars}">
 <head>
 <meta charset="utf-8">
 <style>{DOC_CSS}</style>
-<script>
-window.setContent = function (html) {{ document.getElementById('content').innerHTML = html; }};
+{notation}<script>
+window.setContent = function (html) {{
+  var content = document.getElementById('content');
+  content.innerHTML = html;
+  qnRender(content);
+}};
 document.addEventListener('click', function (e) {{
   var t = e.target;
   if (t.matches && t.matches('input.task') && window.webkit) {{
@@ -144,6 +151,7 @@ window.setTheme = function (t, vars) {{
 /// A self-contained HTML document (light theme) for export.
 pub fn standalone(title: &str, body: &str) -> String {
     let title = escape(title);
+    let notation = Libs::needed(body).head();
     format!(
         r#"<!DOCTYPE html>
 <html lang="en" data-theme="light">
@@ -153,11 +161,12 @@ pub fn standalone(title: &str, body: &str) -> String {
 <meta name="generator" content="QuickNotes">
 <title>{title}</title>
 <style>{DOC_CSS}{EXPORT_CSS}</style>
-</head>
+{notation}</head>
 <body>
 <main id="content">
 {body}
 </main>
+<script>qnRender(document.getElementById('content'));</script>
 </body>
 </html>
 "#

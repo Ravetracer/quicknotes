@@ -741,7 +741,8 @@ fn render_markdown(md: &str, mut backgrounds: Option<&mut Vec<Background>>) -> S
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_FOOTNOTES
-        | Options::ENABLE_HEADING_ATTRIBUTES;
+        | Options::ENABLE_HEADING_ATTRIBUTES
+        | Options::ENABLE_MATH;
     let mut events = Vec::new();
     let mut image: Option<(String, String, String)> = None;
     for event in Parser::new_ext(md, opts) {
@@ -993,6 +994,8 @@ pub fn page(mode: Mode, deck: Option<&Deck>, opts: PageOptions) -> String {
     let user_style = deck.map(|d| d.style.replace("</", "<\\/")).unwrap_or_default();
     let theme = if opts.dark { "dark" } else { "light" };
     let deck_json = deck.map(Deck::json).unwrap_or_else(|| "null".into());
+    // The preview starts without a deck and gets the libraries on demand.
+    let notation = crate::notation::Libs::needed(&deck_json).head();
     let options = serde_json::json!({ "start": opts.start, "screens": opts.screens });
     let print_css = match (mode, deck) {
         (Mode::Print, Some(d)) => format!("@page {{ size: {}px {}px; margin: 0; }}", d.width, d.height),
@@ -1008,7 +1011,7 @@ pub fn page(mode: Mode, deck: Option<&Deck>, opts: PageOptions) -> String {
 <title>{title}</title>
 <style>{DECK_CSS}{print_css}</style>
 <style id="qn-user-style">{user_style}</style>
-</head>
+{notation}</head>
 <body>
 <script>{ENGINE_JS}</script>
 <script>QN.init("{mode}", {deck_json}, {labels}, {options});</script>
@@ -1122,6 +1125,7 @@ mod tests {
     fn page_is_script_safe() {
         let deck = parse("# </script><script>alert(1)</script>");
         let page = page(Mode::Audience, Some(&deck), PageOptions::default());
-        assert_eq!(page.matches("</script>").count(), 2);
+        let notation = crate::notation::Libs::default().head().matches("</script>").count();
+        assert_eq!(page.matches("</script>").count(), 2 + notation);
     }
 }

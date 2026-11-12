@@ -20,6 +20,7 @@ mod langs;
 mod mongo;
 mod markdown;
 mod md_format;
+mod notation;
 mod plantuml;
 mod prefs;
 mod presenter;

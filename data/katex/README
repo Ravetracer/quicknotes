@@ -1,0 +1,4 @@
+KaTeX 0.19.1 (https://katex.org), dist/katex.min.js and dist/katex.min.css from the npm package
+"katex" (sha1 ba2685811cdbffc54dfb7d55bd440c6cc6bb8795). MIT License, see LICENSE.
+katex.css is katex.min.css with the WOFF2 fonts embedded as data URIs (the WOFF/TTF fallbacks
+are dropped), so rendered math needs no external files.

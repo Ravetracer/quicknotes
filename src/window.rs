@@ -748,6 +748,18 @@ impl Window {
                 gtk::License::MitX11,
                 None,
             );
+            about.add_legal_section(
+                "KaTeX",
+                Some("Copyright (c) 2013-2020 Khan Academy and other contributors"),
+                gtk::License::MitX11,
+                None,
+            );
+            about.add_legal_section(
+                "abcjs",
+                Some("Copyright (c) 2009-2026 Paul Rosen and Gregory Dyke"),
+                gtk::License::MitX11,
+                None,
+            );
             for (_, name, copyright) in themes::SOURCES.iter().filter(|s| !s.2.is_empty()) {
                 about.add_legal_section(name, Some(copyright), gtk::License::MitX11, None);
             }
@@ -4069,6 +4081,9 @@ const FORMAT_ACTIONS: &[(&str, &[&str], md_format::Op)] = &[
     ("md-numbered", &[], md_format::Op::Numbered),
     ("md-task", &[], md_format::Op::Task),
     ("md-code-block", &[], md_format::Op::CodeBlock),
+    ("md-math", &[], md_format::Op::Math),
+    ("md-math-block", &[], md_format::Op::MathBlock),
+    ("md-music", &[], md_format::Op::Music),
     ("md-link", &["<Control>k"], md_format::Op::Link),
     ("md-image", &[], md_format::Op::Image),
     ("md-rule", &[], md_format::Op::Rule),

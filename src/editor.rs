@@ -4,6 +4,7 @@
 use crate::store::{TabKind, TabMeta};
 use crate::calc::{self, LineResult};
 use crate::themes::Theme;
+use crate::notation::Libs;
 use crate::{checklist, crypto, emmet, format_bar, html, kanban, langs, markdown, md_format, plantuml, rst, slides, table};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -101,6 +102,8 @@ struct Preview {
     shell: Cell<Shell>,
     /// JavaScript to run once the current page has loaded.
     pending: RefCell<Option<String>>,
+    /// Notation libraries loaded into the current page (or in `pending`).
+    libs: Cell<Libs>,
 }
 
 pub type WidgetHook = Box<dyn Fn(&gtk::Widget)>;
@@ -1630,6 +1633,7 @@ impl EditorTab {
             loaded: Cell::new(false),
             shell: Cell::new(Shell::None),
             pending: RefCell::new(None),
+            libs: Cell::new(Libs::default()),
         });
         webview
     }
@@ -1654,6 +1658,7 @@ impl EditorTab {
     fn load_page(&self, p: &Preview, page: &str, shell: Shell) {
         p.loaded.set(false);
         p.shell.set(shell);
+        p.libs.set(Libs::default());
         let bg = if shell != Shell::None { preview_bg(self.shared.theme.get()) } else { gdk::RGBA::WHITE };
         p.webview.set_background_color(&bg);
         let base = if shell == Shell::Slides { self.slides_base_uri() } else { self.base_uri() };
@@ -1719,18 +1724,13 @@ impl EditorTab {
         let index = slides::slide_at(&deck.lines, line);
         self.shown_slide.set(index);
         *self.slide_lines.borrow_mut() = deck.lines.clone();
-        let js = format!("QN.update({}, {index})", deck.json());
+        let json = deck.json();
+        let js = format!("QN.update({json}, {index})");
         let preview = self.preview.borrow();
         let Some(p) = preview.as_ref() else { return };
-        if p.shell.get() != Shell::Slides {
-            let opts = slides::PageOptions { dark: self.shared.theme.get().dark, ..Default::default() };
-            self.load_page(p, &slides::page(slides::Mode::Preview, None, opts), Shell::Slides);
-            *p.pending.borrow_mut() = Some(js);
-        } else if p.loaded.get() {
-            p.webview.evaluate_javascript(&js, None, None, None::<&gio::Cancellable>, |_| {});
-        } else {
-            *p.pending.borrow_mut() = Some(js);
-        }
+        let opts = slides::PageOptions { dark: self.shared.theme.get().dark, ..Default::default() };
+        let page = || slides::page(slides::Mode::Preview, None, opts);
+        self.run_in_shell(p, Shell::Slides, page, &js, Libs::needed(&json));
     }
 
     fn render_kanban(&self) {
@@ -1781,13 +1781,27 @@ impl EditorTab {
         let preview = self.preview.borrow();
         let Some(p) = preview.as_ref() else { return };
         let js = format!("setContent({})", serde_json::to_string(html).unwrap_or_default());
-        if p.shell.get() != Shell::Doc {
-            self.load_page(p, &html::preview_shell(self.shared.theme.get()), Shell::Doc);
-            *p.pending.borrow_mut() = Some(js);
+        let page = || html::preview_shell(self.shared.theme.get());
+        self.run_in_shell(p, Shell::Doc, page, &js, Libs::needed(html));
+    }
+
+    /// Runs `js` in the preview's `shell` page, loading the page first if
+    /// needed, together with the notation libraries `libs` it still lacks.
+    fn run_in_shell(&self, p: &Preview, shell: Shell, page: impl FnOnce() -> String, js: &str, libs: Libs) {
+        if p.shell.get() != shell {
+            self.load_page(p, &page(), shell);
+            p.libs.set(libs);
+            *p.pending.borrow_mut() = Some(libs.inject_js() + js);
         } else if p.loaded.get() {
+            let missing = libs.missing(p.libs.get());
+            p.libs.set(p.libs.get().union(libs));
+            let js = missing.inject_js() + js;
             p.webview.evaluate_javascript(&js, None, None, None::<&gio::Cancellable>, |_| {});
         } else {
-            *p.pending.borrow_mut() = Some(js);
+            // The pending script has not run yet: the new one replaces it.
+            let all = p.libs.get().union(libs);
+            p.libs.set(all);
+            *p.pending.borrow_mut() = Some(all.inject_js() + js);
         }
     }
 

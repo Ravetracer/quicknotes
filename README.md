@@ -28,6 +28,12 @@ after a restart.
   for PHP variables
 - **Checklists** (`- [ ]` / `- [x]`): check items with a click in the editor or the Markdown preview,
   Ctrl+Enter, list continuation on Enter, progress in the status bar
+- **Formatting toolbar** for Markdown documents and presentations: headings, bold, italic,
+  strikethrough, code, text colours, lists, checklists, quotes, code blocks, rules, tables,
+  links, images, formulas and tunes
+- **Math formulas** in LaTeX (`$…$`, `$$…$$`, ```` ```math ````), typeset with KaTeX, and
+  **music notation** in ABC (```` ```abc ````), engraved with abcjs – in the preview,
+  presentations and exports, fully offline
 - **Markdown tables** like Obsidian's *Advanced Tables*: automatic formatting, Tab/Enter
   navigation, insert/delete/move rows and columns, sorting, column alignment
 - **Kanban boards**: freely defined columns (title, colour, WIP limit) and swimlanes, drag & drop
@@ -139,7 +145,10 @@ of failing. Build details: `packaging/appimage/`.
 
 ## Previews and export
 
-- **Markdown** is rendered with pulldown-cmark (tables, task lists, footnotes, strikethrough).
+- **Markdown** is rendered with pulldown-cmark (tables, task lists, footnotes, strikethrough,
+  math). Formulas are typeset with KaTeX and ABC tunes engraved with abcjs; both are bundled
+  and only loaded into pages that use them. Exported HTML files contain them as well, so they
+  work offline.
 - **reStructuredText** is rendered with [docutils-core](https://crates.io/crates/docutils-core),
   a Rust port of docutils – no Python needed. `include` and images resolve relative to the file.
   Problems from level ERROR upwards are shown in the preview.
@@ -210,6 +219,16 @@ Emmet support uses the official [Emmet](https://github.com/emmetio/emmet) engine
 `emmet` 2.4.11, © Sergey Chikuyonok, MIT License), bundled in `data/emmet/` and run in
 JavaScriptCore. It is the engine behind [Emmet for Sublime Text](https://github.com/sergeche/emmet-sublime)
 and the other Emmet editor plugins. Thanks to Sergey Chikuyonok and the Emmet contributors.
+
+### KaTeX
+
+Math formulas are typeset with [KaTeX](https://katex.org) (npm package `katex` 0.19.1,
+© Khan Academy and other contributors, MIT License), bundled in `data/katex/` with its fonts.
+
+### abcjs
+
+ABC music notation is engraved with [abcjs](https://github.com/paulrosen/abcjs) (npm package
+`abcjs` 6.7.2, © Paul Rosen and Gregory Dyke, MIT License), bundled in `data/abcjs/`.
 
 ### Colour themes
 

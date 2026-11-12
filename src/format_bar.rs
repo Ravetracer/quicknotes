@@ -32,7 +32,17 @@ pub fn build() -> gtk::Box {
         .build();
     heading.add_css_class("flat");
 
-    let groups: [Vec<gtk::Widget>; 4] = [
+    let formulas = gio::Menu::new();
+    formulas.append(Some(t!("Inline Formula")), Some("win.md-math"));
+    formulas.append(Some(t!("Formula Block")), Some("win.md-math-block"));
+    let math = gtk::MenuButton::builder()
+        .icon_name(icons::format_icon("math"))
+        .menu_model(&formulas)
+        .tooltip_text(t!("Math Formula (LaTeX)"))
+        .build();
+    math.add_css_class("flat");
+
+    let groups: [Vec<gtk::Widget>; 5] = [
         vec![
             heading.upcast(),
             icon("bold", t!("Bold (Ctrl+B)"), "win.md-bold"),
@@ -52,6 +62,7 @@ pub fn build() -> gtk::Box {
             icon("rule", t!("Horizontal Rule"), "win.md-rule"),
             icon("table", t!("Insert Table"), "win.table-insert"),
         ],
+        vec![math.upcast(), icon("music", t!("Music Notation (ABC)"), "win.md-music")],
         vec![
             icon("link", t!("Link (Ctrl+K)"), "win.md-link"),
             icon("image", t!("Image"), "win.md-image"),

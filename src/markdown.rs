@@ -6,7 +6,8 @@ const OPTIONS: Options = Options::ENABLE_TABLES
     .union(Options::ENABLE_STRIKETHROUGH)
     .union(Options::ENABLE_TASKLISTS)
     .union(Options::ENABLE_FOOTNOTES)
-    .union(Options::ENABLE_HEADING_ATTRIBUTES);
+    .union(Options::ENABLE_HEADING_ATTRIBUTES)
+    .union(Options::ENABLE_MATH);
 
 pub fn to_html(markdown: &str) -> String {
     let mut out = String::with_capacity(markdown.len() * 3 / 2);

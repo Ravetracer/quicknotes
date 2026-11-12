@@ -1,6 +1,6 @@
 # QuickNotes-Hilfe {#top}
 
-**Inhalt:** [Notizen & Tabs](#notes) · [Checklisten](#checklists) · [Tabellen](#tables) · [Formatierung](#formatting) · [Kanban](#kanban) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
+**Inhalt:** [Notizen & Tabs](#notes) · [Checklisten](#checklists) · [Tabellen](#tables) · [Formatierung](#formatting) · [Formeln & Noten](#notation) · [Kanban](#kanban) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
 [Vorschau & Export](#previews) · [Präsentationen](#slides) · [Werkzeuge](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Sicherheit](#security) · [Sicherung](#backup) ·
 [Tastenkürzel](#shortcuts)
@@ -93,8 +93,45 @@ schreibt das Markdown für dich, die Syntax musst du dir nicht merken:
 - Aufzählungen, nummerierte Listen, Checklisten und Zitate für die markierten Zeilen (nochmal
   zum Entfernen), Codeblöcke, Trennlinien und Tabellen.
 - **Link** (Strg+K) und **Bild**: Die Auswahl wird zum Text, eine markierte URL zum Ziel.
+- **∑ Formel** (im Text oder als Block) und **♫ Notenschrift** (eine ABC-Melodie), siehe unten.
 
 *Hauptmenü → Formatierungsleiste* blendet die Leiste aus; die Tastenkürzel funktionieren weiter.
+
+## Formeln & Noten {#notation}
+
+Markdown-Dokumente und Präsentationen können **LaTeX-Formeln** und **Notenschrift** enthalten.
+Beides erscheint in der Vorschau, in Präsentationen und im HTML-/PDF-Export (ohne Internet).
+
+**Formeln** verwenden die LaTeX-Mathe-Syntax (gesetzt mit KaTeX):
+
+- `$E = mc^2$` – eine Formel im Text. Ein `$` mit Leerzeichen dahinter öffnet keine Formel,
+  eins mit Leerzeichen davor schließt keine – Preise wie $5 oder $10 bleiben also, wie sie sind.
+- `$$ \int_0^1 x^2\,dx $$` – eine eigenständige, zentrierte Formel.
+- Ein Codeblock mit der Sprache `math` – praktisch für längere Formeln über mehrere Zeilen:
+
+      ```math
+      \begin{pmatrix} a & b \\ c & d \end{pmatrix}
+      ```
+
+Brüche `\frac{a}{b}`, Wurzeln `\sqrt{x}`, Summen `\sum_{k=1}^n`, Integrale, Matrizen,
+griechische Buchstaben `\alpha`, … werden unterstützt; ein Fehler zeigt die Formel rot an, statt
+die Seite zu stören.
+
+**Noten** werden in [ABC-Notation](https://abcnotation.com) in einem Codeblock mit der Sprache
+`abc` geschrieben (gesetzt mit abcjs):
+
+      ```abc
+      X:1
+      T:Tonleiter
+      M:4/4
+      L:1/4
+      K:D
+      DEFG|ABcd|
+      ```
+
+Die Kopfzeilen legen Nummer (`X`), Titel (`T`), Takt (`M`), Standard-Notenlänge (`L`) und
+Tonart (`K`, immer zuletzt) fest; danach folgt die Melodie: `C D E` sind Noten, `c d e` eine
+Oktave höher, `C2` doppelt so lang, `|` ein Taktstrich, `^` / `_` Kreuz / B, `z` eine Pause.
 
 ## Kanban-Boards {#kanban}
 

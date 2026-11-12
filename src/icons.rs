@@ -29,6 +29,8 @@ const FORMAT_ICONS: &[(&str, &[u8])] = &[
     ("heading", include_bytes!("../data/icons/format/qn-format-heading-symbolic.svg")),
     ("image", include_bytes!("../data/icons/format/qn-format-image-symbolic.svg")),
     ("italic", include_bytes!("../data/icons/format/qn-format-italic-symbolic.svg")),
+    ("math", include_bytes!("../data/icons/format/qn-format-math-symbolic.svg")),
+    ("music", include_bytes!("../data/icons/format/qn-format-music-symbolic.svg")),
     ("link", include_bytes!("../data/icons/format/qn-format-link-symbolic.svg")),
     ("numbered-list", include_bytes!("../data/icons/format/qn-format-numbered-list-symbolic.svg")),
     ("quote", include_bytes!("../data/icons/format/qn-format-quote-symbolic.svg")),

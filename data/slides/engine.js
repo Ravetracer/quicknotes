@@ -47,6 +47,7 @@
     var t = document.createElement('template');
     t.innerHTML = deck.slides[i].html.trim();
     var sec = t.content.firstElementChild;
+    if (window.qnRender) qnRender(sec);
     sec.qnSteps = prepareSteps(sec);
     return sec;
   }

@@ -1,6 +1,6 @@
 # QuickNotes Help {#top}
 
-**Contents:** [Notes & tabs](#notes) · [Checklists](#checklists) · [Tables](#tables) · [Formatting](#formatting) · [Kanban](#kanban) · [Calculations](#calc) · [Templates](#templates) ·
+**Contents:** [Notes & tabs](#notes) · [Checklists](#checklists) · [Tables](#tables) · [Formatting](#formatting) · [Math & music](#notation) · [Kanban](#kanban) · [Calculations](#calc) · [Templates](#templates) ·
 [Previews & export](#previews) · [Presentations](#slides) · [Tools](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Security](#security) · [Backup](#backup) ·
 [Shortcuts](#shortcuts)
@@ -90,8 +90,44 @@ the Markdown for you, so you don't need to remember the syntax:
 - Bulleted and numbered lists, checklists and quotes for the selected lines (again to remove),
   code blocks, horizontal rules and tables.
 - **Link** (Ctrl+K) and **image**: the selection becomes the text, a selected URL the target.
+- **∑ Formula** (inline or as a block) and **♫ Music notation** (an ABC tune), see below.
 
 *Main menu → Formatting Toolbar* hides the toolbar; the shortcuts keep working.
+
+## Math & music {#notation}
+
+Markdown documents and presentations can contain **LaTeX formulas** and **music notation**.
+Both are shown in the preview, in presentations and in HTML/PDF exports (no internet needed).
+
+**Formulas** use LaTeX math syntax (typeset with KaTeX):
+
+- `$E = mc^2$` – a formula in the text. A `$` with a space after it opens no formula and one
+  with a space before it closes none, so prices like $5 or $10 stay as they are.
+- `$$ \int_0^1 x^2\,dx $$` – a formula on its own, centred.
+- A code block with the language `math` – handy for longer formulas over several lines:
+
+      ```math
+      \begin{pmatrix} a & b \\ c & d \end{pmatrix}
+      ```
+
+Fractions `\frac{a}{b}`, roots `\sqrt{x}`, sums `\sum_{k=1}^n`, integrals, matrices, Greek
+letters `\alpha`, … are supported; a mistake shows the formula in red instead of breaking the page.
+
+**Music** is written in [ABC notation](https://abcnotation.com) in a code block with the
+language `abc` (engraved with abcjs):
+
+      ```abc
+      X:1
+      T:Scale
+      M:4/4
+      L:1/4
+      K:D
+      DEFG|ABcd|
+      ```
+
+The header lines set index (`X`), title (`T`), metre (`M`), default note length (`L`) and key
+(`K`, always last); then the melody follows: `C D E` are notes, `c d e` an octave higher,
+`C2` twice as long, `|` a bar line, `^` / `_` sharp / flat, `z` a rest.
 
 ## Kanban boards {#kanban}
 
