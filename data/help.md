@@ -17,6 +17,8 @@ Every tab is either a **note** or an **opened file**.
   (Ctrl+Shift+T).
 - The tab title is the first line of a note. *Rename Tab* (F2) sets a fixed title.
 - Syntax highlighting is chosen automatically and can be changed in the status bar.
+- The status bar counts words, characters (without line breaks) and paragraphs of the tab, or
+  of the selection when text is selected.
 - Tabs are tinted by type: code, documents (Markdown, reStructuredText), presentations,
   calculations and images each have their own colour (adjustable in the preferences); plain
   notes keep the default look.

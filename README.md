@@ -27,6 +27,7 @@ after a restart.
   and PHP arrays (MongoDB PHP library / Doctrine) ↔ Extended JSON / mongosh, with placeholders
   for PHP variables
 - Find & replace (case, whole word, regex)
+- Word, character and paragraph count in the status bar (of the selection, if any)
 - Drag & drop: files open in new tabs, dropped text (e.g. from a browser) is inserted into the note
 - 165 colour themes (Dracula, Dayle Rees colour schemes, VSCode Ultimate Themes Pack) besides the
   default dark and light theme; applied instantly to editor, window and preview

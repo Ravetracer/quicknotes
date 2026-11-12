@@ -18,6 +18,8 @@ Jeder Tab ist entweder eine **Notiz** oder eine **geöffnete Datei**.
   *Geschlossenen Tab wiederherstellen* (Strg+Umschalt+T) zurückholen.
 - Der Tab-Titel ist die erste Zeile einer Notiz. *Tab umbenennen* (F2) legt einen festen Titel fest.
 - Die Syntaxhervorhebung wird automatisch gewählt und kann in der Statusleiste geändert werden.
+- Die Statusleiste zählt Wörter, Zeichen (ohne Zeilenumbrüche) und Absätze des Tabs bzw. der
+  Auswahl, wenn Text markiert ist.
 - Tabs sind je nach Art eingefärbt: Code, Dokumente (Markdown, reStructuredText),
   Präsentationen, Berechnungen und Bilder haben jeweils eine eigene Farbe; einfache Notizen
   behalten das normale Aussehen. Die Farben lassen sich in den Einstellungen anpassen.

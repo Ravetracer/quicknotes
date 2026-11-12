@@ -9,7 +9,7 @@ use crate::presenter::{self, Presentation};
 use crate::prefs::{self, MAX_FONT, MIN_FONT};
 use crate::tab_list::TabList;
 use crate::themes::{self, Theme};
-use crate::{format, html, langs, slides, APP_ID};
+use crate::{format, html, langs, slides, stats, APP_ID};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use sourceview5::prelude::*;
@@ -81,6 +81,9 @@ pub struct Window {
     editor_css: gtk::CssProvider,
     status_info: gtk::Label,
     status_pos: gtk::Label,
+    /// Words, characters and paragraphs of the document or selection.
+    status_counts: gtk::Label,
+    counts_pending: Cell<bool>,
     zoom_btn: gtk::Button,
     lang_drop: gtk::DropDown,
     lang_ids: Vec<Option<String>>,
@@ -234,6 +237,7 @@ impl Window {
             .ellipsize(gtk::pango::EllipsizeMode::Middle)
             .build();
         let status_pos = gtk::Label::new(None);
+        let status_counts = gtk::Label::new(None);
         let zoom_btn = gtk::Button::builder()
             .label("12 pt")
             .tooltip_text(t!("Font size – Ctrl+wheel or Ctrl+/−, click to reset"))
@@ -271,6 +275,7 @@ impl Window {
         enter_picks_first_match(&lang_drop);
 
         status.append(&status_info);
+        status.append(&status_counts);
         status.append(&status_pos);
         status.append(&zoom_box);
         status.append(&lang_drop);
@@ -362,6 +367,8 @@ impl Window {
             editor_css,
             status_info,
             status_pos,
+            status_counts,
+            counts_pending: Cell::new(false),
             zoom_btn,
             lang_drop,
             lang_ids,
@@ -956,6 +963,9 @@ impl Window {
                 if let Some(this) = weak.upgrade() {
                     if this.is_current(&tab_id) {
                         this.update_position();
+                        if prop == "has-selection" || this.current_text().is_some_and(|t| t.buffer.has_selection()) {
+                            this.schedule_counts();
+                        }
                     }
                 }
             });
@@ -2453,7 +2463,41 @@ impl Window {
         }));
     }
 
+    /// Recounts words etc. shortly after the last change (debounced).
+    fn schedule_counts(&self) {
+        if self.counts_pending.replace(true) {
+            return;
+        }
+        glib::timeout_add_local_once(Duration::from_millis(150), || {
+            WINDOW.with(|w| {
+                if let Some(this) = w.borrow().as_ref() {
+                    this.counts_pending.set(false);
+                    this.update_counts();
+                }
+            });
+        });
+    }
+
+    fn update_counts(&self) {
+        let Some(t) = self.current_text().filter(|t| !t.large.get()) else {
+            self.status_counts.set_text("");
+            return;
+        };
+        let buf = &t.buffer;
+        let (selected, text) = match buf.selection_bounds() {
+            Some((s, e)) => (true, buf.text(&s, &e, true)),
+            None => (false, buf.text(&buf.start_iter(), &buf.end_iter(), true)),
+        };
+        let c = stats::count(&text);
+        let mut label = t!("{} words  ·  {} characters  ·  {} paragraphs", c.words, c.chars, c.paragraphs);
+        if selected {
+            label = t!("Selection: {}", label);
+        }
+        self.status_counts.set_text(&label);
+    }
+
     fn update_status(&self) {
+        self.schedule_counts();
         match self.current() {
             Some(Tab::Text(t)) => {
                 let mut info = vec![match t.path.borrow().as_ref() {
@@ -2484,9 +2528,6 @@ impl Window {
         let iter = buf.iter_at_mark(&buf.get_insert());
         let mut text = t!("Ln {}, Col {}", iter.line() + 1, iter.line_offset() + 1);
         self.set_enabled("gc", buf.has_selection());
-        if let Some((s, e)) = buf.selection_bounds() {
-            text.push_str(&t!("  ({} selected)", e.offset() - s.offset()));
-        }
         if t.preview_kind() == Some(PreviewKind::Slides) {
             let lines = slides::slide_lines(&t.text());
             if !lines.is_empty() {

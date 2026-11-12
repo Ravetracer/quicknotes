@@ -21,6 +21,7 @@ mod presenter;
 mod rst;
 mod slides;
 mod slides_assist;
+mod stats;
 mod store;
 mod tab_list;
 mod themes;
