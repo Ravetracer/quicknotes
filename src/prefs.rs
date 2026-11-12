@@ -290,7 +290,7 @@ fn import_export_page(dialog: &adw::PreferencesDialog, handler: &Rc<dyn Handler>
 
     let backup = adw::PreferencesGroup::builder()
         .title(t!("Backup"))
-        .description(t!("All tabs, notes and settings in one .tar.gz file."))
+        .description(t!("All tabs, notes and settings in one file, optionally encrypted with a password."))
         .build();
     let export = button_row(t!("Back Up Notes…"), t!("Export all notes into a backup file"), "document-save-as-symbolic");
     let h = handler.clone();

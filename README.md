@@ -50,7 +50,8 @@ after a restart.
   Roman numerals, Morse code, phone keypad — results are inserted below the selection
 - User interface in English or German (*Preferences*, applies after a restart)
 - Built-in help (F1) explaining all features, especially calculations and templates
-- Backup of all notes into a single `.tar.gz` and restore (add to or replace the current tabs)
+- Backup of all notes into a single file and restore (add to or replace the current tabs), optionally
+  encrypted with a password (Argon2id + XChaCha20-Poly1305)
 - Editor font selectable in the preferences (e.g. fonts with ligatures like Fira Code); ligatures can be switched off
 
 ## Keyboard shortcuts

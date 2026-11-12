@@ -490,10 +490,17 @@ Auswahl ein. Die Optionen werden für das nächste Mal gespeichert.
 
 ## Sicherung {#backup}
 
-*Notizen sichern…* unter *Einstellungen → Import/Export* schreibt alle Tabs, Notizen und Einstellungen in eine einzige
-`.tar.gz`-Datei. *Sicherung wiederherstellen…* **fügt** die Tabs einer Sicherung entweder zu den
-aktuellen **hinzu** oder **ersetzt** alles (der aktuelle Stand wird vorher in einer
-automatischen Sicherung abgelegt).
+*Notizen sichern…* unter *Einstellungen → Import/Export* schreibt alle Tabs, Notizen und
+Einstellungen in eine einzige Datei. *Sicherung wiederherstellen…* **fügt** die Tabs einer
+Sicherung entweder zu den aktuellen **hinzu** oder **ersetzt** alles (der aktuelle Stand wird
+vorher in einer automatischen Sicherung abgelegt).
+
+- **Verschlüsselte Sicherungen:** Beim Sichern ein Passwort eingeben (mindestens 8 Zeichen,
+  zweimal), um die Sicherung zu verschlüsseln (`.qnbackup`), oder *Ohne Passwort* für eine
+  normale `.tar.gz`-Datei wählen. Beim Wiederherstellen fragt QuickNotes nach dem Passwort. Der
+  Schlüssel wird mit Argon2id abgeleitet, die Daten werden mit XChaCha20-Poly1305 verschlüsselt
+  und gegen Veränderung geschützt – ohne Passwort ist die Sicherung nicht lesbar, ein
+  vergessenes Passwort lässt sich nicht wiederherstellen.
 
 ## Tastenkürzel {#shortcuts}
 

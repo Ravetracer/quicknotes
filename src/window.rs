@@ -9,7 +9,7 @@ use crate::presenter::{self, Presentation};
 use crate::prefs::{self, MAX_FONT, MIN_FONT};
 use crate::tab_list::TabList;
 use crate::themes::{self, Theme};
-use crate::{checklist, format, html, kanban, langs, slides, stats, table, APP_ID};
+use crate::{checklist, crypto, format, html, kanban, langs, slides, stats, table, APP_ID};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use sourceview5::prelude::*;
@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
+use zeroize::Zeroizing;
 
 const BASE_FONT: f64 = 12.0;
 
@@ -1375,29 +1376,141 @@ impl Window {
         (session, notes)
     }
 
+    /// Asks for a password in a dialog (twice when `confirm`).
+    async fn ask_password(&self, prompt: PasswordPrompt<'_>) -> PasswordAnswer {
+        let dialog = adw::AlertDialog::new(Some(prompt.heading), Some(prompt.body));
+        let fields = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        let entry = |placeholder: &str| {
+            gtk::PasswordEntry::builder()
+                .show_peek_icon(true)
+                .placeholder_text(placeholder)
+                .activates_default(true)
+                .build()
+        };
+        let first = entry(t!("Password"));
+        fields.append(&first);
+        let second = prompt.confirm.then(|| entry(t!("Repeat password")));
+        if let Some(e) = &second {
+            fields.append(e);
+        }
+        let hint = gtk::Label::builder().xalign(0.0).wrap(true).build();
+        hint.add_css_class("caption");
+        if let Some(error) = prompt.error {
+            hint.set_text(error);
+            hint.add_css_class("error");
+        }
+        fields.append(&hint);
+        dialog.set_extra_child(Some(&fields));
+        dialog.add_response("cancel", t!("_Cancel"));
+        if let Some(skip) = prompt.skip {
+            dialog.add_response("skip", skip);
+        }
+        dialog.add_response("ok", prompt.ok);
+        dialog.set_response_appearance("ok", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("ok"));
+        dialog.set_close_response("cancel");
+
+        let update = {
+            let (dialog, first, second, hint) = (dialog.clone(), first.clone(), second.clone(), hint.clone());
+            let has_error = prompt.error.is_some();
+            move || {
+                let text = first.text();
+                let (ok, message) = match &second {
+                    None => (!text.is_empty(), None),
+                    Some(_) if text.chars().count() < MIN_PASSWORD => {
+                        (false, Some(t!("At least {} characters", MIN_PASSWORD)))
+                    }
+                    Some(s) if s.text() != text => (false, Some(t!("The passwords differ").to_owned())),
+                    Some(_) => (true, Some(String::new())),
+                };
+                dialog.set_response_enabled("ok", ok);
+                if let Some(m) = message {
+                    hint.remove_css_class("error");
+                    hint.set_text(&m);
+                } else if has_error && !text.is_empty() {
+                    hint.set_text("");
+                }
+            }
+        };
+        update();
+        let u = update.clone();
+        first.connect_changed(move |_| u());
+        if let Some(s) = &second {
+            let u = update.clone();
+            s.connect_changed(move |_| u());
+        }
+        dialog.set_focus(Some(&first));
+        let response = dialog.choose_future(&self.win).await;
+        let answer = match response.as_str() {
+            "ok" => PasswordAnswer::Password(Zeroizing::new(first.text().to_string())),
+            "skip" => PasswordAnswer::Skip,
+            _ => PasswordAnswer::Cancel,
+        };
+        first.set_text("");
+        if let Some(s) = &second {
+            s.set_text("");
+        }
+        answer
+    }
+
+    /// The app's data key while the app password is on.
+    fn app_key(&self) -> Option<crypto::Key> {
+        None
+    }
+
     fn backup(self: &Rc<Self>) {
         self.persist_all();
-        let date = local_time("%Y-%m-%d").unwrap_or_else(|| "backup".into());
-        let dialog = gtk::FileDialog::builder()
-            .title(t!("Back Up Notes"))
-            .modal(true)
-            .initial_name(format!("quicknotes-backup-{date}.tar.gz"))
-            .build();
-        if let Some(home) = dirs::home_dir() {
-            dialog.set_initial_folder(Some(&gio::File::for_path(home)));
-        }
         let this = self.clone();
         glib::spawn_future_local(async move {
+            let answer = this
+                .ask_password(PasswordPrompt {
+                    heading: t!("Back Up Notes"),
+                    body: t!("Encrypt the backup with a password? It can then only be restored with this password – a forgotten password cannot be recovered."),
+                    confirm: true,
+                    ok: t!("_Encrypt"),
+                    skip: Some(t!("_Without Password")),
+                    error: None,
+                })
+                .await;
+            let password = match answer {
+                PasswordAnswer::Cancel => return,
+                PasswordAnswer::Skip => None,
+                PasswordAnswer::Password(p) => Some(p),
+            };
+            let date = local_time("%Y-%m-%d").unwrap_or_else(|| "backup".into());
+            let ext = if password.is_some() { "qnbackup" } else { "tar.gz" };
+            let dialog = gtk::FileDialog::builder()
+                .title(t!("Back Up Notes"))
+                .modal(true)
+                .initial_name(format!("quicknotes-backup-{date}.{ext}"))
+                .build();
+            if let Some(home) = dirs::home_dir() {
+                dialog.set_initial_folder(Some(&gio::File::for_path(home)));
+            }
             let Ok(file) = dialog.save_future(Some(&this.win)).await else { return };
             let Some(path) = file.path() else { return };
             let (session, notes) = this.backup_contents();
             let count = session.tabs.len();
             let created = iso_now();
             let target = path.clone();
-            let result = gio::spawn_blocking(move || crate::backup::write(&target, &created, &session, &notes))
-                .await
-                .unwrap_or_else(|_| Err("backup failed".into()));
+            let encrypted = password.is_some();
+            let result = gio::spawn_blocking(move || {
+                let seal = match password {
+                    Some(pw) => {
+                        let kdf = crypto::Kdf::new();
+                        let key = kdf.derive(&pw).map_err(|e| e.to_string())?;
+                        Some(crate::backup::Seal::Password { key, kdf })
+                    }
+                    None => None,
+                };
+                crate::backup::write(&target, &created, &session, &notes, seal.as_ref())
+            })
+            .await
+            .unwrap_or_else(|_| Err("backup failed".into()));
             match result {
+                Ok(()) if encrypted => {
+                    this.toast(&t!("Encrypted backup of {} saved to {}", tabs_count(count), tilde(&path)))
+                }
                 Ok(()) => this.toast(&t!("Backup of {} saved to {}", tabs_count(count), tilde(&path))),
                 Err(e) => this.toast(&t!("Backup failed: {}", e)),
             }
@@ -1409,6 +1522,7 @@ impl Window {
         filter.set_name(Some(t!("QuickNotes backups")));
         filter.add_pattern("*.tar.gz");
         filter.add_pattern("*.tgz");
+        filter.add_pattern("*.qnbackup");
         let filters = gio::ListStore::new::<gtk::FileFilter>();
         filters.append(&filter);
         let dialog = gtk::FileDialog::builder()
@@ -1421,16 +1535,7 @@ impl Window {
         glib::spawn_future_local(async move {
             let Ok(file) = dialog.open_future(Some(&this.win)).await else { return };
             let Some(path) = file.path() else { return };
-            let result = gio::spawn_blocking(move || crate::backup::read(&path))
-                .await
-                .unwrap_or_else(|_| Err("cannot read the backup".into()));
-            let backup = match result {
-                Ok(b) => b,
-                Err(e) => {
-                    this.toast(&t!("Restore failed: {}", e));
-                    return;
-                }
-            };
+            let Some(backup) = this.read_backup(path).await else { return };
             let created = backup.manifest.created.replace('T', " ");
             let created = created.get(..16).unwrap_or(&created);
             let dialog = adw::AlertDialog::new(
@@ -1452,6 +1557,46 @@ impl Window {
                 _ => {}
             }
         });
+    }
+
+    /// Reads a backup, asking for the password of encrypted ones.
+    async fn read_backup(&self, path: PathBuf) -> Option<crate::backup::Backup> {
+        use crate::backup::ReadError;
+        let app_key = self.app_key();
+        let mut password: Option<Zeroizing<String>> = None;
+        loop {
+            let (p, pw, key) = (path.clone(), password.clone(), app_key.clone());
+            let result = gio::spawn_blocking(move || crate::backup::read(&p, pw.as_deref().map(String::as_str), key.as_ref()))
+                .await
+                .unwrap_or_else(|_| Err(ReadError::Failed("cannot read the backup".into())));
+            let error = match result {
+                Ok(b) => return Some(b),
+                Err(ReadError::NeedsPassword) => None,
+                Err(ReadError::WrongPassword) if password.is_some() => Some(t!("Wrong password – please try again")),
+                Err(ReadError::WrongPassword) => {
+                    self.toast(t!("This automatic backup was encrypted with an earlier app password"));
+                    return None;
+                }
+                Err(e) => {
+                    self.toast(&t!("Restore failed: {}", e));
+                    return None;
+                }
+            };
+            let answer = self
+                .ask_password(PasswordPrompt {
+                    heading: t!("Encrypted Backup"),
+                    body: t!("Enter the password of this backup."),
+                    confirm: false,
+                    ok: t!("_Decrypt"),
+                    skip: None,
+                    error,
+                })
+                .await;
+            match answer {
+                PasswordAnswer::Password(p) => password = Some(p),
+                _ => return None,
+            }
+        }
     }
 
     /// Restores the tabs of a backup. Returns (restored, missing files).
@@ -1515,11 +1660,14 @@ impl Window {
         self.persist_all();
         let dir = store::data_dir().join("backups");
         let stamp = local_time("%Y-%m-%d_%H-%M-%S").unwrap_or_else(store::new_id);
-        let safety = dir.join(format!("before-restore-{stamp}.tar.gz"));
+        // Encrypted with the app key while the app password is on.
+        let seal = self.app_key().map(crate::backup::Seal::AppKey);
+        let ext = if seal.is_some() { "qnbackup" } else { "tar.gz" };
+        let safety = dir.join(format!("before-restore-{stamp}.{ext}"));
         let (session, notes) = self.backup_contents();
         if let Err(e) = std::fs::create_dir_all(&dir)
             .map_err(|e| e.to_string())
-            .and_then(|_| crate::backup::write(&safety, &iso_now(), &session, &notes))
+            .and_then(|_| crate::backup::write(&safety, &iso_now(), &session, &notes, seal.as_ref()))
         {
             self.toast(&t!("Restore cancelled, the current notes could not be saved: {}", e));
             return;
@@ -3162,6 +3310,27 @@ impl prefs::Handler for PrefsBridge {
             launcher.launch(Some(&w.win), None::<&gio::Cancellable>, |_| {});
         });
     }
+}
+
+/// Minimum length of new passwords.
+const MIN_PASSWORD: usize = 8;
+
+/// A password dialog: texts and whether the password is entered twice.
+struct PasswordPrompt<'a> {
+    heading: &'a str,
+    body: &'a str,
+    confirm: bool,
+    ok: &'a str,
+    /// Extra response to go on without a password.
+    skip: Option<&'a str>,
+    /// Shown below the field (e.g. after a wrong password).
+    error: Option<&'a str>,
+}
+
+enum PasswordAnswer {
+    Cancel,
+    Skip,
+    Password(Zeroizing<String>),
 }
 
 /// What the main menu depends on.

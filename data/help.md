@@ -469,9 +469,15 @@ selected with the mouse. The options are remembered for the next time.
 
 ## Backup {#backup}
 
-*Back Up Notes…* in *Preferences → Import/Export* writes all tabs, notes and settings into one `.tar.gz`
+*Back Up Notes…* in *Preferences → Import/Export* writes all tabs, notes and settings into one
 file. *Restore Backup…* either **adds** the tabs of a backup to the current ones or
 **replaces** everything (the current state is saved to an automatic backup first).
+
+- **Encrypted backups:** when backing up, enter a password (at least 8 characters, twice) to
+  encrypt the backup (`.qnbackup`), or choose *Without Password* for a plain `.tar.gz`. Restoring
+  an encrypted backup asks for its password. The key is derived with Argon2id, the data is
+  encrypted and authenticated with XChaCha20-Poly1305 – without the password the backup cannot
+  be read, and a forgotten password cannot be recovered.
 
 ## Keyboard shortcuts {#shortcuts}
 

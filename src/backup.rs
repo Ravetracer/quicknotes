@@ -7,7 +7,12 @@
 //!
 //! Archives are only read into memory, never extracted to disk, so entry
 //! names cannot write anywhere. Unknown entries are ignored.
+//!
+//! Encrypted backups (`.qnbackup`): `QNBK` | header length (u32 LE) | header
+//! (JSON: Argon2id settings, or none when sealed with the app's data key) |
+//! the `.tar.gz` sealed with [`crate::crypto`].
 
+use crate::crypto::{self, Kdf, Key};
 use crate::store::Session;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
@@ -15,10 +20,51 @@ use flate2::Compression;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufWriter, Read, Write};
+use std::io::{Read, Write};
 use std::path::Path;
 
 const FORMAT: u32 = 1;
+const SEALED_MAGIC: &[u8; 4] = b"QNBK";
+const SEALED_AAD: &[u8] = b"quicknotes-backup";
+
+/// How a backup file is encrypted.
+pub enum Seal {
+    /// With a password chosen for the backup (key derived with `kdf`).
+    Password { key: Key, kdf: Kdf },
+    /// With the app's data key (automatic backups while the app password is on).
+    AppKey(Key),
+}
+
+#[derive(Serialize, Deserialize)]
+struct SealHeader {
+    format: u32,
+    /// `None`: sealed with the app's data key.
+    kdf: Option<Kdf>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReadError {
+    /// Encrypted with a password; ask for it.
+    NeedsPassword,
+    WrongPassword,
+    Failed(String),
+}
+
+impl std::fmt::Display for ReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReadError::NeedsPassword => write!(f, "{}", t!("The backup is encrypted")),
+            ReadError::WrongPassword => write!(f, "{}", t!("Wrong password")),
+            ReadError::Failed(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl From<String> for ReadError {
+    fn from(e: String) -> Self {
+        ReadError::Failed(e)
+    }
+}
 /// Limits against corrupt or hostile archives (a backup is text only).
 const MAX_ENTRY: u64 = 256 * 1024 * 1024;
 const MAX_TOTAL: u64 = 1024 * 1024 * 1024;
@@ -40,11 +86,40 @@ pub struct Backup {
     pub notes: HashMap<String, String>,
 }
 
-/// Writes a backup archive to `path`.
-pub fn write(path: &Path, created: &str, session: &Session, notes: &[(String, String)]) -> Result<(), String> {
+/// Writes a backup to `path`, encrypted when `seal` is given.
+pub fn write(
+    path: &Path,
+    created: &str,
+    session: &Session,
+    notes: &[(String, String)],
+    seal: Option<&Seal>,
+) -> Result<(), String> {
     let err = |e: std::io::Error| format!("{}: {e}", path.display());
-    let file = File::create(path).map_err(err)?;
-    let mut tar = tar::Builder::new(GzEncoder::new(BufWriter::new(file), Compression::default()));
+    let archive = archive(created, session, notes).map_err(err)?;
+    let data = match seal {
+        None => archive,
+        Some(seal) => {
+            let (key, kdf) = match seal {
+                Seal::Password { key, kdf } => (key, Some(kdf.clone())),
+                Seal::AppKey(key) => (key, None),
+            };
+            let header = serde_json::to_vec(&SealHeader { format: FORMAT, kdf }).map_err(|e| e.to_string())?;
+            let mut out = SEALED_MAGIC.to_vec();
+            out.extend_from_slice(&(header.len() as u32).to_le_bytes());
+            out.extend_from_slice(&header);
+            out.extend_from_slice(&key.seal(&archive, SEALED_AAD));
+            out
+        }
+    };
+    let mut file = File::create(path).map_err(err)?;
+    file.write_all(&data).map_err(err)?;
+    file.flush().map_err(err)?;
+    Ok(())
+}
+
+/// The `.tar.gz` archive in memory.
+fn archive(created: &str, session: &Session, notes: &[(String, String)]) -> std::io::Result<Vec<u8>> {
+    let mut tar = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
     let mut add = |name: &str, data: &[u8]| -> std::io::Result<()> {
         let mut header = tar::Header::new_gnu();
         header.set_size(data.len() as u64);
@@ -58,23 +133,56 @@ pub fn write(path: &Path, created: &str, session: &Session, notes: &[(String, St
         app_version: env!("CARGO_PKG_VERSION").into(),
         created: created.into(),
     };
-    add("manifest.json", json(&manifest).as_bytes()).map_err(err)?;
-    add("session.json", json(session).as_bytes()).map_err(err)?;
+    add("manifest.json", json(&manifest).as_bytes())?;
+    add("session.json", json(session).as_bytes())?;
     for (id, content) in notes {
         if valid_id(id) {
-            add(&format!("notes/{id}.txt"), content.as_bytes()).map_err(err)?;
+            add(&format!("notes/{id}.txt"), content.as_bytes())?;
         }
     }
-    let gz = tar.into_inner().map_err(err)?;
-    let mut out = gz.finish().map_err(err)?;
-    out.flush().map_err(err)?;
-    Ok(())
+    tar.into_inner()?.finish()
 }
 
-/// Reads and validates a backup archive.
-pub fn read(path: &Path) -> Result<Backup, String> {
-    let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut archive = tar::Archive::new(GzDecoder::new(file));
+/// The file is an encrypted backup.
+#[cfg(test)]
+fn is_sealed(path: &Path) -> bool {
+    let mut magic = [0u8; 4];
+    File::open(path).and_then(|mut f| f.read_exact(&mut magic)).is_ok() && &magic == SEALED_MAGIC
+}
+
+/// Reads and validates a backup. Encrypted ones need `password` (or
+/// `app_key` for automatic backups); deriving the key is slow, so run this
+/// off the main thread.
+pub fn read(path: &Path, password: Option<&str>, app_key: Option<&Key>) -> Result<Backup, ReadError> {
+    let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if !data.starts_with(SEALED_MAGIC) {
+        return parse(&data);
+    }
+    let damaged = || ReadError::Failed(t!("The encrypted backup is damaged").into());
+    let len = data.get(4..8).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize).ok_or_else(damaged)?;
+    let header: SealHeader =
+        data.get(8..8 + len).and_then(|h| serde_json::from_slice(h).ok()).ok_or_else(damaged)?;
+    if header.format > FORMAT {
+        return Err(t!("The backup was created by a newer QuickNotes version").to_owned().into());
+    }
+    let sealed = &data[8 + len..];
+    let key = match (&header.kdf, password, app_key) {
+        (Some(kdf), Some(pw), _) => kdf.derive(pw).map_err(|_| damaged())?,
+        (Some(_), None, _) => return Err(ReadError::NeedsPassword),
+        (None, _, Some(key)) => key.clone(),
+        (None, _, None) => {
+            return Err(t!("This automatic backup can only be restored while the app password is set").to_owned().into())
+        }
+    };
+    let archive = key.open(sealed, SEALED_AAD).map_err(|e| match e {
+        crypto::Error::Decrypt => ReadError::WrongPassword,
+        crypto::Error::Format => damaged(),
+    })?;
+    parse(&archive)
+}
+
+fn parse(data: &[u8]) -> Result<Backup, ReadError> {
+    let mut archive = tar::Archive::new(GzDecoder::new(data));
     let not_backup = || t!("This is not a QuickNotes backup (.tar.gz)").to_owned();
     let mut manifest = None;
     let mut session = None;
@@ -90,7 +198,7 @@ pub fn read(path: &Path) -> Result<Backup, String> {
         let size = entry.header().size().unwrap_or(0);
         total += size;
         if size > MAX_ENTRY || total > MAX_TOTAL {
-            return Err(t!("The backup is unexpectedly large").into());
+            return Err(t!("The backup is unexpectedly large").to_owned().into());
         }
         let mut data = Vec::with_capacity(size as usize);
         entry.by_ref().take(MAX_ENTRY).read_to_end(&mut data).map_err(|_| not_backup())?;
@@ -117,7 +225,7 @@ pub fn read(path: &Path) -> Result<Backup, String> {
 
     let manifest = manifest.ok_or_else(not_backup)?;
     if manifest.format > FORMAT {
-        return Err(t!("The backup was created by a newer QuickNotes version").into());
+        return Err(t!("The backup was created by a newer QuickNotes version").to_owned().into());
     }
     let session = session.ok_or_else(not_backup)?;
     Ok(Backup { manifest, session, notes })
@@ -155,14 +263,47 @@ mod tests {
         session.tabs.push(TabMeta { id: "abc1".into(), ..Default::default() });
         session.settings.font_family = "Fira Code".into();
         let notes = vec![("abc1".to_owned(), "hello\nwörld".to_owned())];
-        write(&path, "2026-11-05T12:00:00", &session, &notes).unwrap();
+        write(&path, "2026-11-05T12:00:00", &session, &notes, None).unwrap();
+        assert!(!is_sealed(&path));
 
-        let backup = read(&path).unwrap();
+        let backup = read(&path, None, None).unwrap();
         assert_eq!(backup.manifest.format, FORMAT);
         assert_eq!(backup.manifest.created, "2026-11-05T12:00:00");
         assert_eq!(backup.session.tabs[0].id, "abc1");
         assert_eq!(backup.session.settings.font_family, "Fira Code");
         assert_eq!(backup.notes["abc1"], "hello\nwörld");
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn encrypted_backups() {
+        let path = tmp("sealed.qnbackup");
+        let mut session = Session::default();
+        session.tabs.push(TabMeta { id: "abc1".into(), title: Some("Secret title".into()), ..Default::default() });
+        let notes = vec![("abc1".to_owned(), "the secret note".to_owned())];
+        let kdf = crate::crypto::tests::fast_kdf();
+        let seal = Seal::Password { key: kdf.derive("pw").unwrap(), kdf };
+        write(&path, "2026-11-12T10:00:00", &session, &notes, Some(&seal)).unwrap();
+        assert!(is_sealed(&path));
+        let raw = std::fs::read(&path).unwrap();
+        assert!(!raw.windows(6).any(|w| w == b"secret"));
+
+        assert_eq!(read(&path, None, None).unwrap_err(), ReadError::NeedsPassword);
+        assert_eq!(read(&path, Some("nope"), None).unwrap_err(), ReadError::WrongPassword);
+        let backup = read(&path, Some("pw"), None).unwrap();
+        assert_eq!(backup.notes["abc1"], "the secret note");
+        assert_eq!(backup.session.tabs[0].title.as_deref(), Some("Secret title"));
+
+        // Sealed with the app key: no password needed, but the key.
+        let key = Key::random();
+        write(&path, "x", &session, &notes, Some(&Seal::AppKey(key.clone()))).unwrap();
+        assert!(matches!(read(&path, None, None), Err(ReadError::Failed(_))));
+        assert_eq!(read(&path, None, Some(&key)).unwrap().notes["abc1"], "the secret note");
+        assert_eq!(read(&path, None, Some(&Key::random())).unwrap_err(), ReadError::WrongPassword);
+
+        // Truncated file.
+        std::fs::write(&path, &raw[..raw.len() / 2]).unwrap();
+        assert!(read(&path, Some("pw"), None).is_err());
         std::fs::remove_file(path).ok();
     }
 
@@ -179,10 +320,10 @@ mod tests {
             tar.append_data(&mut header, "notes/../../evil.txt", &b"hi"[..]).ok();
             tar.into_inner().unwrap().finish().unwrap();
         }
-        assert!(read(&path).is_err());
+        assert!(read(&path, None, None).is_err());
         // Not gzip at all
         std::fs::write(&path, b"plain text").unwrap();
-        assert!(read(&path).is_err());
+        assert!(read(&path, None, None).is_err());
         std::fs::remove_file(path).ok();
 
         assert!(valid_id("18e51c437230ea3001"));

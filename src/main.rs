@@ -4,6 +4,7 @@ mod backup;
 mod calc;
 mod checklist;
 mod completion;
+mod crypto;
 mod editor;
 mod emmet;
 mod export;
