@@ -14,7 +14,7 @@ after a restart.
 - Autosave of notes and of unsaved changes to opened files to `~/.local/share/quicknotes/`
 - Syntax highlighting (GtkSourceView, ~150 languages), auto-detected for pasted snippets
 - Live preview side-by-side for **Markdown**, **reStructuredText**, **PlantUML** and **HTML**
-- Export of Markdown and reStructuredText documents to **HTML** and **PDF**
+- Export of Markdown and reStructuredText documents to **HTML**, **PDF**, **images** (SVG, PNG, JPG) and **EPUB**
 - **Presentations** in Markdown: slides separated by `---`, slide transitions, step-by-step
   reveal (`::: steps fade-up`), positioning (`::: place bottom right`, columns), background
   images, presenter notes (`???`); presenter view with notes, next slide and timer on a second
@@ -166,8 +166,11 @@ of failing. Build details: `packaging/appimage/`.
   Problems from level ERROR upwards are shown in the preview.
 - **HTML** files are shown as they are (including their CSS and JavaScript). The preview is
   opt-in for HTML (Ctrl+Shift+V) since HTML files are often edited as code.
-- **Export** writes a self-contained HTML file or an A4 PDF (via WebKit printing to GTK's
-  "Print to File" printer). Relative images are resolved from the document's folder.
+- **Export** writes a self-contained HTML file, an A4 PDF (via WebKit printing to GTK's
+  "Print to File" printer), images (SVG, PNG, JPG – one tall image or one per page/slide,
+  converted from that PDF with [hayro](https://github.com/LaurenzV/hayro)) or an EPUB 3 e-book
+  (chapters at the top headings, metadata from the front matter). Relative images are resolved
+  from the document's folder.
 
 ## PlantUML
 
@@ -248,6 +251,12 @@ Charts are drawn with [Apache ECharts](https://echarts.apache.org) (npm package 
 6.1.0, © The Apache Software Foundation, Apache License 2.0; parts derived from d3.js under the
 BSD 3-Clause License), bundled in `data/echarts/`. The named chart palettes are taken from the
 ECharts themes.
+
+### hayro
+
+PDF pages are turned into SVG, PNG and JPG images with [hayro](https://github.com/LaurenzV/hayro)
+and hayro-svg (© The Hayro Authors, MIT/Apache-2.0); JPG files are written with
+[jpeg-encoder](https://github.com/vstroebel/jpeg-encoder) (© Volker Ströbel, MIT/Apache-2.0).
 
 ### calamine and csv
 

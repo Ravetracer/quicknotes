@@ -355,9 +355,31 @@ Markdown-, reStructuredText-, PlantUML- und HTML-Dateien lassen sich mit einer L
 <!-- if !plantuml -->
 Markdown-, reStructuredText- und HTML-Dateien lassen sich mit einer Live-Vorschau
 <!-- end -->
-neben dem Text anzeigen (Strg+Umschalt+V). Markdown und reStructuredText können über das
-Hauptmenü oder das Kontextmenü des Editors (rechte Maustaste) als **HTML**
-(Strg+Umschalt+E) oder **PDF** (Strg+Umschalt+P) exportiert werden.
+neben dem Text anzeigen (Strg+Umschalt+V). Markdown und reStructuredText lassen sich über das
+Hauptmenü oder das Kontextmenü des Editors (rechte Maustaste) exportieren als:
+
+- **HTML** (Strg+Umschalt+E): eine einzelne Datei, in der alles steckt, auch Formeln und
+  Diagramme.
+- **PDF** (Strg+Umschalt+P): A4-Seiten.
+- **Bild** (SVG, PNG oder JPG): das ganze Dokument als **ein langes Bild** oder **ein Bild pro
+  Seite** wie im PDF (nummerierte Dateien in einem Ordner nach Wahl). SVG bleibt in jeder Größe
+  scharf; PNG und JPG sind Pixelbilder in hoher Auflösung.
+- **EPUB**: ein E-Book für E-Reader und Lese-Apps. Ein neues Kapitel beginnt an jeder
+  `#`-Überschrift (an jeder `##`-Überschrift, wenn es nur eine `#` gibt); das
+  Inhaltsverzeichnis zeigt die Kapitel und ihre Abschnitte. Formeln, Diagramme, Notenschrift
+  und die Bilder des Dokuments kommen mit. Im Front Matter lassen sich die Angaben zum Buch
+  festlegen:
+
+      ---
+      title: Mein Buch
+      author: Erika Mustermann
+      language: de
+      date: 2026-11-13
+      description: Worum es im Buch geht
+      publisher: Eigenverlag
+      cover: bilder/titel.jpg
+      ---
+
 Relative Bilder werden aus dem Ordner des Dokuments geladen.
 
 <!-- if plantuml -->
@@ -524,7 +546,7 @@ und die Uhrzeit. Mit einem Bildschirm wechselt `P` zwischen Folien und Referente
 
 *Als HTML exportieren* schreibt eine einzelne Datei, die die Präsentation in jedem Browser
 abspielt (Tastatur, Animationen, `F` für Vollbild). *Als PDF exportieren* erzeugt eine Seite
-pro Folie mit allen Schritten.
+pro Folie mit allen Schritten, *Als Bild exportieren* ein Bild pro Folie (SVG, PNG oder JPG).
 
 ## Entwicklerwerkzeuge {#devtools}
 

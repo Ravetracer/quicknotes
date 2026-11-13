@@ -99,6 +99,8 @@ pub struct Window {
     /// Closing all tabs for a restore: no confirmations, no undo.
     bulk_close: Cell<bool>,
     present_btn: adw::SplitButton,
+    /// Last choices of the image export (format, layout).
+    image_export: Cell<(usize, usize)>,
     /// Header button with the developer tools.
     tools_btn: gtk::MenuButton,
     presentation: RefCell<Option<Rc<Presentation>>>,
@@ -524,6 +526,7 @@ impl Window {
             menu_page: RefCell::new(None),
             bulk_close: Cell::new(false),
             present_btn,
+            image_export: Cell::new((0, 0)),
             tools_btn: tools_btn.clone(),
             presentation: RefCell::new(None),
             tab_bar,
@@ -718,6 +721,8 @@ impl Window {
         });
         self.action("export-html", &["<Control><Shift>e"], |w| w.export(ExportFormat::Html));
         self.action("export-pdf", &["<Control><Shift>p"], |w| w.export(ExportFormat::Pdf));
+        self.action("export-image", &[], |w| w.export_image());
+        self.action("export-epub", &[], |w| w.export_epub());
         self.action("preferences", &["<Control>comma"], |w| w.show_preferences());
         self.action("emmet-expand", &["<Control>e"], |w| {
             if let Some(t) = w.current_text() {
@@ -810,6 +815,8 @@ impl Window {
             );
             about.add_legal_section("calamine", Some("Copyright (c) 2016 Johann Tuffe"), gtk::License::MitX11, None);
             about.add_legal_section("rust-csv", Some("Copyright (c) 2015 Andrew Gallant"), gtk::License::MitX11, None);
+            about.add_legal_section("hayro", Some("Copyright (c) The Hayro Authors"), gtk::License::MitX11, None);
+            about.add_legal_section("jpeg-encoder", Some("Copyright (c) 2021 Volker Ströbel"), gtk::License::MitX11, None);
             for (_, name, copyright) in themes::SOURCES.iter().filter(|s| !s.2.is_empty()) {
                 about.add_legal_section(name, Some(copyright), gtk::License::MitX11, None);
             }
@@ -2553,6 +2560,165 @@ impl Window {
         });
     }
 
+    /// File name stem for exports of a tab.
+    fn export_stem(t: &EditorTab, title: &str) -> String {
+        t.path
+            .borrow()
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|s| s.to_string_lossy().trim_end_matches(".md").trim_end_matches(".slides").to_owned())
+            .map(|s| s.rsplit_once('.').map_or(s.clone(), |(stem, _)| stem.to_owned()))
+            .unwrap_or_else(|| file_name_for(title))
+    }
+
+    /// Exports the document as image(s): SVG, PNG or JPG; documents as one
+    /// tall image or one per page, presentations one per slide.
+    fn export_image(self: &Rc<Self>) {
+        let Some(t) = self.current_text() else { return };
+        let deck = t.deck();
+        let (document, title, base_uri) = match &deck {
+            Some(deck) => {
+                let page = slides::page(slides::Mode::Print, Some(deck), slides::PageOptions::default());
+                let title = if deck.title.is_empty() { t.title() } else { deck.title.clone() };
+                (page, title, t.slides_base_uri())
+            }
+            None => {
+                let Some(body) = t.document_html() else {
+                    self.toast(t!("Export works for Markdown and reStructuredText"));
+                    return;
+                };
+                let title = html::first_heading(&body).unwrap_or_else(|| t.title());
+                (html::standalone(&title, &body), title, t.base_uri())
+            }
+        };
+        let slides_page = deck.as_ref().map(|d| d.page_mm());
+        let stem = Self::export_stem(&t, &title);
+        let base_dir = t.base_dir();
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let Some((format, tall)) = this.image_options(slides_page.is_some()).await else { return };
+            let page = match (slides_page, tall) {
+                (Some((width_mm, height_mm)), _) => crate::export::Page::Custom { width_mm, height_mm },
+                (None, true) => crate::export::Page::Tall { factor: 1.3 },
+                (None, false) => crate::export::Page::A4,
+            };
+            let ext = format.ext();
+            // One file, or a folder for one image per page/slide.
+            let target = if tall && slides_page.is_none() {
+                let dialog = gtk::FileDialog::builder()
+                    .title(t!("Export as {}", format.label()))
+                    .modal(true)
+                    .initial_name(format!("{stem}.{ext}"))
+                    .build();
+                if let Some(dir) = &base_dir {
+                    dialog.set_initial_folder(Some(&gio::File::for_path(dir)));
+                }
+                let Ok(file) = dialog.save_future(Some(&this.win)).await else { return };
+                let Some(path) = file.path() else { return };
+                ImageTarget::File(path)
+            } else {
+                let dialog = gtk::FileDialog::builder().title(t!("Folder for the Images")).modal(true).build();
+                if let Some(dir) = &base_dir {
+                    dialog.set_initial_folder(Some(&gio::File::for_path(dir)));
+                }
+                let Ok(folder) = dialog.select_folder_future(Some(&this.win)).await else { return };
+                let Some(path) = folder.path() else { return };
+                ImageTarget::Folder(path, stem.clone())
+            };
+            this.toast(t!("Exporting images…"));
+            let weak = this.weak();
+            crate::export::images(document, base_uri, page, format, move |result| {
+                let Some(this) = weak.upgrade() else { return };
+                match result.and_then(|images| target.write(&images, ext)) {
+                    Ok(path) => this.export_done(&path, Ok(())),
+                    Err(e) => this.export_done(Path::new(""), Err(e)),
+                }
+            });
+        });
+    }
+
+    /// Asks for format and (for documents) layout of an image export.
+    /// Returns the format and whether the document becomes one tall image.
+    async fn image_options(self: &Rc<Self>, slides: bool) -> Option<(crate::images::ImageFormat, bool)> {
+        use crate::images::ImageFormat;
+        let (last_format, last_layout) = self.image_export.get();
+        let dialog = adw::AlertDialog::new(Some(t!("Export as Image")), None);
+        let list = gtk::ListBox::builder().selection_mode(gtk::SelectionMode::None).build();
+        list.add_css_class("boxed-list");
+        let labels: Vec<&str> = ImageFormat::ALL.iter().map(|f| f.label()).collect();
+        let format = adw::ComboRow::builder().title(t!("File Format")).model(&gtk::StringList::new(&labels)).build();
+        format.set_selected(last_format as u32);
+        format.set_subtitle(t!("SVG stays sharp at any size; PNG and JPG are pictures"));
+        list.append(&format);
+        let layout = adw::ComboRow::builder()
+            .title(t!("Pages"))
+            .model(&gtk::StringList::new(&[t!("One tall image"), t!("One image per page (A4)")]))
+            .build();
+        layout.set_selected(last_layout as u32);
+        if slides {
+            dialog.set_body(t!("Each slide becomes an image."));
+        } else {
+            list.append(&layout);
+        }
+        dialog.set_extra_child(Some(&list));
+        dialog.add_response("cancel", t!("_Cancel"));
+        dialog.add_response("export", t!("_Export"));
+        dialog.set_response_appearance("export", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("export"));
+        dialog.set_close_response("cancel");
+        if dialog.choose_future(&self.win).await != "export" {
+            return None;
+        }
+        let (f, l) = (format.selected() as usize, layout.selected() as usize);
+        self.image_export.set((f, l));
+        Some((ImageFormat::ALL.get(f).copied().unwrap_or(ImageFormat::Png), l == 0))
+    }
+
+    /// Exports a Markdown or reStructuredText document as EPUB e-book.
+    fn export_epub(self: &Rc<Self>) {
+        let Some(t) = self.current_text() else { return };
+        if t.deck().is_some() {
+            self.toast(t!("EPUB export works for Markdown and reStructuredText"));
+            return;
+        }
+        let Some(body) = t.document_html() else {
+            self.toast(t!("EPUB export works for Markdown and reStructuredText"));
+            return;
+        };
+        let title = html::first_heading(&body).unwrap_or_else(|| t.title());
+        let meta = crate::epub::Meta::from_source(&t.text(), &title);
+        let stem = Self::export_stem(&t, &title);
+        let dialog = gtk::FileDialog::builder()
+            .title(t!("Export as {}", "EPUB"))
+            .modal(true)
+            .initial_name(format!("{stem}.epub"))
+            .build();
+        let base_dir = t.base_dir();
+        if let Some(dir) = &base_dir {
+            dialog.set_initial_folder(Some(&gio::File::for_path(dir)));
+        }
+        let document = html::standalone(&meta.title, &body);
+        let base_uri = t.base_uri();
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let Ok(file) = dialog.save_future(Some(&this.win)).await else { return };
+            let Some(path) = file.path() else { return };
+            this.toast(t!("Exporting EPUB…"));
+            let weak = this.weak();
+            let script = crate::epub::EXTRACT_JS.to_owned();
+            crate::export::run_script(document, base_uri, script, move |result| {
+                let Some(this) = weak.upgrade() else { return };
+                let result = result
+                    .and_then(|json| serde_json::from_str::<crate::epub::Extract>(&json).map_err(|e| e.to_string()))
+                    .and_then(|extract| {
+                        crate::epub::build(&meta, extract, base_dir.as_deref(), &html::ebook_css(), crate::notation::katex_css())
+                    })
+                    .and_then(|epub| std::fs::write(&path, epub).map_err(|e| e.to_string()));
+                this.export_done(&path, result);
+            });
+        });
+    }
+
     fn export_done(self: &Rc<Self>, path: &Path, result: Result<(), String>) {
         match result {
             Ok(()) => {
@@ -4194,8 +4360,16 @@ fn menu_section(items: &[(&str, &str)]) -> gio::Menu {
     s
 }
 
-fn export_section() -> gio::Menu {
-    menu_section(&[(t!("Export as HTML…"), "win.export-html"), (t!("Export as PDF…"), "win.export-pdf")])
+fn export_section(style: TabStyle) -> gio::Menu {
+    let mut items = vec![
+        (t!("Export as HTML…"), "win.export-html"),
+        (t!("Export as PDF…"), "win.export-pdf"),
+        (t!("Export as Image…"), "win.export-image"),
+    ];
+    if style != TabStyle::Slides {
+        items.push((t!("Export as EPUB…"), "win.export-epub"));
+    }
+    menu_section(&items)
 }
 
 fn presentation_section() -> gio::Menu {
@@ -4236,7 +4410,7 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
 
     if let Some(style) = context.style {
         if style.exportable() {
-            menu.append_section(None, &export_section());
+            menu.append_section(None, &export_section(style));
         }
         if style == TabStyle::Slides {
             menu.append_section(None, &presentation_section());
@@ -4308,7 +4482,7 @@ fn editor_context_menu(style: TabStyle, emmet: bool) -> gio::Menu {
         menu.append_section(None, &section);
     }
     if style.exportable() {
-        menu.append_section(None, &export_section());
+        menu.append_section(None, &export_section(style));
     }
     if style == TabStyle::Slides {
         menu.append_section(None, &presentation_section());
@@ -4317,6 +4491,33 @@ fn editor_context_menu(style: TabStyle, emmet: bool) -> gio::Menu {
         menu.append_section(None, &geocaching_menu());
     }
     menu
+}
+
+/// Where an image export goes.
+enum ImageTarget {
+    File(PathBuf),
+    /// A folder and the name stem for numbered files.
+    Folder(PathBuf, String),
+}
+
+impl ImageTarget {
+    /// Writes the images; returns the file or folder.
+    fn write(&self, images: &[Vec<u8>], ext: &str) -> Result<PathBuf, String> {
+        match self {
+            ImageTarget::File(path) => {
+                std::fs::write(path, images.first().ok_or("no image")?).map_err(|e| e.to_string())?;
+                Ok(path.clone())
+            }
+            ImageTarget::Folder(dir, stem) => {
+                let digits = images.len().to_string().len().max(2);
+                for (i, image) in images.iter().enumerate() {
+                    let file = dir.join(format!("{stem}-{:0digits$}.{ext}", i + 1));
+                    std::fs::write(&file, image).map_err(|e| e.to_string())?;
+                }
+                Ok(dir.clone())
+            }
+        }
+    }
 }
 
 /// Data to import as table.

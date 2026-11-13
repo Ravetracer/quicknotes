@@ -33,6 +33,10 @@ getrandom = "0.2"
 csv = "1.4"
 calamine = "0.37"
 encoding_rs = "0.8"
+hayro = "0.8"
+hayro-svg = "0.8"
+jpeg-encoder = "0.7"
+zip = { version = "9.5", default-features = false, features = ["deflate"] }
 
 [profile.release]
 opt-level = 3

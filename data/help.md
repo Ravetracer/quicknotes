@@ -342,9 +342,30 @@ Markdown, reStructuredText, PlantUML and HTML files can be shown with a live pre
 <!-- if !plantuml -->
 Markdown, reStructuredText and HTML files can be shown with a live preview next to
 <!-- end -->
-the text (Ctrl+Shift+V). Markdown and reStructuredText can be exported as **HTML**
-(Ctrl+Shift+E) or **PDF** (Ctrl+Shift+P) from the main menu or the editor's right-click
-menu. Relative images are taken from the folder of the document.
+the text (Ctrl+Shift+V). Markdown and reStructuredText can be exported from the main menu or
+the editor's right-click menu as:
+
+- **HTML** (Ctrl+Shift+E): a single file with everything in it, also formulas and charts.
+- **PDF** (Ctrl+Shift+P): A4 pages.
+- **Image** (SVG, PNG or JPG): the whole document as **one tall image**, or **one image per
+  page** like the PDF (numbered files in a folder you choose). SVG stays sharp at any size; PNG
+  and JPG are pictures in high resolution.
+- **EPUB**: an e-book for e-readers and reading apps. A new chapter starts at each `#` heading
+  (at each `##` heading if there is only one `#`); the table of contents lists the chapters and
+  their sections. Formulas, charts and music notation are included, as are the images of the
+  document. The front matter can set the book's details:
+
+      ---
+      title: My Book
+      author: Jane Doe
+      language: en
+      date: 2026-11-13
+      description: What the book is about
+      publisher: Self-published
+      cover: images/cover.jpg
+      ---
+
+Relative images are taken from the folder of the document.
 
 <!-- if plantuml -->
 PlantUML needs a local PlantUML installation (`plantuml` command or a `plantuml*.jar` in
@@ -506,7 +527,7 @@ switches between slides and presenter view.
 
 *Export as HTML* writes a single file that plays the presentation in any browser (keyboard,
 animations, `F` for fullscreen). *Export as PDF* creates one page per slide with all steps
-shown.
+shown, *Export as Image* one image per slide (SVG, PNG or JPG).
 
 ## Developer tools {#devtools}
 

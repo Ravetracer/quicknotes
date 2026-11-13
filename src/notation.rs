@@ -170,6 +170,11 @@ div.math.math-display { margin: 1em 0; }
 }
 "#;
 
+/// KaTeX's styles (with its fonts), for documents with formulas.
+pub fn katex_css() -> &'static str {
+    KATEX_CSS
+}
+
 /// Notation libraries a page needs.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct Libs {

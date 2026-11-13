@@ -109,6 +109,50 @@ pre, blockquote, table, img, figure, .admonition { break-inside: avoid; }
 h1, h2, h3, h4 { break-after: avoid; }
 "#;
 
+/// Styles for e-books: the document styles in the light theme with the
+/// colour variables filled in (not every reader knows CSS variables).
+pub fn ebook_css() -> String {
+    let start = DOC_CSS.find(":root {").unwrap_or(0);
+    let end = DOC_CSS.find("html, body {").unwrap_or(start);
+    let vars: Vec<(String, String)> = DOC_CSS[start..end]
+        .split("html[data-theme")
+        .next()
+        .unwrap_or("")
+        .split(';')
+        .filter_map(|decl| {
+            let decl = decl.trim().trim_start_matches(":root {").trim();
+            let (name, value) = decl.split_once(':')?;
+            let name = name.trim();
+            name.starts_with("--").then(|| (name.to_owned(), value.trim().to_owned()))
+        })
+        .collect();
+    let css = format!("{}{EBOOK_CSS}{}", &DOC_CSS[end..], crate::notation::CSS);
+    // `var(--name)` and `var(--name, fallback)`.
+    let mut out = String::with_capacity(css.len());
+    let mut rest = css.as_str();
+    while let Some(i) = rest.find("var(--") {
+        out.push_str(&rest[..i]);
+        let Some(close) = rest[i..].find(')') else { break };
+        let inner = &rest[i + 4..i + close];
+        let (name, fallback) = inner.split_once(',').map_or((inner, None), |(n, f)| (n, Some(f.trim())));
+        let value = vars.iter().find(|(n, _)| n == name.trim()).map(|(_, v)| v.as_str()).or(fallback).unwrap_or("inherit");
+        out.push_str(value);
+        rest = &rest[i + close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+const EBOOK_CSS: &str = r#"
+body { padding: 0 .5em; font-size: 1em; }
+#content { max-width: none; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.qn-chart svg { width: 100%; height: auto; }
+.cover { text-align: center; }
+.cover img { max-width: 100%; max-height: 100vh; }
+nav#toc ol { list-style: none; padding-left: 1em; }
+"#;
+
 pub fn escape(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
@@ -227,6 +271,13 @@ mod tests {
     fn finds_first_heading() {
         assert_eq!(first_heading("<p>x</p><h2 id=\"a\"><a href=\"#\">Tom &amp; Jerry</a></h2><h1>B</h1>").as_deref(), Some("Tom & Jerry"));
         assert_eq!(first_heading("<p>none</p>"), None);
+    }
+
+    #[test]
+    fn ebook_css_has_no_variables() {
+        let css = ebook_css();
+        assert!(!css.contains("var(--"), "{css}");
+        assert!(css.contains("color: #1f2328") && !css.contains("#1e1e1e"));
     }
 
     #[test]
