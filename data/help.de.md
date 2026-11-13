@@ -1,6 +1,6 @@
 # QuickNotes-Hilfe {#top}
 
-**Inhalt:** [Notizen & Tabs](#notes) · [Checklisten](#checklists) · [Tabellen](#tables) · [Formatierung](#formatting) · [Formeln & Noten](#notation) · [Diagramme](#charts) · [Kanban](#kanban) · [Lernkarten](#flashcards) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
+**Inhalt:** [Notizen & Tabs](#notes) · [Ordner](#folders) · [Checklisten](#checklists) · [Tabellen](#tables) · [Formatierung](#formatting) · [Formeln & Noten](#notation) · [Diagramme](#charts) · [Kanban](#kanban) · [Lernkarten](#flashcards) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
 [Vorschau & Export](#previews) · [Präsentationen](#slides) · [Entwicklerwerkzeuge](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Sicherheit](#security) · [Sicherung](#backup) ·
 [Tastenkürzel](#shortcuts)
@@ -36,7 +36,7 @@ Sprache der Oberfläche (gilt nach einem Neustart), das Farbdesign, die Tab-Posi
 Tab-Farben fest und bietet Sicherung und Wiederherstellung der Notizen (*Import/Export*).
 
 *Funktionen* schaltet optionale Teile von QuickNotes ein und aus: Diagramme, Präsentationen,
-Kanban-Boards, Lernkarten, die Geocaching-Werkzeuge, PlantUML und die Entwicklerwerkzeuge. Ausgeschaltete Funktionen verschwinden
+Kanban-Boards, Lernkarten, Notizordner, die Geocaching-Werkzeuge, PlantUML und die Entwicklerwerkzeuge. Ausgeschaltete Funktionen verschwinden
 aus den Menüs, der Werkzeugleiste und dieser Hilfe; Dokumente bleiben, wie sie sind
 (Präsentationen und Boards öffnen sich dann als Markdown, Diagramme erscheinen als Code). Neue
 Installationen starten mit allen ausgeschaltet.
@@ -45,6 +45,31 @@ Installationen starten mit allen ausgeschaltet.
 Dayle-Rees-Farbschemata und dem VSCode Ultimate Themes Pack. Ein Klick wendet ein Design sofort
 auf Editor, Fenster und Vorschau an; Strg+F sucht in den Einstellungen nach Designnamen. Die Schriftgröße lässt sich auch
 mit Strg+Mausrad oder Strg +/−/0 ändern.
+
+## Ordner {#folders}
+
+Die **Notizen-Seitenleiste** (Knopf oben links oder F9) hält alle Notizen in Ordnern – auch die,
+die nicht geöffnet sind. Das Schließen eines Notiz-Tabs wirft die Notiz nicht mehr weg: Sie
+bleibt in ihrem Ordner und öffnet sich mit einem Klick wieder. Geöffnete Notizen sind fett.
+
+- **Neuer Ordner**: der Ordner-Knopf über dem Baum oder *Neuer Ordner* im Kontextmenü eines
+  Ordners für einen Unterordner. Ordner lassen sich beliebig tief verschachteln und sind nach
+  Namen sortiert.
+- **Verschieben**: eine Notiz auf einen Ordner (oder auf *Ohne Ordner*) ziehen, einen Ordner in
+  einen anderen ziehen. *Aus dem Ordner nehmen* im Kontextmenü holt eine Notiz heraus.
+- **Neue Notiz** im Kontextmenü eines Ordners legt die Notiz direkt dort an.
+- **Dateien**, die von der Festplatte geöffnet wurden, lassen sich ebenfalls in Ordner legen.
+  Nach dem Schließen bleiben sie dort als Verknüpfung, die die Datei wieder öffnet; ein
+  Warnzeichen markiert eine Datei, die es nicht mehr gibt. *Aus den Notizen entfernen* nimmt die
+  Verknüpfung weg (die Datei selbst bleibt).
+- **Löschen**: *In den Papierkorb* (oder auf den *Papierkorb* ziehen) legt eine Notiz in den
+  Papierkorb; von dort lässt sie sich wiederherstellen oder endgültig löschen (*Papierkorb leeren*
+  löscht alles darin). Beim Löschen eines Ordners bleiben seine Notizen und Unterordner erhalten
+  – sie wandern eine Ebene nach oben.
+- Leere Notizen ohne Titel werden beim Schließen weiterhin verworfen.
+
+Ordner, geschlossene Notizen und der Papierkorb werden mit dem App-Passwort verschlüsselt und
+sind in Sicherungen enthalten.
 
 ## Checklisten {#checklists}
 
@@ -821,6 +846,9 @@ vorher in einer automatischen Sicherung abgelegt).
 | Strg+Mausrad, Strg +/−/0 | Schriftgröße |
 | Strg+Tab, Strg+Bild↑/Bild↓, Alt+1…9 | Tab wechseln |
 | F1 | Diese Hilfe |
+<!-- if folders -->
+| F9 | Notizen-Seitenleiste mit Ordnern |
+<!-- end -->
 <!-- if slides -->
 | Umschalt+F1 | Syntax-Hilfe an der Schreibmarke (Präsentationen) |
 <!-- end -->

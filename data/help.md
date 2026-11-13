@@ -1,6 +1,6 @@
 # QuickNotes Help {#top}
 
-**Contents:** [Notes & tabs](#notes) · [Checklists](#checklists) · [Tables](#tables) · [Formatting](#formatting) · [Math & music](#notation) · [Charts](#charts) · [Kanban](#kanban) · [Flash cards](#flashcards) · [Calculations](#calc) · [Templates](#templates) ·
+**Contents:** [Notes & tabs](#notes) · [Folders](#folders) · [Checklists](#checklists) · [Tables](#tables) · [Formatting](#formatting) · [Math & music](#notation) · [Charts](#charts) · [Kanban](#kanban) · [Flash cards](#flashcards) · [Calculations](#calc) · [Templates](#templates) ·
 [Previews & export](#previews) · [Presentations](#slides) · [Developer tools](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Security](#security) · [Backup](#backup) ·
 [Shortcuts](#shortcuts)
@@ -34,7 +34,7 @@ interface language (applies after a restart), the colour theme, the tab position
 colours, and offers backup and restore of the notes (*Import/Export*).
 
 *Features* switches optional parts of QuickNotes on and off: charts, presentations, Kanban
-boards, flash cards, the Geocaching tools, PlantUML and the developer tools. Switched-off features disappear from the menus, the
+boards, flash cards, note folders, the Geocaching tools, PlantUML and the developer tools. Switched-off features disappear from the menus, the
 toolbar and this help; documents stay as they are (presentations and boards then open as
 Markdown, charts show as code). New installations start with all of them off.
 
@@ -42,6 +42,28 @@ Markdown, charts show as code). New installations start with all of them off.
 colour schemes and the VSCode Ultimate Themes Pack. A click applies a theme right away to the
 editor, the window and the preview; Ctrl+F in the preferences searches themes by name. The font size can also be changed with
 Ctrl+mouse wheel or Ctrl +/−/0.
+
+## Folders {#folders}
+
+The **notes sidebar** (button at the top left, or F9) keeps all your notes in folders – also
+the ones that are not open. Closing a note's tab no longer throws it away: the note stays in
+its folder and opens again with a click. Open notes are shown in bold.
+
+- **New Folder**: the folder button above the tree, or *New Folder* in a folder's right-click
+  menu for a sub-folder. Folders can be nested as deep as you like and are sorted by name.
+- **Moving**: drag a note onto a folder (or onto *Ungrouped*), drag a folder into another
+  folder. *Move to Ungrouped* in the right-click menu takes a note out of its folder.
+- **New Note** in a folder's right-click menu creates the note right there.
+- **Files** opened from disk can be put into folders as well. After closing they stay there as
+  a link that opens the file again; a warning sign marks a file that no longer exists.
+  *Remove from Notes* takes the link away (the file itself stays).
+- **Deleting**: *Move to Trash* (or dragging onto *Trash*) puts a note into the trash; from there
+  it can be restored or deleted permanently (*Empty Trash* deletes all of it). Deleting a
+  folder keeps its notes and sub-folders – they move one level up.
+- Empty notes without a title are still discarded when closed.
+
+Folders, closed notes and the trash are encrypted with the app password and included in
+backups.
 
 ## Checklists {#checklists}
 
@@ -790,6 +812,9 @@ file. *Restore Backup…* either **adds** the tabs of a backup to the current on
 | Ctrl+mouse wheel, Ctrl +/−/0 | Font size |
 | Ctrl+Tab, Ctrl+PgUp/PgDn, Alt+1…9 | Switch tabs |
 | F1 | This help |
+<!-- if folders -->
+| F9 | Notes sidebar with folders |
+<!-- end -->
 <!-- if slides -->
 | Shift+F1 | Syntax help at the cursor (presentations) |
 <!-- end -->

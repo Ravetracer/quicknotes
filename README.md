@@ -46,8 +46,10 @@ after a restart.
   themes, progress and statistics (stored encrypted with the app password, included in backups)
 - **Data import**: CSV/TSV files and spreadsheets (Excel, LibreOffice) become Markdown tables;
   cells copied from a spreadsheet can be pasted as table
+- **Notes in folders**: a sidebar (F9) with nested folders, drag and drop, a trash; closed notes
+  stay in their folder, files can be linked into folders too
 - **Optional features** (*Preferences → Features*): charts, presentations, Kanban boards, flash
-  cards, the Geocaching tools, PlantUML and the developer tools can be switched off; they then disappear from menus, toolbar
+  cards, note folders, the Geocaching tools, PlantUML and the developer tools can be switched off; they then disappear from menus, toolbar
   and help. New installations start with them off
 - **Markdown tables** like Obsidian's *Advanced Tables*: automatic formatting, Tab/Enter
   navigation, insert/delete/move rows and columns, sorting, column alignment

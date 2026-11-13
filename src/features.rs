@@ -21,6 +21,7 @@ pub enum Feature {
     PlantUml,
     DevTools,
     Flashcards,
+    Folders,
 }
 
 /// The features with their preference labels and descriptions.
@@ -36,6 +37,7 @@ pub const LIST: &[(Feature, &str, &str)] = &[
         "Format, convert and encode JSON, XML, YAML, SQL, MongoDB and PHP arrays; line and case tools",
     ),
     (Feature::Flashcards, "Flash Cards", "Learning with flash cards and spaced repetition"),
+    (Feature::Folders, "Note Folders", "A notes sidebar with folders; closed notes stay in it"),
 ];
 
 impl Feature {
@@ -48,6 +50,7 @@ impl Feature {
             Self::PlantUml => 16,
             Self::DevTools => 32,
             Self::Flashcards => 64,
+            Self::Folders => 128,
         }
     }
 
@@ -62,6 +65,7 @@ impl Feature {
             Self::PlantUml => "plantuml",
             Self::DevTools => "devtools",
             Self::Flashcards => "flashcards",
+            Self::Folders => "folders",
         }
     }
 }
@@ -80,6 +84,8 @@ pub struct Features {
     pub devtools: bool,
     #[serde(default = "yes")]
     pub flashcards: bool,
+    #[serde(default = "yes")]
+    pub folders: bool,
 }
 
 fn yes() -> bool {
@@ -89,7 +95,7 @@ fn yes() -> bool {
 impl Features {
     /// All features on (settings from before the switches existed).
     pub fn all() -> Self {
-        Self { charts: true, presentations: true, kanban: true, geocaching: true, plantuml: true, devtools: true, flashcards: true }
+        Self { charts: true, presentations: true, kanban: true, geocaching: true, plantuml: true, devtools: true, flashcards: true, folders: true }
     }
 
     pub fn get(&self, f: Feature) -> bool {
@@ -101,6 +107,7 @@ impl Features {
             Feature::PlantUml => self.plantuml,
             Feature::DevTools => self.devtools,
             Feature::Flashcards => self.flashcards,
+            Feature::Folders => self.folders,
         }
     }
 
@@ -113,6 +120,7 @@ impl Features {
             Feature::PlantUml => self.plantuml = on,
             Feature::DevTools => self.devtools = on,
             Feature::Flashcards => self.flashcards = on,
+            Feature::Folders => self.folders = on,
         }
     }
 

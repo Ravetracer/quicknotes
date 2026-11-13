@@ -3,7 +3,9 @@
 
 use crate::editor::{CursorTarget, EditorTab, LockState, PreviewKind, Shared};
 use crate::image_tab::{self, ImageTab};
-use crate::store::{self, Session, Settings, TabKind, TabMeta};
+use crate::library::{self, TRASH, UNGROUPED};
+use crate::notes_tree::{self, NotesTree};
+use crate::store::{self, Folder, Session, Settings, TabKind, TabMeta};
 use crate::features::{self, Feature, Features};
 use crate::geocaching::{self, Field};
 use crate::presenter::{self, Presentation};
@@ -105,6 +107,20 @@ pub struct Window {
     /// Header button with the developer tools.
     tools_btn: gtk::MenuButton,
     presentation: RefCell<Option<Rc<Presentation>>>,
+    /// The notes sidebar (folder tree) and the split it sits in.
+    notes_tree: Rc<NotesTree>,
+    notes_paned: gtk::Paned,
+    notes_btn: gtk::ToggleButton,
+    /// Folders of the notes library.
+    folders: RefCell<Vec<Folder>>,
+    /// Closed notes and file links of the library.
+    library: RefCell<Vec<TabMeta>>,
+    /// Folders of open tabs.
+    tab_folders: RefCell<HashMap<String, String>>,
+    /// Collapsed special places (Ungrouped, Trash).
+    special_collapsed: RefCell<HashSet<String>>,
+    /// Tabs that go to the trash when they close.
+    trash_on_close: RefCell<HashSet<String>>,
     /// The running study session of flash cards.
     study: RefCell<Option<Rc<crate::study::Study>>>,
     /// The learning overview window and its web view.
@@ -321,6 +337,13 @@ impl Window {
                 .action_name(action)
                 .build()
         };
+        let notes_btn = gtk::ToggleButton::builder()
+            .icon_name("sidebar-show-symbolic")
+            .tooltip_text(t!("Notes and folders (F9)"))
+            .action_name("win.notes-sidebar")
+            .visible(features::on(Feature::Folders))
+            .build();
+        header.pack_start(&notes_btn);
         header.pack_start(&icon_button("tab-new-symbolic", t!("New note (Ctrl+N)"), "win.new-note"));
         header.pack_start(&icon_button("document-open-symbolic", t!("Open file (Ctrl+O)"), "win.open"));
         header.pack_start(&icon_button("document-save-symbolic", t!("Save to file (Ctrl+S)"), "win.save"));
@@ -467,8 +490,24 @@ impl Window {
         content.set_shrink_end_child(false);
         content.set_position(settings.sidebar_width.max(120));
 
+        // The notes sidebar with the folder tree, left of everything.
+        let tree_target: Rc<RefCell<Option<Weak<Window>>>> = Rc::default();
+        let target = tree_target.clone();
+        let notes_tree = NotesTree::new(move |event| {
+            if let Some(this) = target.borrow().as_ref().and_then(Weak::upgrade) {
+                this.on_tree_event(event);
+            }
+        });
+        let notes_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
+        notes_paned.set_start_child(Some(&notes_tree.root));
+        notes_paned.set_end_child(Some(&content));
+        notes_paned.set_resize_start_child(false);
+        notes_paned.set_shrink_start_child(false);
+        notes_paned.set_shrink_end_child(false);
+        notes_paned.set_position(settings.notes_sidebar_width.max(140));
+
         let toasts = adw::ToastOverlay::new();
-        toasts.set_child(Some(&content));
+        toasts.set_child(Some(&notes_paned));
 
         let toolbar = adw::ToolbarView::new();
         toolbar.add_top_bar(&header);
@@ -535,6 +574,14 @@ impl Window {
             image_export: Cell::new((0, 0)),
             tools_btn: tools_btn.clone(),
             presentation: RefCell::new(None),
+            notes_tree,
+            notes_paned,
+            notes_btn,
+            folders: RefCell::new(Vec::new()),
+            library: RefCell::new(Vec::new()),
+            tab_folders: RefCell::new(HashMap::new()),
+            special_collapsed: RefCell::new(HashSet::new()),
+            trash_on_close: RefCell::new(HashSet::new()),
             study: RefCell::new(None),
             cards_overview: RefCell::new(None),
             tab_bar,
@@ -553,6 +600,7 @@ impl Window {
         });
 
         *menu_target.borrow_mut() = Some(this.weak());
+        *tree_target.borrow_mut() = Some(this.weak());
         this.setup_actions(app);
         this.setup_signals(&toolbar);
         this.setup_search();
@@ -639,6 +687,49 @@ impl Window {
                 w.new_kanban();
             }
         });
+        self.toggle_action("notes-sidebar", &["F9"], |w, on| {
+            w.settings.borrow_mut().notes_sidebar = on;
+            w.sync_layout();
+            w.schedule_persist();
+        });
+        type LibAction = fn(&Rc<Window>, String);
+        let lib_actions: [(&str, LibAction); 11] = [
+            ("lib-open", |w, id| w.open_note(&id)),
+            ("lib-new-folder", |w, parent| w.new_folder(parent)),
+            ("lib-rename-folder", |w, id| w.rename_folder(id)),
+            ("lib-delete-folder", |w, id| w.delete_folder(&id)),
+            ("lib-new-note", |w, folder| {
+                let t = w.new_note();
+                if !folder.is_empty() {
+                    w.tab_folders.borrow_mut().insert(t.id.clone(), folder);
+                    w.refresh_tree();
+                }
+            }),
+            ("lib-trash", |w, id| w.trash_note(&id)),
+            ("lib-restore", |w, id| w.restore_note(&id)),
+            ("lib-delete", |w, id| w.delete_notes(vec![id])),
+            ("lib-empty-trash", |w, _| {
+                let ids = w.library.borrow().iter().filter(|m| m.trashed).map(|m| m.id.clone()).collect();
+                w.delete_notes(ids);
+            }),
+            ("lib-remove", |w, id| w.remove_link(&id)),
+            ("lib-ungroup", |w, id| {
+                w.set_note_folder(&id, None);
+                w.refresh_tree();
+                w.schedule_persist();
+            }),
+        ];
+        for (name, f) in lib_actions {
+            let action = gio::SimpleAction::new(name, Some(glib::VariantTy::STRING));
+            let weak = self.weak();
+            action.connect_activate(move |_, param| {
+                let (Some(this), Some(arg)) = (weak.upgrade(), param.and_then(|p| p.str())) else { return };
+                if features::on(Feature::Folders) {
+                    f(&this, arg.to_owned());
+                }
+            });
+            self.win.add_action(&action);
+        }
         self.action("new-flashcards", &[], |w| {
             if features::on(Feature::Flashcards) {
                 w.new_flashcards();
@@ -873,6 +964,8 @@ impl Window {
         });
         let format_bar = self.settings.borrow().format_bar;
         self.set_toggle("format-bar", true, format_bar);
+        let notes_sidebar = self.settings.borrow().notes_sidebar;
+        self.set_toggle("notes-sidebar", true, notes_sidebar);
         for (name, accels, op) in FORMAT_ACTIONS {
             self.action(name, accels, move |w| {
                 if let Some(t) = w.current_text() {
@@ -930,6 +1023,14 @@ impl Window {
     }
 
     fn setup_signals(self: &Rc<Self>, toolbar: &adw::ToolbarView) {
+        let weak = self.weak();
+        self.notes_paned.connect_position_notify(move |paned| {
+            let Some(this) = weak.upgrade() else { return };
+            if this.notes_tree.root.is_visible() && paned.width() > 0 {
+                this.settings.borrow_mut().notes_sidebar_width = paned.position();
+                this.schedule_persist();
+            }
+        });
         // Remember the width of the tab sidebar.
         let weak = self.weak();
         self.content.connect_position_notify(move |paned| {
@@ -1375,15 +1476,19 @@ impl Window {
         if entry.page.title() != title {
             entry.page.set_title(&title);
         }
-        let tooltip = entry
+        let mut tooltip = entry
             .tab
             .path()
             .map(|p| markup_escape(&p.to_string_lossy()))
             .unwrap_or_else(|| t!("Note – stored automatically").into());
+        if let Some(folder) = self.tab_folders.borrow().get(id).filter(|_| features::on(Feature::Folders)) {
+            tooltip.push_str(&markup_escape(&format!("\n{}", t!("Folder: {}", library::path(&self.folders.borrow(), folder)))));
+        }
         entry.page.set_tooltip(&tooltip);
         if self.is_current(id) {
             self.update_window_title();
         }
+        self.refresh_tree();
     }
 
     fn new_note(self: &Rc<Self>) -> Rc<EditorTab> {
@@ -1439,9 +1544,315 @@ impl Window {
         self.sync_ui();
     }
 
+    // ===== notes library ===================================================
+
+    /// Updates the folder tree.
+    fn refresh_tree(&self) {
+        if !features::on(Feature::Folders) || !self.notes_tree.root.get_visible() {
+            return;
+        }
+        let tab_folders = self.tab_folders.borrow();
+        let mut items: Vec<library::Item> = self
+            .tabs
+            .borrow()
+            .iter()
+            .map(|(id, e)| {
+                let id = id.clone();
+                let style = TabStyle::of(&e.tab);
+                library::Item {
+                    title: e.tab.title(),
+                    folder: tab_folders.get(&id).cloned(),
+                    trashed: false,
+                    open: true,
+                    file: e.tab.path().is_some(),
+                    missing: false,
+                    icon: style.icon(),
+                    id,
+                }
+            })
+            .collect();
+        items.extend(self.library.borrow().iter().map(|m| library::Item {
+            id: m.id.clone(),
+            title: library_title(m),
+            folder: m.folder.clone(),
+            trashed: m.trashed,
+            open: false,
+            file: m.path.is_some(),
+            missing: m.path.as_ref().is_some_and(|p| !p.exists()),
+            icon: TabStyle::of_meta(m).icon(),
+        }));
+        drop(tab_folders);
+        let rows = library::rows(&self.folders.borrow(), &items, &self.special_collapsed.borrow(), (t!("Ungrouped"), t!("Trash")));
+        let current = self.current().map(|t| t.meta().id);
+        self.notes_tree.set_rows(rows, current.as_deref());
+    }
+
+    fn on_tree_event(self: &Rc<Self>, event: notes_tree::Event) {
+        match event {
+            notes_tree::Event::Open(id) => self.open_note(&id),
+            notes_tree::Event::Toggle(id) => {
+                if id.starts_with(':') {
+                    let mut set = self.special_collapsed.borrow_mut();
+                    if !set.remove(&id) {
+                        set.insert(id);
+                    }
+                } else if let Some(f) = self.folders.borrow_mut().iter_mut().find(|f| f.id == id) {
+                    f.collapsed = !f.collapsed;
+                }
+                self.refresh_tree();
+                self.schedule_persist();
+            }
+            notes_tree::Event::Move { folder, id, target } => {
+                if folder {
+                    let target = (target != UNGROUPED).then_some(target);
+                    if target.as_deref() == Some(TRASH) {
+                        return;
+                    }
+                    if !library::move_folder(&mut self.folders.borrow_mut(), &id, target.as_deref()) {
+                        return;
+                    }
+                } else if target == TRASH {
+                    self.trash_note(&id);
+                    return;
+                } else {
+                    self.set_note_folder(&id, (target != UNGROUPED).then_some(target));
+                }
+                self.refresh_tree();
+                self.schedule_persist();
+            }
+        }
+    }
+
+    /// Opens a note of the library (or switches to its tab).
+    fn open_note(self: &Rc<Self>, id: &str) {
+        let page = self.tabs.borrow().get(id).map(|e| e.page.clone());
+        if let Some(page) = page {
+            self.view.set_selected_page(&page);
+            return;
+        }
+        let Some(pos) = self.library.borrow().iter().position(|m| m.id == id) else { return };
+        let mut meta = self.library.borrow()[pos].clone();
+        if let Some(p) = meta.path.as_ref().filter(|p| !p.exists()) {
+            self.toast(&t!("File not found: {}", p.display()));
+            return;
+        }
+        meta.trashed = false;
+        let content = (meta.path.is_none() && meta.lock.is_none() && meta.kind == TabKind::Text)
+            .then(|| store::read_note(id))
+            .flatten();
+        let removed = self.library.borrow_mut().remove(pos);
+        match self.restore_tab(meta, content) {
+            Some(page) => self.view.set_selected_page(&page),
+            None => self.library.borrow_mut().insert(pos, removed),
+        }
+        self.refresh_tree();
+        self.schedule_persist();
+    }
+
+    /// Closing a tab with the notes library: notes stay in it (in their
+    /// folder), files only when they are in a folder.
+    fn forget_into_library(self: &Rc<Self>, tab: &Tab) {
+        let mut meta = tab.meta();
+        let id = meta.id.clone();
+        self.tabs.borrow_mut().remove(&id);
+        self.dirty.borrow_mut().remove(&id);
+        meta.folder = self.tab_folders.borrow_mut().remove(&id);
+        meta.trashed = self.trash_on_close.borrow_mut().remove(&id);
+        meta.modified = false;
+        let keep = match tab {
+            Tab::Text(t) if t.path.borrow().is_none() => {
+                if let Some(sealed) = t.sealed_content() {
+                    let _ = store::write_locked(&id, &sealed);
+                    meta.label = Some(t.custom_title.borrow().clone().unwrap_or_else(|| t!("Protected note").to_owned()));
+                    true
+                } else {
+                    let text = t.text();
+                    if text.trim().is_empty() && t.custom_title.borrow().is_none() {
+                        store::delete_note(&id);
+                        false
+                    } else {
+                        if let Err(e) = store::write_note(&id, &text) {
+                            self.toast(&t!("Cannot store note: {}", e));
+                        }
+                        meta.label = Some(t.title());
+                        true
+                    }
+                }
+            }
+            _ => {
+                meta.label = Some(tab.title());
+                meta.folder.is_some()
+            }
+        };
+        if keep {
+            self.library.borrow_mut().push(meta.clone());
+        }
+        if keep || meta.path.is_some() {
+            self.closed.borrow_mut().push((meta, None));
+        }
+        self.refresh_tree();
+        self.schedule_persist();
+    }
+
+    fn set_note_folder(&self, id: &str, folder: Option<String>) {
+        if self.tabs.borrow().contains_key(id) {
+            match folder {
+                Some(f) => {
+                    self.tab_folders.borrow_mut().insert(id.to_owned(), f);
+                }
+                None => {
+                    self.tab_folders.borrow_mut().remove(id);
+                }
+            }
+        } else if let Some(m) = self.library.borrow_mut().iter_mut().find(|m| m.id == id) {
+            m.folder = folder;
+            m.trashed = false;
+        }
+    }
+
+    /// Moves a note to the trash (closing its tab).
+    fn trash_note(self: &Rc<Self>, id: &str) {
+        let page = self.tabs.borrow().get(id).map(|e| e.page.clone());
+        if let Some(page) = page {
+            if self.tabs.borrow().get(id).and_then(|e| e.tab.path()).is_some() {
+                return;
+            }
+            self.trash_on_close.borrow_mut().insert(id.to_owned());
+            self.view.close_page(&page);
+        } else if let Some(m) = self.library.borrow_mut().iter_mut().find(|m| m.id == id && m.path.is_none()) {
+            m.trashed = true;
+        }
+        self.refresh_tree();
+        self.schedule_persist();
+    }
+
+    fn restore_note(self: &Rc<Self>, id: &str) {
+        if let Some(m) = self.library.borrow_mut().iter_mut().find(|m| m.id == id) {
+            m.trashed = false;
+        }
+        self.refresh_tree();
+        self.schedule_persist();
+    }
+
+    /// Deletes notes of the trash for good (after asking).
+    fn delete_notes(self: &Rc<Self>, ids: Vec<String>) {
+        if ids.is_empty() {
+            return;
+        }
+        let heading = if ids.len() == 1 {
+            let title = self.library.borrow().iter().find(|m| m.id == ids[0]).map(library_title).unwrap_or_default();
+            t!("Delete “{}” permanently?", title)
+        } else {
+            t!("Delete {} notes permanently?", ids.len())
+        };
+        let dialog = adw::AlertDialog::new(Some(&heading), Some(t!("This cannot be undone.")));
+        dialog.add_responses(&[("cancel", t!("_Cancel")), ("delete", t!("_Delete"))]);
+        dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+        dialog.set_close_response("cancel");
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            if dialog.choose_future(&this.win).await != "delete" {
+                return;
+            }
+            this.library.borrow_mut().retain(|m| {
+                let delete = ids.contains(&m.id);
+                if delete && m.path.is_none() {
+                    store::delete_note(&m.id);
+                }
+                !delete
+            });
+            this.closed.borrow_mut().retain(|(m, _)| !ids.contains(&m.id));
+            this.refresh_tree();
+            this.schedule_persist();
+        });
+    }
+
+    /// Removes a file from the library (the file itself stays).
+    fn remove_link(self: &Rc<Self>, id: &str) {
+        if self.tabs.borrow().contains_key(id) {
+            self.tab_folders.borrow_mut().remove(id);
+        } else {
+            self.library.borrow_mut().retain(|m| m.id != id);
+        }
+        self.refresh_tree();
+        self.schedule_persist();
+    }
+
+    /// Asks for a folder name.
+    async fn ask_folder_name(&self, heading: &str, initial: &str) -> Option<String> {
+        let dialog = adw::AlertDialog::new(Some(heading), None);
+        let entry = gtk::Entry::builder().text(initial).activates_default(true).build();
+        dialog.set_extra_child(Some(&entry));
+        dialog.add_responses(&[("cancel", t!("_Cancel")), ("ok", t!("_OK"))]);
+        dialog.set_response_appearance("ok", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("ok"));
+        dialog.set_close_response("cancel");
+        entry.grab_focus();
+        let answer = dialog.choose_future(&self.win).await;
+        let name = entry.text().trim().to_owned();
+        (answer == "ok" && !name.is_empty()).then_some(name)
+    }
+
+    fn new_folder(self: &Rc<Self>, parent: String) {
+        let parent = (!parent.is_empty() && !parent.starts_with(':')).then_some(parent);
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let Some(name) = this.ask_folder_name(t!("New Folder"), "").await else { return };
+            {
+                let mut folders = this.folders.borrow_mut();
+                let name = library::unique_name(&folders, parent.as_deref(), &name, None);
+                if let Some(p) = folders.iter_mut().find(|f| Some(&f.id) == parent.as_ref()) {
+                    p.collapsed = false;
+                }
+                folders.push(Folder { id: store::new_id(), name, parent, collapsed: false });
+            }
+            this.refresh_tree();
+            this.schedule_persist();
+        });
+    }
+
+    fn rename_folder(self: &Rc<Self>, id: String) {
+        let Some(current) = self.folders.borrow().iter().find(|f| f.id == id).map(|f| f.name.clone()) else { return };
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let Some(name) = this.ask_folder_name(t!("Rename Folder"), &current).await else { return };
+            {
+                let mut folders = this.folders.borrow_mut();
+                let parent = folders.iter().find(|f| f.id == id).and_then(|f| f.parent.clone());
+                let name = library::unique_name(&folders, parent.as_deref(), &name, Some(&id));
+                if let Some(f) = folders.iter_mut().find(|f| f.id == id) {
+                    f.name = name;
+                }
+            }
+            this.refresh_tree();
+            this.schedule_persist();
+        });
+    }
+
+    /// Removes a folder; its notes and sub-folders move one level up.
+    fn delete_folder(self: &Rc<Self>, id: &str) {
+        let Some(parent) = library::remove_folder(&mut self.folders.borrow_mut(), id) else { return };
+        for f in self.tab_folders.borrow_mut().values_mut().filter(|f| *f == id) {
+            match &parent {
+                Some(p) => *f = p.clone(),
+                None => f.clear(),
+            }
+        }
+        self.tab_folders.borrow_mut().retain(|_, f| !f.is_empty());
+        for m in self.library.borrow_mut().iter_mut().filter(|m| m.folder.as_deref() == Some(id)) {
+            m.folder = parent.clone();
+        }
+        self.refresh_tree();
+        self.schedule_persist();
+    }
+
     /// The help section for the current tab and cursor (F1).
     fn help_topic(&self) -> Option<&'static str> {
         use crate::help::{Cursor, Doc};
+        let in_tree = gtk::prelude::GtkWindowExt::focus(&self.win).is_some_and(|f| f.is_ancestor(&self.notes_tree.root));
+        if in_tree && features::on(Feature::Folders) {
+            return Some("folders");
+        }
         let t = match self.current()? {
             Tab::Text(t) => t,
             _ => return Some(crate::help::topic(Doc::Image, Cursor::default(), false)),
@@ -1642,6 +2053,10 @@ impl Window {
 
     /// Removes a tab from bookkeeping and remembers it for t!("Reopen Closed Tab").
     fn forget(self: &Rc<Self>, tab: &Tab) {
+        if features::on(Feature::Folders) {
+            self.forget_into_library(tab);
+            return;
+        }
         let meta = tab.meta();
         let id = meta.id.clone();
         self.tabs.borrow_mut().remove(&id);
@@ -1716,6 +2131,7 @@ impl Window {
     fn reopen_closed(self: &Rc<Self>) {
         let item = self.closed.borrow_mut().pop();
         match item {
+            Some((meta, _)) if self.library.borrow().iter().any(|m| m.id == meta.id) => self.open_note(&meta.id),
             Some((meta, content)) => {
                 if let Some(page) = self.restore_tab(meta, content) {
                     self.view.set_selected_page(&page);
@@ -1728,6 +2144,8 @@ impl Window {
     // ===== session ========================================================
 
     fn restore(self: &Rc<Self>, session: Session) {
+        *self.folders.borrow_mut() = session.folders;
+        *self.library.borrow_mut() = session.library;
         for meta in session.tabs {
             let content = store::read_note(&meta.id);
             self.restore_tab(meta, content);
@@ -1745,6 +2163,9 @@ impl Window {
     fn restore_tab(self: &Rc<Self>, meta: TabMeta, content: Option<String>) -> Option<adw::TabPage> {
         if self.tabs.borrow().contains_key(&meta.id) {
             return None;
+        }
+        if let Some(folder) = &meta.folder {
+            self.tab_folders.borrow_mut().insert(meta.id.clone(), folder.clone());
         }
         if meta.kind == TabKind::Image {
             let path = meta.path?;
@@ -1894,7 +2315,20 @@ impl Window {
             settings.width = w;
             settings.height = h;
         }
-        Session { version: 1, active, tabs, settings, vault: self.vault.borrow().clone(), sealed: None }
+        let folders = self.tab_folders.borrow();
+        for meta in &mut tabs {
+            meta.folder = folders.get(&meta.id).cloned();
+        }
+        Session {
+            version: 1,
+            active,
+            tabs,
+            library: self.library.borrow().clone(),
+            folders: self.folders.borrow().clone(),
+            settings,
+            vault: self.vault.borrow().clone(),
+            sealed: None,
+        }
     }
 
     // ===== backup =========================================================
@@ -1910,6 +2344,15 @@ impl Window {
                 contents.locked.push((t.id.clone(), sealed));
             } else if t.needs_note_file() {
                 contents.notes.push((t.id.clone(), t.text()));
+            }
+        }
+        for m in self.library.borrow().iter().filter(|m| m.path.is_none()) {
+            if m.lock.is_some() {
+                if let Some(sealed) = store::read_locked(&m.id) {
+                    contents.locked.push((m.id.clone(), sealed));
+                }
+            } else if let Some(text) = store::read_note(&m.id) {
+                contents.notes.push((m.id.clone(), text));
             }
         }
         contents.learning = Some(self.shared.learning.borrow().to_json());
@@ -2469,6 +2912,41 @@ impl Window {
                 self.mark_dirty(&id);
             }
         }
+        // The notes library: closed notes and folders.
+        for meta in &backup.session.library {
+            let mut meta = meta.clone();
+            let original = meta.id.clone();
+            let taken = |id: &str| self.tabs.borrow().contains_key(id) || self.library.borrow().iter().any(|m| m.id == id);
+            if merge && taken(&meta.id) {
+                meta.id = store::new_id();
+            }
+            if meta.path.is_none() {
+                let stored = match (&meta.lock, backup.locked.get(&original), backup.notes.get(&original)) {
+                    (Some(_), Some(sealed), _) => store::write_locked(&meta.id, sealed),
+                    (None, _, Some(text)) => store::write_note(&meta.id, text),
+                    _ => continue,
+                };
+                if let Err(e) = stored {
+                    self.toast(&t!("Cannot store note: {}", e));
+                    continue;
+                }
+            }
+            self.library.borrow_mut().push(meta);
+            restored += 1;
+        }
+        {
+            let mut folders = self.folders.borrow_mut();
+            if merge {
+                for f in &backup.session.folders {
+                    if !folders.iter().any(|g| g.id == f.id) {
+                        folders.push(f.clone());
+                    }
+                }
+            } else {
+                *folders = backup.session.folders.clone();
+            }
+        }
+        self.refresh_tree();
         (restored, missing)
     }
 
@@ -2526,6 +3004,13 @@ impl Window {
         }
         self.bulk_close.set(false);
         self.closed.borrow_mut().clear();
+        for m in self.library.borrow_mut().drain(..) {
+            if m.path.is_none() {
+                store::delete_note(&m.id);
+            }
+        }
+        self.folders.borrow_mut().clear();
+        self.tab_folders.borrow_mut().clear();
 
         // Settings from the backup, but keep this computer's window geometry.
         let restored = backup.session.settings.clone();
@@ -3366,6 +3851,9 @@ impl Window {
         let focus = self.focus_mode.get();
         self.tab_bar.set_visible(!vertical);
         self.tab_list.root.set_visible(vertical && !focus && self.view.n_pages() > 0);
+        let notes = features::on(Feature::Folders);
+        self.notes_btn.set_visible(notes);
+        self.notes_tree.root.set_visible(notes && self.settings.borrow().notes_sidebar && !focus);
         self.toolbar.set_reveal_top_bars(!focus);
         self.toolbar.set_reveal_bottom_bars(!focus);
     }
@@ -3403,6 +3891,8 @@ impl Window {
         };
         features::apply(all);
         self.tools_btn.set_visible(all.devtools);
+        self.sync_layout();
+        self.refresh_tree();
         // Context menus and the main menu are rebuilt for the new set.
         self.tab_styles.borrow_mut().clear();
         self.menu_context.set(None);
@@ -3594,6 +4084,7 @@ impl Window {
         let has_tabs = self.view.n_pages() > 0;
         self.stack.set_visible_child_name(if has_tabs { "tabs" } else { "empty" });
         self.sync_layout();
+        self.refresh_tree();
 
         self.guard.set(true);
         self.update_lock_actions();
@@ -4329,6 +4820,37 @@ impl TabStyle {
         }
     }
 
+    /// The type of a closed tab of the notes library.
+    fn of_meta(meta: &TabMeta) -> Self {
+        if meta.kind == TabKind::Image {
+            return Self::Image;
+        }
+        match meta.language.as_deref() {
+            None => Self::Note,
+            Some(slides::LANGUAGE) if features::on(Feature::Presentations) => Self::Slides,
+            Some(kanban::LANGUAGE) if features::on(Feature::Kanban) => Self::Kanban,
+            Some(crate::flashcards::LANGUAGE) if features::on(Feature::Flashcards) => Self::Cards,
+            Some("calc") => Self::Calc,
+            Some("markdown" | "rst" | "html" | "plantuml" | slides::LANGUAGE | kanban::LANGUAGE | crate::flashcards::LANGUAGE) => {
+                Self::Document
+            }
+            Some(_) => Self::Code,
+        }
+    }
+
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Note => "text-x-generic-symbolic",
+            Self::Code => "text-x-script-symbolic",
+            Self::Document => "x-office-document-symbolic",
+            Self::Slides => "x-office-presentation-symbolic",
+            Self::Calc => "accessories-calculator-symbolic",
+            Self::Kanban => "view-grid-symbolic",
+            Self::Cards => "starred-symbolic",
+            Self::Image => "image-x-generic-symbolic",
+        }
+    }
+
     /// Types with their own colour (plain notes keep the default look).
     const COLORED: [Self; 7] = [Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Kanban, Self::Cards, Self::Image];
 
@@ -4402,6 +4924,15 @@ impl TabStyle {
     fn exportable(self) -> bool {
         matches!(self, Self::Document | Self::Slides)
     }
+}
+
+/// The title of a closed tab of the notes library.
+fn library_title(meta: &TabMeta) -> String {
+    meta.label
+        .clone()
+        .or_else(|| meta.title.clone())
+        .or_else(|| meta.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| t!("Untitled note").to_owned())
 }
 
 /// Tags a tab widget (tab bar or sidebar row) with the class of its type.

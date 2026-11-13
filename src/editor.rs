@@ -2100,6 +2100,7 @@ impl EditorTab {
             cursor: self.buffer.cursor_position(),
             split: self.split.get(),
             lock: self.lock(),
+            ..Default::default()
         }
     }
 }

@@ -54,6 +54,9 @@ pub struct Settings {
     /// before the switches existed, none for new installations).
     #[serde(default = "crate::features::Features::all")]
     pub features: crate::features::Features,
+    /// The notes sidebar (folders) is shown.
+    pub notes_sidebar: bool,
+    pub notes_sidebar_width: i32,
 }
 
 impl Default for Settings {
@@ -77,6 +80,8 @@ impl Default for Settings {
             emmet_tab: true,
             format_bar: true,
             features: Default::default(),
+            notes_sidebar: true,
+            notes_sidebar_width: 240,
         }
     }
 }
@@ -111,6 +116,27 @@ pub struct TabMeta {
     /// The content is then stored in `notes/<id>.locked`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lock: Option<Lock>,
+    /// Folder of the notes library (see `library.rs`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    /// In the trash (closed notes only).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub trashed: bool,
+    /// Title shown in the library while the note is closed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// A folder of the notes library.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct Folder {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub collapsed: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -119,6 +145,11 @@ pub struct Session {
     pub version: u32,
     pub active: usize,
     pub tabs: Vec<TabMeta>,
+    /// Closed notes and file links of the notes library.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub library: Vec<TabMeta>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub folders: Vec<Folder>,
     pub settings: Settings,
     /// App password: the data key, wrapped with the password's key.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -129,10 +160,14 @@ pub struct Session {
 }
 
 /// The encrypted part of a session.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 struct SealedTabs {
     active: usize,
     tabs: Vec<TabMeta>,
+    #[serde(default)]
+    library: Vec<TabMeta>,
+    #[serde(default)]
+    folders: Vec<Folder>,
 }
 
 const SESSION_AAD: &[u8] = b"quicknotes-session";
@@ -158,6 +193,8 @@ impl Session {
         let part: SealedTabs = serde_json::from_str(&json).map_err(|_| crypto::Error::Format)?;
         self.active = part.active;
         self.tabs = part.tabs;
+        self.library = part.library;
+        self.folders = part.folders;
         self.sealed = None;
         Ok(())
     }
@@ -207,12 +244,19 @@ pub fn load_session() -> Session {
 pub fn save_session(session: &Session) -> io::Result<()> {
     let json = match (&session.vault, app_key()) {
         (Some(_), Some(key)) => {
-            let part = SealedTabs { active: session.active, tabs: session.tabs.clone() };
+            let part = SealedTabs {
+                active: session.active,
+                tabs: session.tabs.clone(),
+                library: session.library.clone(),
+                folders: session.folders.clone(),
+            };
             let plain = zeroize::Zeroizing::new(serde_json::to_string(&part).map_err(io::Error::other)?);
             let sealed = Session {
                 version: session.version,
                 active: 0,
                 tabs: Vec::new(),
+                library: Vec::new(),
+                folders: Vec::new(),
                 settings: session.settings.clone(),
                 vault: session.vault.clone(),
                 sealed: Some(key.seal_text(&plain, SESSION_AAD)),
@@ -341,19 +385,30 @@ mod tests {
         let mut session = Session { vault: Some(lock), ..Default::default() };
         session.tabs.push(TabMeta { id: "a1".into(), title: Some("Secret plans".into()), ..Default::default() });
         session.active = 0;
-        let part = SealedTabs { active: 0, tabs: session.tabs.clone() };
+        session.library.push(TabMeta { id: "b2".into(), label: Some("Closed diary".into()), ..Default::default() });
+        session.folders.push(Folder { id: "f1".into(), name: "Private folder".into(), ..Default::default() });
+        let part = SealedTabs {
+            active: 0,
+            tabs: session.tabs.clone(),
+            library: session.library.clone(),
+            folders: session.folders.clone(),
+        };
         let sealed = Session {
             sealed: Some(key.seal_text(&serde_json::to_string(&part).unwrap(), SESSION_AAD)),
             tabs: Vec::new(),
+            library: Vec::new(),
+            folders: Vec::new(),
             ..session.clone()
         };
         let json = serde_json::to_string(&sealed).unwrap();
-        assert!(!json.contains("Secret plans"));
+        assert!(!json.contains("Secret plans") && !json.contains("Closed diary") && !json.contains("Private folder"));
         let mut loaded: Session = serde_json::from_str(&json).unwrap();
         assert!(loaded.tabs.is_empty());
         assert_eq!(loaded.clone().unseal(&Key::random()), Err(crate::crypto::Error::Decrypt));
         loaded.unseal(&key).unwrap();
         assert_eq!(loaded.tabs[0].title.as_deref(), Some("Secret plans"));
+        assert_eq!(loaded.library[0].label.as_deref(), Some("Closed diary"));
+        assert_eq!(loaded.folders[0].name, "Private folder");
         assert!(loaded.sealed.is_none());
     }
 
