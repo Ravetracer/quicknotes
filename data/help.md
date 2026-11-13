@@ -1,6 +1,6 @@
 # QuickNotes Help {#top}
 
-**Contents:** [Notes & tabs](#notes) · [Checklists](#checklists) · [Tables](#tables) · [Formatting](#formatting) · [Math & music](#notation) · [Kanban](#kanban) · [Calculations](#calc) · [Templates](#templates) ·
+**Contents:** [Notes & tabs](#notes) · [Checklists](#checklists) · [Tables](#tables) · [Formatting](#formatting) · [Math & music](#notation) · [Charts](#charts) · [Kanban](#kanban) · [Calculations](#calc) · [Templates](#templates) ·
 [Previews & export](#previews) · [Presentations](#slides) · [Tools](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Security](#security) · [Backup](#backup) ·
 [Shortcuts](#shortcuts)
@@ -76,6 +76,12 @@ columns always line up – also with umlauts and wide characters.
   (`:--`, `:-:`, `--:`).
 - **Shift+Alt+↑/↓** move the row, **Shift+Alt+←/→** move the column.
 - *Beautify* (Ctrl+Alt+B) in a Markdown document formats all its tables at once.
+- **Import data** (table menu in the toolbar, or the context menu): a CSV/TSV file or a
+  spreadsheet (Excel `.xlsx`/`.xls`, LibreOffice `.ods`) becomes a Markdown table. You can pick
+  the sheet, the separator (detected automatically; Excel's `;` included) and whether the first
+  row is the header. Dates from spreadsheets become `YYYY-MM-DD`.
+- **Paste as Table** turns cells copied from a spreadsheet (or other tab/comma separated
+  text) into a table.
 
 ## Formatting {#formatting}
 
@@ -90,6 +96,8 @@ the Markdown for you, so you don't need to remember the syntax:
 - Bulleted and numbered lists, checklists and quotes for the selected lines (again to remove),
   code blocks, horizontal rules and tables.
 - **Link** (Ctrl+K) and **image**: the selection becomes the text, a selected URL the target.
+- **Chart** (a chart from the table above, with sample data if there is none), see
+  [Charts](#charts).
 - **∑ Formula** (inline or as a block) and **♫ Music notation** (an ABC tune), see below.
 
 *Main menu → Formatting Toolbar* hides the toolbar; the shortcuts keep working.
@@ -128,6 +136,74 @@ language `abc` (engraved with abcjs):
 The header lines set index (`X`), title (`T`), metre (`M`), default note length (`L`) and key
 (`K`, always last); then the melody follows: `C D E` are notes, `c d e` an octave higher,
 `C2` twice as long, `|` a bar line, `^` / `_` sharp / flat, `z` a rest.
+
+## Charts {#charts}
+
+Markdown documents and presentations can draw **charts from their tables** (with Apache
+ECharts, shown in the preview, presentations and HTML/PDF exports, no internet needed). A code
+block with the language `chart` holds the settings as `key: value` lines; the data comes from
+a table of the document – by default the nearest one **above** the block:
+
+    | Month | Revenue | Costs |
+    |-------|---------|-------|
+    | Jan   | 1.200 € | 800 € |
+    | Feb   | 1.500 € | 950 € |
+
+      ```chart
+      type: bar
+      title: Revenue and costs
+      ```
+
+The **chart button** in the toolbar inserts such a block (with a sample table when there is no
+table above). Mistakes are shown in red in place of the chart.
+
+**Which table:** `table: above` (default; without a table above, the one below is taken),
+`table: below`, `table: 2` (the second table of the document) or `table: Sales` (the first
+table under the heading "Sales").
+
+**Numbers in cells** may be written as you like: `1.234,56` and `1,234.56`, `12 %`, `€ 5`,
+`5 kg`, `(120)` for −120. Empty cells, `-` and `n/a` are gaps. If a number could be read either
+way (`1.234`), the other numbers of the column decide, then `decimal: ","` or `"."`, then the
+app language. A unit all numbers share appears on the axis. Dates can be `2026-03-01`,
+`01.03.2026` or `2026-03`.
+
+**Chart types** and the columns they use (columns are named by header or number; without
+settings the first column gives the names/categories and all number columns the values):
+
+| Type | Data |
+|------|------|
+| `line`, `area`, `bar` | `x` column (categories, dates give a time axis) and `y` columns; `group:` makes series of a column's values (long tables) |
+| `pie`, `donut`, `rose` | names and a value column (several value columns: several pies) |
+| `scatter`, `bubble` | `x` and `y` numbers; `size` (bubbles), `label`, `group` |
+| `radar` | the rows are the axes, every value column a shape |
+| `funnel` | names and values |
+| `gauge` | a gauge per row – or a fixed value: `value: 72` (`min`, `max`, `unit`) |
+| `boxplot` | a box per number column, or `x: Group` with a value column |
+| `candlestick` | date, open, high, low, close (found by header or in this order) |
+| `heatmap` | a matrix (row names, a column per x value) – or `x`, `y` and `value` columns |
+| `calendar` | a date and a value column; one calendar per year |
+| `sankey`, `graph` | `source`, `target` and `value` columns (`directed: true`, `layout: circular` for graphs) |
+| `treemap`, `sunburst`, `tree` | path columns (Region / Country / City) and a value – or `name` and `parent` columns |
+| `parallel` | an axis per column (`y: [...]` to choose), `group` for colours |
+| `themeriver` | dates/numbers and value columns (or `group` and `value`) |
+
+**Settings:** `title`, `subtitle`, `stack: true`, `horizontal: true`, `smooth: true`,
+`step: true`, `labels: true` (show values), `legend: top|bottom|left|right|false`,
+`zoom: true`, `sort: asc|desc`, `y2: Column` (second axis on the right, as line),
+`min`, `max`, `log: true`, `unit: "€"`, `height: 400`, `theme: light|dark` (default: like the
+page), `palette:` a name (`default`, `gnome`, `macarons`, `vintage`, `roma`, `shine`,
+`infographic`, `royal`, `sakura`, `caravan`, `azul`, `helianthus`, `blue`, `green`, `red`,
+`gray`) or a list of colours, `animation: true`. Anything else ECharts offers goes below
+`echarts:` and is merged into the chart, e.g. `echarts: { yAxis: [{ splitLine: { show: false } }] }`.
+
+**Defaults for all charts** of a document go into the front matter:
+
+    ---
+    charts:
+      palette: vintage
+      height: 300
+      decimal: ","
+    ---
 
 ## Kanban boards {#kanban}
 

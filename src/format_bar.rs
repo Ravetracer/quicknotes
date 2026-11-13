@@ -42,6 +42,33 @@ pub fn build() -> gtk::Box {
         .build();
     math.add_css_class("flat");
 
+    let tables = gio::Menu::new();
+    tables.append(Some(t!("Insert Table")), Some("win.table-insert"));
+    tables.append(Some(t!("Import Data (CSV, Excel, ODS)…")), Some("win.table-import"));
+    tables.append(Some(t!("Paste as Table")), Some("win.table-paste"));
+    let table = gtk::MenuButton::builder()
+        .icon_name(icons::format_icon("table"))
+        .menu_model(&tables)
+        .tooltip_text(t!("Table"))
+        .build();
+    table.add_css_class("flat");
+
+    let charts = gio::Menu::new();
+    for (kind, label) in crate::charts::MENU_COMMON {
+        charts.append(Some(crate::i18n::tr(label)), Some(&format!("win.chart-insert::{kind}")));
+    }
+    let more = gio::Menu::new();
+    for (kind, label) in crate::charts::MENU_MORE {
+        more.append(Some(crate::i18n::tr(label)), Some(&format!("win.chart-insert::{kind}")));
+    }
+    charts.append_submenu(Some(t!("More Charts")), &more);
+    let chart = gtk::MenuButton::builder()
+        .icon_name(icons::format_icon("chart"))
+        .menu_model(&charts)
+        .tooltip_text(t!("Chart from Table"))
+        .build();
+    chart.add_css_class("flat");
+
     let groups: [Vec<gtk::Widget>; 5] = [
         vec![
             heading.upcast(),
@@ -60,9 +87,9 @@ pub fn build() -> gtk::Box {
             icon("quote", t!("Quote"), "win.md-quote"),
             icon("code-block", t!("Code Block"), "win.md-code-block"),
             icon("rule", t!("Horizontal Rule"), "win.md-rule"),
-            icon("table", t!("Insert Table"), "win.table-insert"),
+            table.upcast(),
         ],
-        vec![math.upcast(), icon("music", t!("Music Notation (ABC)"), "win.md-music")],
+        vec![chart.upcast(), math.upcast(), icon("music", t!("Music Notation (ABC)"), "win.md-music")],
         vec![
             icon("link", t!("Link (Ctrl+K)"), "win.md-link"),
             icon("image", t!("Image"), "win.md-image"),

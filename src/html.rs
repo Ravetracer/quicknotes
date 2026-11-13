@@ -140,6 +140,7 @@ document.addEventListener('click', function (e) {{
 window.setTheme = function (t, vars) {{
   document.documentElement.dataset.theme = t;
   document.documentElement.style.cssText = vars || '';
+  if (window.qnRetheme) qnRetheme();
 }};
 </script>
 </head>

@@ -284,7 +284,7 @@ fn is_separator(line: &str) -> bool {
 
 /// The YAML front matter (if the source starts with one) and the index of
 /// the first line after it.
-fn front_matter(lines: &[&str]) -> (Option<serde_yaml::Mapping>, usize) {
+pub(crate) fn front_matter(lines: &[&str]) -> (Option<serde_yaml::Mapping>, usize) {
     if !lines.first().is_some_and(|l| is_separator(l)) {
         return (None, 0);
     }
@@ -395,7 +395,8 @@ fn script_safe(json: &str) -> String {
 }
 
 pub fn parse(source: &str) -> Deck {
-    let (front, raw) = split(source);
+    let source = crate::charts::expand(source);
+    let (front, raw) = split(&source);
     let mut cfg = Config::default();
     if let Some(map) = front {
         for (k, v) in map {
@@ -1110,6 +1111,16 @@ mod tests {
         assert_eq!(talk_duration("20m"), Some(1200));
         assert_eq!(talk_duration("20"), Some(1200));
         assert_eq!(talk_duration("1h 15min"), Some(4500));
+    }
+
+    #[test]
+    fn charts_use_tables_of_other_slides() {
+        let src = "# Data\n\n| a | b |\n|---|---|\n| x | 1 |\n\n---\n\n```chart\ntype: pie\nheight: 300\n```\n";
+        let deck = parse(src);
+        assert_eq!(deck.slides.len(), 2);
+        assert!(deck.slides[1].html.contains("language-qn-chart"), "{}", deck.slides[1].html);
+        assert!(!deck.slides[1].html.contains("error"));
+        assert_eq!(deck.lines, slide_lines(src));
     }
 
     #[test]

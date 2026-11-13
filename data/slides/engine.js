@@ -149,6 +149,7 @@
     this.secs = deck.slides.map(function (_, i) {
       var s = buildSection(i);
       self.vp.frame.appendChild(s);
+      if (window.qnDraw) qnDraw(s);
       return s;
     });
   }
@@ -220,6 +221,7 @@
     var sec = buildSection(slide);
     sec.classList.add('qn-current');
     this.vp.frame.appendChild(sec);
+    if (window.qnDraw) qnDraw(sec);
     applySteps(sec, step < 0 ? sec.qnSteps.length : step, -1);
   };
 
@@ -600,6 +602,7 @@
         var sec = buildSection(index);
         sec.classList.add('qn-current');
         pv.vp.frame.appendChild(sec);
+        if (window.qnDraw) qnDraw(sec);
         applySteps(sec, sec.qnSteps.length, -1);
         pv.sec = sec;
       } else {
@@ -650,6 +653,7 @@
 
   QN.setTheme = window.setTheme = function (theme) {
     document.documentElement.dataset.theme = theme;
+    if (window.qnRetheme) qnRetheme();
   };
 
   // ----- print -----------------------------------------------------------------
@@ -662,6 +666,7 @@
       page.style.setProperty('--qn-h', deck.h + 'px');
       var sec = buildSection(i);
       page.appendChild(sec);
+      if (window.qnDraw) qnDraw(sec);
       applySteps(sec, sec.qnSteps.length, -1, true);
     });
   }

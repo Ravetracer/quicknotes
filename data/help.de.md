@@ -1,6 +1,6 @@
 # QuickNotes-Hilfe {#top}
 
-**Inhalt:** [Notizen & Tabs](#notes) · [Checklisten](#checklists) · [Tabellen](#tables) · [Formatierung](#formatting) · [Formeln & Noten](#notation) · [Kanban](#kanban) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
+**Inhalt:** [Notizen & Tabs](#notes) · [Checklisten](#checklists) · [Tabellen](#tables) · [Formatierung](#formatting) · [Formeln & Noten](#notation) · [Diagramme](#charts) · [Kanban](#kanban) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
 [Vorschau & Export](#previews) · [Präsentationen](#slides) · [Werkzeuge](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Sicherheit](#security) · [Sicherung](#backup) ·
 [Tastenkürzel](#shortcuts)
@@ -79,6 +79,12 @@ formatiert, sodass die Spalten immer bündig sind – auch mit Umlauten und brei
   rechts **ausrichten** (`:--`, `:-:`, `--:`).
 - **Umschalt+Alt+↑/↓** verschieben die Zeile, **Umschalt+Alt+←/→** die Spalte.
 - *Formatieren* (Strg+Alt+B) formatiert in einem Markdown-Dokument alle Tabellen auf einmal.
+- **Daten importieren** (Tabellenmenü der Werkzeugleiste oder Kontextmenü): Eine CSV/TSV-Datei
+  oder Tabellenkalkulation (Excel `.xlsx`/`.xls`, LibreOffice `.ods`) wird zur
+  Markdown-Tabelle. Wählbar sind das Tabellenblatt, das Trennzeichen (wird erkannt, auch
+  Excels `;`) und ob die erste Zeile die Kopfzeile ist. Datumswerte werden zu `JJJJ-MM-TT`.
+- **Als Tabelle einfügen** macht aus kopierten Zellen einer Tabellenkalkulation (oder anderem
+  Text mit Tabs/Kommas) eine Tabelle.
 
 ## Formatierung {#formatting}
 
@@ -93,6 +99,8 @@ schreibt das Markdown für dich, die Syntax musst du dir nicht merken:
 - Aufzählungen, nummerierte Listen, Checklisten und Zitate für die markierten Zeilen (nochmal
   zum Entfernen), Codeblöcke, Trennlinien und Tabellen.
 - **Link** (Strg+K) und **Bild**: Die Auswahl wird zum Text, eine markierte URL zum Ziel.
+- **Diagramm** (ein Diagramm aus der Tabelle darüber, mit Beispieldaten, wenn es keine gibt),
+  siehe [Diagramme](#charts).
 - **∑ Formel** (im Text oder als Block) und **♫ Notenschrift** (eine ABC-Melodie), siehe unten.
 
 *Hauptmenü → Formatierungsleiste* blendet die Leiste aus; die Tastenkürzel funktionieren weiter.
@@ -132,6 +140,75 @@ die Seite zu stören.
 Die Kopfzeilen legen Nummer (`X`), Titel (`T`), Takt (`M`), Standard-Notenlänge (`L`) und
 Tonart (`K`, immer zuletzt) fest; danach folgt die Melodie: `C D E` sind Noten, `c d e` eine
 Oktave höher, `C2` doppelt so lang, `|` ein Taktstrich, `^` / `_` Kreuz / B, `z` eine Pause.
+
+## Diagramme {#charts}
+
+Markdown-Dokumente und Präsentationen können **Diagramme aus ihren Tabellen** zeichnen (mit
+Apache ECharts; in der Vorschau, in Präsentationen und im HTML/PDF-Export, ohne Internet). Ein
+Codeblock mit der Sprache `chart` enthält die Einstellungen als `Schlüssel: Wert`-Zeilen; die
+Daten kommen aus einer Tabelle des Dokuments – standardmäßig der nächsten **über** dem Block:
+
+    | Monat | Umsatz  | Kosten |
+    |-------|---------|--------|
+    | Jan   | 1.200 € | 800 €  |
+    | Feb   | 1.500 € | 950 €  |
+
+      ```chart
+      type: bar
+      title: Umsatz und Kosten
+      ```
+
+Der **Diagramm-Knopf** der Werkzeugleiste fügt so einen Block ein (mit einer Beispieltabelle,
+wenn darüber keine Tabelle steht). Fehler erscheinen rot an der Stelle des Diagramms.
+
+**Welche Tabelle:** `table: above` (Standard; gibt es darüber keine, wird die darunter
+genommen), `table: below`, `table: 2` (die zweite Tabelle des Dokuments) oder `table: Umsatz`
+(die erste Tabelle unter der Überschrift „Umsatz“).
+
+**Zahlen in Zellen** dürfen geschrieben sein, wie man will: `1.234,56` und `1,234.56`, `12 %`,
+`€ 5`, `5 kg`, `(120)` für −120. Leere Zellen, `-` und `n/a` sind Lücken. Ist eine Zahl
+mehrdeutig (`1.234`), entscheiden die anderen Zahlen der Spalte, dann `decimal: ","` oder
+`"."`, dann die Sprache der App. Eine Einheit, die alle Zahlen teilen, erscheint an der Achse.
+Datumswerte: `2026-03-01`, `01.03.2026` oder `2026-03`.
+
+**Diagrammtypen** und die Spalten, die sie nutzen (Spalten per Überschrift oder Nummer; ohne
+Angaben liefert die erste Spalte die Namen/Kategorien und alle Zahlenspalten die Werte):
+
+| Typ | Daten |
+|-----|-------|
+| `line`, `area`, `bar` | Spalte `x` (Kategorien; Datumswerte ergeben eine Zeitachse) und Spalten `y`; `group:` bildet Reihen aus den Werten einer Spalte (lange Tabellen) |
+| `pie`, `donut`, `rose` | Namen und eine Wertespalte (mehrere Wertespalten: mehrere Kreise) |
+| `scatter`, `bubble` | Zahlen `x` und `y`; `size` (Blasen), `label`, `group` |
+| `radar` | die Zeilen sind die Achsen, jede Wertespalte eine Fläche |
+| `funnel` | Namen und Werte |
+| `gauge` | ein Tachometer je Zeile – oder ein fester Wert: `value: 72` (`min`, `max`, `unit`) |
+| `boxplot` | ein Boxplot je Zahlenspalte, oder `x: Gruppe` mit einer Wertespalte |
+| `candlestick` | Datum, Eröffnung, Hoch, Tief, Schluss (per Überschrift oder in dieser Reihenfolge) |
+| `heatmap` | eine Matrix (Zeilennamen, eine Spalte je x-Wert) – oder Spalten `x`, `y` und `value` |
+| `calendar` | eine Datums- und eine Wertespalte; ein Kalender je Jahr |
+| `sankey`, `graph` | Spalten `source`, `target` und `value` (`directed: true`, `layout: circular` für Graphen) |
+| `treemap`, `sunburst`, `tree` | Pfadspalten (Region / Land / Stadt) und ein Wert – oder Spalten `name` und `parent` |
+| `parallel` | eine Achse je Spalte (`y: [...]` zur Auswahl), `group` für Farben |
+| `themeriver` | Datumswerte/Zahlen und Wertespalten (oder `group` und `value`) |
+
+**Einstellungen:** `title`, `subtitle`, `stack: true`, `horizontal: true`, `smooth: true`,
+`step: true`, `labels: true` (Werte anzeigen), `legend: top|bottom|left|right|false`,
+`zoom: true`, `sort: asc|desc`, `y2: Spalte` (zweite Achse rechts, als Linie), `min`, `max`,
+`log: true`, `unit: "€"`, `height: 400`, `theme: light|dark` (Standard: wie die Seite),
+`palette:` ein Name (`default`, `gnome`, `macarons`, `vintage`, `roma`, `shine`,
+`infographic`, `royal`, `sakura`, `caravan`, `azul`, `helianthus`, `blue`, `green`, `red`,
+`gray`) oder eine Liste von Farben, `animation: true`. Alles Weitere, was ECharts kann, kommt
+unter `echarts:` und wird ins Diagramm übernommen, z. B.
+`echarts: { yAxis: [{ splitLine: { show: false } }] }`.
+
+**Vorgaben für alle Diagramme** eines Dokuments stehen im Front Matter:
+
+    ---
+    charts:
+      palette: vintage
+      height: 300
+      decimal: ","
+    ---
 
 ## Kanban-Boards {#kanban}
 

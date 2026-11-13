@@ -720,6 +720,31 @@ impl Window {
                 None => {}
             }
         });
+        self.action("table-import", &[], |w| {
+            match w.current_text() {
+                Some(t) if t.tasks_enabled() => w.import_data(t),
+                Some(_) => w.toast(t!("Tables work in notes, Markdown and presentations")),
+                None => {}
+            }
+        });
+        self.action("table-paste", &[], |w| {
+            match w.current_text() {
+                Some(t) if t.tasks_enabled() => w.paste_table(t),
+                Some(_) => w.toast(t!("Tables work in notes, Markdown and presentations")),
+                None => {}
+            }
+        });
+        let chart = gio::SimpleAction::new("chart-insert", Some(glib::VariantTy::STRING));
+        let weak = self.weak();
+        chart.connect_activate(move |_, param| {
+            let (Some(this), Some(kind)) = (weak.upgrade(), param.and_then(|p| p.str())) else { return };
+            match this.current_text() {
+                Some(t) if t.tasks_enabled() => t.insert_chart(kind),
+                Some(_) => this.toast(t!("Charts work in notes, Markdown and presentations")),
+                None => {}
+            }
+        });
+        self.win.add_action(&chart);
         for (name, accels, op) in TABLE_ACTIONS {
             self.action(name, accels, move |w| {
                 if let Some(t) = w.current_text() {
@@ -760,6 +785,14 @@ impl Window {
                 gtk::License::MitX11,
                 None,
             );
+            about.add_legal_section(
+                "Apache ECharts",
+                Some("Copyright 2017-2026 The Apache Software Foundation"),
+                gtk::License::Apache20,
+                None,
+            );
+            about.add_legal_section("calamine", Some("Copyright (c) 2016 Johann Tuffe"), gtk::License::MitX11, None);
+            about.add_legal_section("rust-csv", Some("Copyright (c) 2015 Andrew Gallant"), gtk::License::MitX11, None);
             for (_, name, copyright) in themes::SOURCES.iter().filter(|s| !s.2.is_empty()) {
                 about.add_legal_section(name, Some(copyright), gtk::License::MitX11, None);
             }
@@ -2944,6 +2977,163 @@ impl Window {
         prefs::show(&self.win, &settings, app_password, colors, Rc::new(PrefsBridge(self.weak())));
     }
 
+    // ===== data import ======================================================
+
+    /// Imports a CSV/TSV file or a spreadsheet as Markdown table.
+    fn import_data(self: &Rc<Self>, t: Rc<EditorTab>) {
+        let filter = gtk::FileFilter::new();
+        filter.set_name(Some(t!("Tables (CSV, TSV, Excel, ODS)")));
+        for ext in ["csv", "tsv", "tab", "txt", "xlsx", "xlsm", "xlsb", "xls", "ods"] {
+            filter.add_suffix(ext);
+        }
+        let all = gtk::FileFilter::new();
+        all.set_name(Some(t!("All Files")));
+        all.add_pattern("*");
+        let filters = gio::ListStore::new::<gtk::FileFilter>();
+        filters.append(&filter);
+        filters.append(&all);
+        let dialog = gtk::FileDialog::builder().title(t!("Import Data")).modal(true).filters(&filters).default_filter(&filter).build();
+        if let Some(dir) = t.base_dir() {
+            dialog.set_initial_folder(Some(&gio::File::for_path(dir)));
+        }
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let Ok(file) = dialog.open_future(Some(&this.win)).await else { return };
+            let Some(path) = file.path() else { return };
+            let source = if crate::import::is_spreadsheet(&path) {
+                match crate::import::read_spreadsheet(&path) {
+                    Ok(sheets) => ImportSource::Sheets(sheets),
+                    Err(e) => return this.toast(&t!("Could not read {}: {}", path.display(), e)),
+                }
+            } else {
+                match std::fs::read(&path) {
+                    Ok(bytes) => ImportSource::Text(crate::import::decode(&bytes)),
+                    Err(e) => return this.toast(&t!("Could not read {}: {}", path.display(), e)),
+                }
+            };
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            this.import_dialog(t, &name, source).await;
+        });
+    }
+
+    /// Inserts the clipboard's tab or comma separated text as table.
+    fn paste_table(self: &Rc<Self>, t: Rc<EditorTab>) {
+        let this = self.clone();
+        let clipboard = self.win.clipboard();
+        glib::spawn_future_local(async move {
+            let text = clipboard.read_text_future().await.ok().flatten().map(|s| s.to_string()).unwrap_or_default();
+            let rows = crate::import::read_delimited(&text, None).unwrap_or_default();
+            if rows.len() < 2 || rows.iter().all(|r| r.len() < 2) {
+                return this.toast(t!("The clipboard holds no table data"));
+            }
+            this.insert_rows(&t, &rows, true);
+        });
+    }
+
+    fn insert_rows(&self, t: &EditorTab, rows: &[Vec<String>], header: bool) {
+        let (table, cut) = crate::import::to_markdown(rows, header, "");
+        t.insert_block(&table, 0);
+        if cut {
+            self.toast(&t!("Only the first {} rows were imported", crate::import::MAX_ROWS));
+        }
+    }
+
+    /// Lets the user pick sheet, separator and header row, then inserts the table.
+    async fn import_dialog(self: &Rc<Self>, t: Rc<EditorTab>, name: &str, source: ImportSource) {
+        let dialog = adw::AlertDialog::new(Some(t!("Import Data")), Some(name));
+        let list = gtk::ListBox::builder().selection_mode(gtk::SelectionMode::None).build();
+        list.add_css_class("boxed-list");
+        let sheet = match &source {
+            ImportSource::Sheets(sheets) if sheets.len() > 1 => {
+                let names: Vec<&str> = sheets.iter().map(|s| s.name.as_str()).collect();
+                let row = adw::ComboRow::builder().title(t!("Sheet")).model(&gtk::StringList::new(&names)).build();
+                // The first sheet with data.
+                if let Some(i) = sheets.iter().position(|s| !s.rows.is_empty()) {
+                    row.set_selected(i as u32);
+                }
+                list.append(&row);
+                Some(row)
+            }
+            _ => None,
+        };
+        let delimiter = match &source {
+            ImportSource::Text(text) => {
+                let mut labels = vec![t!("Automatic")];
+                labels.extend(crate::import::DELIMITERS.iter().map(|(_, l)| crate::i18n::tr(l)));
+                let row = adw::ComboRow::builder().title(t!("Separator")).model(&gtk::StringList::new(&labels)).build();
+                let detected = crate::import::detect_delimiter(text);
+                let auto = crate::import::DELIMITERS.iter().find(|(d, _)| *d == detected).map_or("", |(_, l)| crate::i18n::tr(l));
+                row.set_subtitle(&t!("Detected: {}", auto));
+                list.append(&row);
+                Some(row)
+            }
+            _ => None,
+        };
+        let header = adw::SwitchRow::builder().title(t!("First row is header")).active(true).build();
+        list.append(&header);
+        let info = gtk::Label::builder().xalign(0.0).wrap(true).margin_top(8).build();
+        info.add_css_class("caption");
+        info.add_css_class("dim-label");
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        content.append(&list);
+        content.append(&info);
+        dialog.set_extra_child(Some(&content));
+        dialog.add_response("cancel", t!("_Cancel"));
+        dialog.add_response("import", t!("_Import"));
+        dialog.set_response_appearance("import", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("import"));
+        dialog.set_close_response("cancel");
+
+        let source = Rc::new(source);
+        let rows = {
+            let (source, sheet, delimiter) = (source.clone(), sheet.clone(), delimiter.clone());
+            move || -> Vec<Vec<String>> {
+                match &*source {
+                    ImportSource::Sheets(sheets) => {
+                        let i = sheet.as_ref().map_or(0, |s| s.selected() as usize);
+                        sheets.get(i).map(|s| s.rows.clone()).unwrap_or_default()
+                    }
+                    ImportSource::Text(text) => {
+                        let d = delimiter
+                            .as_ref()
+                            .map(|r| r.selected() as usize)
+                            .filter(|&i| i > 0)
+                            .and_then(|i| crate::import::DELIMITERS.get(i - 1))
+                            .map(|(d, _)| *d);
+                        crate::import::read_delimited(text, d).unwrap_or_default()
+                    }
+                }
+            }
+        };
+        let rows = Rc::new(rows);
+        let update = {
+            let (rows, info, dialog, header) = (rows.clone(), info.clone(), dialog.clone(), header.clone());
+            move || {
+                let rows = rows();
+                let width = rows.iter().map(Vec::len).max().unwrap_or(0);
+                let body = rows.len().saturating_sub(usize::from(header.is_active()));
+                info.set_text(&t!("{} rows, {} columns", body, width));
+                dialog.set_response_enabled("import", !rows.is_empty());
+            }
+        };
+        let update = Rc::new(update);
+        update();
+        if let Some(s) = &sheet {
+            let u = update.clone();
+            s.connect_selected_notify(move |_| u());
+        }
+        if let Some(d) = &delimiter {
+            let u = update.clone();
+            d.connect_selected_notify(move |_| u());
+        }
+        let u = update.clone();
+        header.connect_active_notify(move |_| u());
+
+        if dialog.choose_future(&self.win).await == "import" {
+            self.insert_rows(&t, &rows(), header.is_active());
+        }
+    }
+
     fn toast(&self, text: &str) {
         let toast = adw::Toast::new(&markup_escape(text));
         toast.set_timeout(4);
@@ -4048,7 +4238,14 @@ fn editor_context_menu(style: TabStyle, emmet: bool) -> gio::Menu {
         menu.append_section(None, &emmet_section());
     }
     if matches!(style, TabStyle::Note | TabStyle::Document | TabStyle::Slides) {
-        menu.append_section(None, &menu_section(&[(t!("Insert Table"), "win.table-insert")]));
+        menu.append_section(
+            None,
+            &menu_section(&[
+                (t!("Insert Table"), "win.table-insert"),
+                (t!("Import Data (CSV, Excel, ODS)…"), "win.table-import"),
+                (t!("Paste as Table"), "win.table-paste"),
+            ]),
+        );
     }
     menu.append_section(None, &quick_tools());
     menu.append_section(None, &tool_submenus());
@@ -4060,6 +4257,13 @@ fn editor_context_menu(style: TabStyle, emmet: bool) -> gio::Menu {
     }
     menu.append_section(None, &geocaching_menu());
     menu
+}
+
+/// Data to import as table.
+enum ImportSource {
+    /// Delimited text (CSV, TSV, …).
+    Text(String),
+    Sheets(Vec<crate::import::Sheet>),
 }
 
 /// Markdown formatting commands: action name, accelerators and operation

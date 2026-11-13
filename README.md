@@ -30,10 +30,17 @@ after a restart.
   Ctrl+Enter, list continuation on Enter, progress in the status bar
 - **Formatting toolbar** for Markdown documents and presentations: headings, bold, italic,
   strikethrough, code, text colours, lists, checklists, quotes, code blocks, rules, tables,
-  links, images, formulas and tunes
+  links, images, charts, formulas and tunes
 - **Math formulas** in LaTeX (`$…$`, `$$…$$`, ```` ```math ````), typeset with KaTeX, and
   **music notation** in ABC (```` ```abc ````), engraved with abcjs – in the preview,
   presentations and exports, fully offline
+- **Charts from Markdown tables** (```` ```chart ````, drawn with Apache ECharts): line, area,
+  bar, pie, donut, rose, scatter, bubble, radar, funnel, gauge, box plot, candlestick, heat map,
+  calendar, Sankey, network graph, treemap, sunburst, tree, parallel coordinates and theme
+  river; numbers in English or German notation with units and currencies; defaults per
+  document in the front matter
+- **Data import**: CSV/TSV files and spreadsheets (Excel, LibreOffice) become Markdown tables;
+  cells copied from a spreadsheet can be pasted as table
 - **Markdown tables** like Obsidian's *Advanced Tables*: automatic formatting, Tab/Enter
   navigation, insert/delete/move rows and columns, sorting, column alignment
 - **Kanban boards**: freely defined columns (title, colour, WIP limit) and swimlanes, drag & drop
@@ -146,9 +153,9 @@ of failing. Build details: `packaging/appimage/`.
 ## Previews and export
 
 - **Markdown** is rendered with pulldown-cmark (tables, task lists, footnotes, strikethrough,
-  math). Formulas are typeset with KaTeX and ABC tunes engraved with abcjs; both are bundled
-  and only loaded into pages that use them. Exported HTML files contain them as well, so they
-  work offline.
+  math). Formulas are typeset with KaTeX, ABC tunes engraved with abcjs and charts drawn with
+  Apache ECharts; all are bundled and only loaded into pages that use them. Exported HTML files
+  contain them as well, so they work offline. A YAML front matter is not shown.
 - **reStructuredText** is rendered with [docutils-core](https://crates.io/crates/docutils-core),
   a Rust port of docutils – no Python needed. `include` and images resolve relative to the file.
   Problems from level ERROR upwards are shown in the preview.
@@ -229,6 +236,18 @@ Math formulas are typeset with [KaTeX](https://katex.org) (npm package `katex` 0
 
 ABC music notation is engraved with [abcjs](https://github.com/paulrosen/abcjs) (npm package
 `abcjs` 6.7.2, © Paul Rosen and Gregory Dyke, MIT License), bundled in `data/abcjs/`.
+
+### Apache ECharts
+
+Charts are drawn with [Apache ECharts](https://echarts.apache.org) (npm package `echarts`
+6.1.0, © The Apache Software Foundation, Apache License 2.0; parts derived from d3.js under the
+BSD 3-Clause License), bundled in `data/echarts/`. The named chart palettes are taken from the
+ECharts themes.
+
+### calamine and csv
+
+Spreadsheets are read with [calamine](https://github.com/tafia/calamine) (MIT License) and
+CSV files with [csv](https://github.com/BurntSushi/rust-csv) (MIT/Unlicense).
 
 ### Colour themes
 

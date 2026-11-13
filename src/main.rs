@@ -2,6 +2,8 @@
 mod i18n;
 mod backup;
 mod calc;
+mod chart_data;
+mod charts;
 mod checklist;
 mod completion;
 mod crypto;
@@ -12,6 +14,7 @@ mod format;
 mod format_bar;
 mod geocaching;
 mod help;
+mod import;
 mod html;
 mod icons;
 mod image_tab;

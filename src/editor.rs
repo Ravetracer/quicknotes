@@ -939,6 +939,56 @@ impl EditorTab {
         }
     }
 
+    /// Inserts a block of lines at the cursor: in place of an empty cursor
+    /// line, else below the cursor line, set off by blank lines. The cursor
+    /// goes to line `cursor_line` of the block (end of the line).
+    pub fn insert_block(&self, block: &str, cursor_line: usize) {
+        let cursor = self.buffer.iter_at_mark(&self.buffer.get_insert());
+        let line = cursor.line();
+        let current = self.line_text(line).unwrap_or_default();
+        self.buffer.begin_user_action();
+        let (mut at, prefix, first) = if current.trim().is_empty() {
+            let mut start = cursor;
+            start.set_line_offset(0);
+            let mut end = start;
+            if !end.ends_line() {
+                end.forward_to_line_end();
+            }
+            self.buffer.delete(&mut start, &mut end);
+            (start, "", line)
+        } else {
+            let mut end = cursor;
+            if !end.ends_line() {
+                end.forward_to_line_end();
+            }
+            (end, "\n\n", line + 2)
+        };
+        let next_empty = self.line_text(at.line() + 1).is_none_or(|l| l.trim().is_empty());
+        let suffix = if next_empty { "" } else { "\n" };
+        self.buffer.insert(&mut at, &format!("{prefix}{block}{suffix}"));
+        self.buffer.end_user_action();
+        if let Some(mut iter) = self.buffer.iter_at_line(first + cursor_line as i32) {
+            if !iter.ends_line() {
+                iter.forward_to_line_end();
+            }
+            self.buffer.place_cursor(&iter);
+            self.view.scroll_mark_onscreen(&self.buffer.get_insert());
+        }
+    }
+
+    /// Whether there is a Markdown table above the cursor.
+    pub fn table_above_cursor(&self) -> bool {
+        let cursor = self.buffer.iter_at_mark(&self.buffer.get_insert());
+        let text = self.buffer.text(&self.buffer.start_iter(), &cursor, false);
+        !crate::chart_data::outline(&text).tables.is_empty()
+    }
+
+    /// Inserts a chart block (with sample data if there is no table above).
+    pub fn insert_chart(&self, kind: &str) {
+        let (block, line) = crate::charts::template(kind, !self.table_above_cursor());
+        self.insert_block(&block, line);
+    }
+
     /// Toggles the task on `line` (also used by clicks in the preview).
     pub fn toggle_task(&self, line: i32) {
         let Some(text) = self.line_text(line) else { return };
