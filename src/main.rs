@@ -10,6 +10,7 @@ mod crypto;
 mod editor;
 mod emmet;
 mod export;
+mod features;
 mod format;
 mod format_bar;
 mod geocaching;

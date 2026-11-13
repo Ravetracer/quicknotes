@@ -4,6 +4,7 @@
 use crate::store::{TabKind, TabMeta};
 use crate::calc::{self, LineResult};
 use crate::themes::Theme;
+use crate::features::{self, Feature};
 use crate::notation::Libs;
 use crate::{checklist, crypto, emmet, format_bar, html, kanban, langs, markdown, md_format, plantuml, rst, slides, table};
 use gtk::prelude::*;
@@ -43,10 +44,14 @@ pub enum PreviewKind {
 impl PreviewKind {
     fn for_language(id: Option<&str>) -> Option<Self> {
         match id {
+            Some("plantuml") if !features::on(Feature::PlantUml) => None,
             Some("markdown") => Some(Self::Markdown),
             Some("plantuml") => Some(Self::PlantUml),
             Some("rst") => Some(Self::Rst),
             Some("html") => Some(Self::Html),
+            // Switched-off features: presentations and boards are Markdown.
+            Some(slides::LANGUAGE) if !features::on(Feature::Presentations) => Some(Self::Markdown),
+            Some(kanban::LANGUAGE) if !features::on(Feature::Kanban) => Some(Self::Markdown),
             Some(slides::LANGUAGE) => Some(Self::Slides),
             Some(kanban::LANGUAGE) => Some(Self::Kanban),
             _ => None,
@@ -775,18 +780,40 @@ impl EditorTab {
         let has_selection = self.buffer.has_selection();
         let editable = view.is_editable();
         let can_paste = view.clipboard().formats().contains_type(glib::Type::STRING);
-        view.action_set_enabled("clipboard.cut", editable && has_selection);
-        view.action_set_enabled("clipboard.copy", has_selection);
-        view.action_set_enabled("clipboard.paste", editable && can_paste);
-        view.action_set_enabled("selection.delete", editable && has_selection);
-        view.action_set_enabled("selection.select-all", self.buffer.char_count() > 0);
+        // The popover is not inside the text view (see `show_popover`), so its
+        // own actions forward to the view's built-in ones.
+        let actions = gio::SimpleActionGroup::new();
+        let commands: [(&str, &str, bool); 6] = [
+            ("cut", "clipboard.cut", editable && has_selection),
+            ("copy", "clipboard.copy", has_selection),
+            ("paste", "clipboard.paste", editable && can_paste),
+            ("delete", "selection.delete", editable && has_selection),
+            ("select-all", "selection.select-all", self.buffer.char_count() > 0),
+            ("insert-emoji", "misc.insert-emoji", editable),
+        ];
+        for (name, target, enabled) in commands {
+            let action = gio::SimpleAction::new(name, None);
+            action.set_enabled(enabled);
+            let view = view.downgrade();
+            action.connect_activate(move |_, _| {
+                if let Some(v) = view.upgrade() {
+                    let _ = v.activate_action(target, None);
+                }
+            });
+            actions.add_action(&action);
+        }
+        let item = |label: &str, action: &str, accel: &str| {
+            let item = gio::MenuItem::new(Some(label), Some(action));
+            item.set_attribute_value("accel", Some(&accel.to_variant()));
+            item
+        };
 
         let menu = gio::Menu::new();
         let clipboard = gio::Menu::new();
-        clipboard.append(Some(t!("Cut")), Some("clipboard.cut"));
-        clipboard.append(Some(t!("Copy")), Some("clipboard.copy"));
-        clipboard.append(Some(t!("Paste")), Some("clipboard.paste"));
-        clipboard.append(Some(t!("Delete")), Some("selection.delete"));
+        clipboard.append_item(&item(t!("Cut"), "ctx.cut", "<Control>x"));
+        clipboard.append_item(&item(t!("Copy"), "ctx.copy", "<Control>c"));
+        clipboard.append_item(&item(t!("Paste"), "ctx.paste", "<Control>v"));
+        clipboard.append(Some(t!("Delete")), Some("ctx.delete"));
         menu.append_section(None, &clipboard);
         // In a table only the table commands, besides the clipboard.
         let table = self.table_at_cursor().and_then(|_| self.table_menu.borrow().clone());
@@ -794,8 +821,8 @@ impl EditorTab {
             menu.append_section(None, &table);
         } else {
             let more = gio::Menu::new();
-            more.append(Some(t!("Select All")), Some("selection.select-all"));
-            more.append(Some(t!("Insert Emoji")), Some("misc.insert-emoji"));
+            more.append_item(&item(t!("Select All"), "ctx.select-all", "<Control>a"));
+            more.append_item(&item(t!("Insert Emoji"), "ctx.insert-emoji", "<Control>semicolon"));
             menu.append_section(None, &more);
             if let Some(extra) = self.context_menu.borrow().clone() {
                 menu.append_section(None, &extra);
@@ -803,11 +830,28 @@ impl EditorTab {
         }
 
         let popover = gtk::PopoverMenu::from_model_full(&menu, gtk::PopoverMenuFlags::NESTED);
-        popover.set_parent(view);
         popover.set_has_arrow(false);
         popover.set_halign(gtk::Align::Start);
         popover.set_position(gtk::PositionType::Bottom);
-        popover.set_pointing_to(Some(&gdk::Rectangle::new(x, y, 1, 1)));
+        popover.insert_action_group("ctx", Some(&actions));
+        self.show_popover(popover.upcast_ref(), gdk::Rectangle::new(x, y, 1, 1));
+    }
+
+    /// Shows a popover pointing at `rect` (coordinates of the text view).
+    ///
+    /// The popover is attached to the box around the editor, not to the text
+    /// view: popovers are only resized to their content when their parent
+    /// presents them while allocating, which widgets with a layout manager
+    /// (like `GtkBox`) do and `GtkTextView` does not – a context menu would
+    /// keep the height measured before all its items were there and scroll.
+    pub fn show_popover(&self, popover: &gtk::Popover, rect: gdk::Rectangle) {
+        let parent: gtk::Widget = self.root.start_child().unwrap_or_else(|| self.view.clone().upcast());
+        let origin = self
+            .view
+            .compute_point(&parent, &gtk::graphene::Point::new(rect.x() as f32, rect.y() as f32))
+            .unwrap_or_else(|| gtk::graphene::Point::new(rect.x() as f32, rect.y() as f32));
+        popover.set_parent(&parent);
+        popover.set_pointing_to(Some(&gdk::Rectangle::new(origin.x() as i32, origin.y() as i32, rect.width(), rect.height())));
         popover.connect_closed(|p| {
             let p = p.clone();
             glib::idle_add_local_once(move || p.unparent());
@@ -1533,6 +1577,13 @@ impl EditorTab {
     pub fn sync_format_bar(&self) {
         let markdown = matches!(self.preview_kind(), Some(PreviewKind::Markdown | PreviewKind::Slides));
         self.format_bar.set_visible(markdown && self.shared.format_bar.get() && !self.focus.get());
+        format_bar::sync_features(&self.format_bar);
+    }
+
+    /// Called after optional features were switched on or off: the tab's
+    /// type, its toolbar and its preview may change.
+    pub fn features_changed(self: &Rc<Self>) {
+        self.sync_preview();
     }
 
     fn sync_preview(self: &Rc<Self>) {

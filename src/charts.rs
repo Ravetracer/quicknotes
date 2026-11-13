@@ -174,7 +174,7 @@ struct Block {
 
 /// Replaces the chart blocks of a Markdown document by resolved ones.
 pub fn expand(markdown: &str) -> Cow<'_, str> {
-    if !markdown.contains(LANG) {
+    if !markdown.contains(LANG) || !crate::features::on(crate::features::Feature::Charts) {
         return Cow::Borrowed(markdown);
     }
     let blocks = blocks(markdown);

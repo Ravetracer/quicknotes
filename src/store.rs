@@ -50,6 +50,10 @@ pub struct Settings {
     pub emmet_tab: bool,
     /// Formatting toolbar above Markdown editors.
     pub format_bar: bool,
+    /// Optional features that are on (all of them for settings saved
+    /// before the switches existed, none for new installations).
+    #[serde(default = "crate::features::Features::all")]
+    pub features: crate::features::Features,
 }
 
 impl Default for Settings {
@@ -72,6 +76,7 @@ impl Default for Settings {
             tab_colors: Default::default(),
             emmet_tab: true,
             format_bar: true,
+            features: Default::default(),
         }
     }
 }

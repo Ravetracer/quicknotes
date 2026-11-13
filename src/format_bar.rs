@@ -68,6 +68,8 @@ pub fn build() -> gtk::Box {
         .tooltip_text(t!("Chart from Table"))
         .build();
     chart.add_css_class("flat");
+    chart.set_widget_name(CHART_BUTTON);
+    chart.set_visible(crate::features::on(crate::features::Feature::Charts));
 
     let groups: [Vec<gtk::Widget>; 5] = [
         vec![
@@ -104,6 +106,20 @@ pub fn build() -> gtk::Box {
         }
     }
     bar
+}
+
+const CHART_BUTTON: &str = "qn-chart-button";
+
+/// Shows or hides the buttons of optional features (see [`crate::features`]).
+pub fn sync_features(bar: &gtk::Box) {
+    let charts = crate::features::on(crate::features::Feature::Charts);
+    let mut child = bar.first_child();
+    while let Some(w) = child {
+        if w.widget_name() == CHART_BUTTON {
+            w.set_visible(charts);
+        }
+        child = w.next_sibling();
+    }
 }
 
 fn icon(name: &str, tip: &str, action: &str) -> gtk::Widget {

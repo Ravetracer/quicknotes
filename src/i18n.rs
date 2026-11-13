@@ -92,7 +92,6 @@ const DE: &[(&str, &str)] = &[
     ("Open file (Ctrl+O)", "Datei öffnen (Strg+O)"),
     ("Save to file (Ctrl+S)", "In Datei speichern (Strg+S)"),
     ("Main menu", "Hauptmenü"),
-    ("Format & tools", "Formatieren & Werkzeuge"),
     ("Toggle preview (Ctrl+Shift+V)", "Vorschau umschalten (Strg+Umschalt+V)"),
     ("Find (Ctrl+F)", "Suchen (Strg+F)"),
     ("Rename…", "Umbenennen…"),
@@ -191,6 +190,20 @@ const DE: &[(&str, &str)] = &[
     ("Math Formula (LaTeX)", "Mathematische Formel (LaTeX)"),
     ("Music Notation (ABC)", "Notenschrift (ABC)"),
     ("Table", "Tabelle"),
+    ("Features", "Funktionen"),
+    ("Developer Tools", "Entwicklerwerkzeuge"),
+    ("Format, convert and encode JSON, XML, YAML, SQL, MongoDB and PHP arrays; line and case tools", "JSON, XML, YAML, SQL, MongoDB und PHP-Arrays formatieren, umwandeln und kodieren; Zeilen- und Schreibweisen-Werkzeuge"),
+    ("Optional Features", "Optionale Funktionen"),
+    ("Switched-off features disappear from menus, toolbar and help. Documents stay as they are: presentations and boards open as Markdown, charts show as code.", "Ausgeschaltete Funktionen verschwinden aus Menüs, Werkzeugleiste und Hilfe. Dokumente bleiben, wie sie sind: Präsentationen und Boards öffnen sich als Markdown, Diagramme erscheinen als Code."),
+    ("Charts", "Diagramme"),
+    ("Charts from Markdown tables (```chart blocks)", "Diagramme aus Markdown-Tabellen (```chart-Blöcke)"),
+    ("Slides from Markdown, presenter view and export", "Folien aus Markdown, Referentenansicht und Export"),
+    ("Kanban Boards", "Kanban-Boards"),
+    ("Boards with columns, swimlanes and cards", "Boards mit Spalten, Swimlanes und Karten"),
+    ("Geocaching Tools", "Geocaching-Werkzeuge"),
+    ("Ciphers, coordinates and puzzle helpers in the context menu", "Chiffren, Koordinaten und Rätselhelfer im Kontextmenü"),
+    ("PlantUML", "PlantUML"),
+    ("Diagram preview for PlantUML files (needs PlantUML installed)", "Diagrammvorschau für PlantUML-Dateien (braucht eine PlantUML-Installation)"),
     ("Import Data (CSV, Excel, ODS)…", "Daten importieren (CSV, Excel, ODS)…"),
     ("Paste as Table", "Als Tabelle einfügen"),
     ("More Charts", "Weitere Diagramme"),
@@ -892,7 +905,8 @@ mod tests {
     #[test]
     fn chart_and_import_labels_are_translated() {
         let charts = crate::charts::MENU_COMMON.iter().chain(crate::charts::MENU_MORE).map(|(_, l)| *l);
-        for label in charts.chain(crate::import::DELIMITERS.iter().map(|(_, l)| *l)) {
+        let features = crate::features::LIST.iter().flat_map(|(_, l, d)| [*l, *d]);
+        for label in charts.chain(crate::import::DELIMITERS.iter().map(|(_, l)| *l)).chain(features) {
             assert!(german().contains_key(label), "missing German translation: {label}");
         }
     }

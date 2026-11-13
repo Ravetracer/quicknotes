@@ -4,6 +4,7 @@
 use crate::editor::{CursorTarget, EditorTab, LockState, PreviewKind, Shared};
 use crate::image_tab::{self, ImageTab};
 use crate::store::{self, Session, Settings, TabKind, TabMeta};
+use crate::features::{self, Feature, Features};
 use crate::geocaching::{self, Field};
 use crate::presenter::{self, Presentation};
 use crate::prefs::{self, MAX_FONT, MIN_FONT};
@@ -98,6 +99,8 @@ pub struct Window {
     /// Closing all tabs for a restore: no confirmations, no undo.
     bulk_close: Cell<bool>,
     present_btn: adw::SplitButton,
+    /// Header button with the developer tools.
+    tools_btn: gtk::MenuButton,
     presentation: RefCell<Option<Rc<Presentation>>>,
     tab_bar: adw::TabBar,
     /// Vertical tabs (sidebar) and the pane holding it next to the tabs.
@@ -285,6 +288,7 @@ pub fn persist_now() {
 impl Window {
     fn new(app: &adw::Application, settings: Settings) -> Rc<Self> {
         crate::i18n::init(&settings.language);
+        features::apply(settings.features);
         let theme = themes::find(&settings.theme, settings.dark);
 
         let win = adw::ApplicationWindow::builder()
@@ -315,7 +319,7 @@ impl Window {
         header.pack_start(&icon_button("document-save-symbolic", t!("Save to file (Ctrl+S)"), "win.save"));
 
         let main_menu = gio::Menu::new();
-        fill_main_menu(&main_menu, MenuContext { style: None, has_file: false, emmet: false, app_password: false, lock: None });
+        fill_main_menu(&main_menu, MenuContext { style: None, has_file: false, emmet: false, app_password: false, features: features::current(), lock: None });
         let menu_btn = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
             .popover(&nested_menu(&main_menu))
@@ -325,7 +329,8 @@ impl Window {
         let tools_btn = gtk::MenuButton::builder()
             .icon_name("format-justify-left-symbolic")
             .popover(&nested_menu(&tools_menu()))
-            .tooltip_text(t!("Format & tools"))
+            .tooltip_text(t!("Developer Tools"))
+            .visible(features::on(Feature::DevTools))
             .build();
         let preview_btn = gtk::ToggleButton::builder()
             .icon_name("view-dual-symbolic")
@@ -519,6 +524,7 @@ impl Window {
             menu_page: RefCell::new(None),
             bulk_close: Cell::new(false),
             present_btn,
+            tools_btn: tools_btn.clone(),
             presentation: RefCell::new(None),
             tab_bar,
             tab_list,
@@ -612,8 +618,16 @@ impl Window {
             w.new_note();
         });
         self.action("new-calculation", &["<Control><Shift>n"], |w| w.new_calculation());
-        self.action("new-presentation", &[], |w| w.new_presentation());
-        self.action("new-kanban", &["<Control><Shift>k"], |w| w.new_kanban());
+        self.action("new-presentation", &[], |w| {
+            if features::on(Feature::Presentations) {
+                w.new_presentation();
+            }
+        });
+        self.action("new-kanban", &["<Control><Shift>k"], |w| {
+            if features::on(Feature::Kanban) {
+                w.new_kanban();
+            }
+        });
         self.action("lock-app", &[], |w| w.lock_app());
         self.action("tab-protect", &[], |w| {
             if let Some(t) = w.menu_text_tab() {
@@ -738,6 +752,9 @@ impl Window {
         let weak = self.weak();
         chart.connect_activate(move |_, param| {
             let (Some(this), Some(kind)) = (weak.upgrade(), param.and_then(|p| p.str())) else { return };
+            if !features::on(Feature::Charts) {
+                return;
+            }
             match this.current_text() {
                 Some(t) if t.tasks_enabled() => t.insert_chart(kind),
                 Some(_) => this.toast(t!("Charts work in notes, Markdown and presentations")),
@@ -838,7 +855,14 @@ impl Window {
         let weak = self.weak();
         tool.connect_activate(move |_, param| {
             if let (Some(this), Some(name)) = (weak.upgrade(), param.and_then(|p| p.str())) {
-                this.apply_tool(name);
+                // Without the developer tools, Beautify still formats Markdown tables.
+                let tables = name == "beautify"
+                    && this.current_text().is_some_and(|t| {
+                        matches!(t.preview_kind(), Some(PreviewKind::Markdown | PreviewKind::Slides))
+                    });
+                if features::on(Feature::DevTools) || tables {
+                    this.apply_tool(name);
+                }
             }
         });
         self.win.add_action(&tool);
@@ -849,7 +873,9 @@ impl Window {
         let weak = self.weak();
         gc.connect_activate(move |_, param| {
             if let (Some(this), Some(id)) = (weak.upgrade(), param.and_then(|p| p.str())) {
-                this.gc_tool(id);
+                if features::on(Feature::Geocaching) {
+                    this.gc_tool(id);
+                }
             }
         });
         gc.set_enabled(false);
@@ -1618,7 +1644,7 @@ impl Window {
             return;
         }
         t.set_language_id(detected);
-        if detected == Some("plantuml") {
+        if detected == Some("plantuml") && features::on(Feature::PlantUml) {
             t.set_preview(true);
         }
         if self.is_current(&t.id) {
@@ -2966,9 +2992,30 @@ impl Window {
         }
     }
 
+    /// Switches an optional feature on or off and updates menus, toolbars
+    /// and the tabs whose type depends on it.
+    fn set_feature(self: &Rc<Self>, feature: Feature, on: bool) {
+        let all = {
+            let mut s = self.settings.borrow_mut();
+            s.features.set(feature, on);
+            s.features
+        };
+        features::apply(all);
+        self.tools_btn.set_visible(all.devtools);
+        // Context menus and the main menu are rebuilt for the new set.
+        self.tab_styles.borrow_mut().clear();
+        self.menu_context.set(None);
+        for t in self.text_tabs() {
+            t.features_changed();
+        }
+        self.sync_ui();
+        self.schedule_persist();
+    }
+
     fn show_preferences(self: &Rc<Self>) {
         let colors = TabStyle::COLORED
             .iter()
+            .filter(|s| s.available())
             .map(|s| prefs::TabColor { key: s.key(), label: s.label(), default: s.default_color() })
             .collect();
         let mut settings = self.settings.borrow().clone();
@@ -3208,6 +3255,7 @@ impl Window {
             has_file: matches!(&current, Some(Tab::Text(t)) if t.path.borrow().is_some()),
             emmet: matches!(&current, Some(Tab::Text(t)) if t.emmet_syntax().is_some()),
             app_password: self.vault.borrow().is_some(),
+            features: features::current(),
             lock: match &current {
                 Some(Tab::Text(t)) if t.path.borrow().is_none() || t.lock().is_some() => Some(t.lock_state()),
                 _ => None,
@@ -3301,16 +3349,10 @@ impl Window {
         content.append(&hint);
 
         let popover = gtk::Popover::builder().child(&content).position(gtk::PositionType::Bottom).build();
-        popover.set_parent(&t.view);
         let iter = t.buffer.iter_at_mark(&t.buffer.get_insert());
         let rect = t.view.iter_location(&iter);
         let (x, y) = t.view.buffer_to_window_coords(gtk::TextWindowType::Widget, rect.x(), rect.y());
-        popover.set_pointing_to(Some(&gdk::Rectangle::new(x, y, 1, rect.height())));
-        popover.connect_closed(|p| {
-            let p = p.clone();
-            glib::idle_add_local_once(move || p.unparent());
-        });
-        popover.popup();
+        t.show_popover(&popover, gdk::Rectangle::new(x, y, 1, rect.height()));
     }
 
     /// Asks for an abbreviation to wrap the selection (or line) with.
@@ -3336,18 +3378,12 @@ impl Window {
         content.append(&entry);
 
         let popover = gtk::Popover::builder().child(&content).position(gtk::PositionType::Bottom).build();
-        popover.set_parent(&t.view);
         let iter = match t.buffer.selection_bounds() {
             Some((start, _)) => start,
             None => t.buffer.iter_at_mark(&t.buffer.get_insert()),
         };
         let rect = t.view.iter_location(&iter);
         let (x, y) = t.view.buffer_to_window_coords(gtk::TextWindowType::Widget, rect.x(), rect.y());
-        popover.set_pointing_to(Some(&gdk::Rectangle::new(x, y, 1, rect.height())));
-        popover.connect_closed(|p| {
-            let p = p.clone();
-            glib::idle_add_local_once(move || p.unparent());
-        });
 
         let weak = self.weak();
         let tab = Rc::downgrade(&t);
@@ -3366,7 +3402,7 @@ impl Window {
             }
             t.view.grab_focus();
         });
-        popover.popup();
+        t.show_popover(&popover, gdk::Rectangle::new(x, y, 1, rect.height()));
         entry.grab_focus();
     }
 
@@ -3893,6 +3929,15 @@ impl TabStyle {
     /// Types with their own colour (plain notes keep the default look).
     const COLORED: [Self; 6] = [Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Kanban, Self::Image];
 
+    /// Whether tabs of this type exist with the current features.
+    fn available(&self) -> bool {
+        match self {
+            Self::Slides => features::on(Feature::Presentations),
+            Self::Kanban => features::on(Feature::Kanban),
+            _ => true,
+        }
+    }
+
     /// Key in `Settings::tab_colors`.
     fn key(self) -> &'static str {
         match self {
@@ -4008,6 +4053,10 @@ impl prefs::Handler for PrefsBridge {
         });
     }
 
+    fn set_feature(&self, feature: Feature, on: bool) {
+        self.with(|w| w.set_feature(feature, on));
+    }
+
     fn set_emmet_tab(&self, on: bool) {
         self.with(|w| {
             w.settings.borrow_mut().emmet_tab = on;
@@ -4098,6 +4147,8 @@ enum PasswordAnswer {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct MenuContext {
     style: Option<TabStyle>,
+    /// Optional features that are on.
+    features: Features,
     has_file: bool,
     /// Emmet is available for the current tab's language.
     emmet: bool,
@@ -4161,13 +4212,14 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
     menu.remove_all();
     let text = context.style.is_some_and(TabStyle::is_text);
 
-    let mut file: Vec<(&str, &str)> = vec![
-        (t!("New Note"), "win.new-note"),
-        (t!("New Calculation"), "win.new-calculation"),
-        (t!("New Presentation"), "win.new-presentation"),
-        (t!("New Kanban Board"), "win.new-kanban"),
-        (t!("Open File…"), "win.open"),
-    ];
+    let mut file: Vec<(&str, &str)> = vec![(t!("New Note"), "win.new-note"), (t!("New Calculation"), "win.new-calculation")];
+    if context.features.presentations {
+        file.push((t!("New Presentation"), "win.new-presentation"));
+    }
+    if context.features.kanban {
+        file.push((t!("New Kanban Board"), "win.new-kanban"));
+    }
+    file.push((t!("Open File…"), "win.open"));
     if text {
         file.extend([(t!("Save"), "win.save"), (t!("Save As…"), "win.save-as")]);
     }
@@ -4247,15 +4299,23 @@ fn editor_context_menu(style: TabStyle, emmet: bool) -> gio::Menu {
             ]),
         );
     }
-    menu.append_section(None, &quick_tools());
-    menu.append_section(None, &tool_submenus());
+    if features::on(Feature::DevTools) {
+        let dev = gio::Menu::new();
+        dev.append_section(None, &quick_tools());
+        dev.append_section(None, &tool_submenus());
+        let section = gio::Menu::new();
+        section.append_submenu(Some(t!("Developer Tools")), &dev);
+        menu.append_section(None, &section);
+    }
     if style.exportable() {
         menu.append_section(None, &export_section());
     }
     if style == TabStyle::Slides {
         menu.append_section(None, &presentation_section());
     }
-    menu.append_section(None, &geocaching_menu());
+    if features::on(Feature::Geocaching) {
+        menu.append_section(None, &geocaching_menu());
+    }
     menu
 }
 

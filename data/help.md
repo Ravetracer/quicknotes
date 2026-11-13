@@ -1,7 +1,7 @@
 # QuickNotes Help {#top}
 
 **Contents:** [Notes & tabs](#notes) · [Checklists](#checklists) · [Tables](#tables) · [Formatting](#formatting) · [Math & music](#notation) · [Charts](#charts) · [Kanban](#kanban) · [Calculations](#calc) · [Templates](#templates) ·
-[Previews & export](#previews) · [Presentations](#slides) · [Tools](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
+[Previews & export](#previews) · [Presentations](#slides) · [Developer tools](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Security](#security) · [Backup](#backup) ·
 [Shortcuts](#shortcuts)
 
@@ -32,6 +32,11 @@ Every tab is either a **note** or an **opened file**.
 *Main menu → Preferences* (Ctrl+,) sets the editor font, its size and ligatures, the
 interface language (applies after a restart), the colour theme, the tab position and the tab
 colours, and offers backup and restore of the notes (*Import/Export*).
+
+*Features* switches optional parts of QuickNotes on and off: charts, presentations, Kanban
+boards, the Geocaching tools, PlantUML and the developer tools. Switched-off features disappear from the menus, the
+toolbar and this help; documents stay as they are (presentations and boards then open as
+Markdown, charts show as code). New installations start with all of them off.
 
 *Themes* lists the default dark and light theme and 165 themes from Dracula, the Dayle Rees
 colour schemes and the VSCode Ultimate Themes Pack. A click applies a theme right away to the
@@ -96,8 +101,10 @@ the Markdown for you, so you don't need to remember the syntax:
 - Bulleted and numbered lists, checklists and quotes for the selected lines (again to remove),
   code blocks, horizontal rules and tables.
 - **Link** (Ctrl+K) and **image**: the selection becomes the text, a selected URL the target.
+<!-- if charts -->
 - **Chart** (a chart from the table above, with sample data if there is none), see
   [Charts](#charts).
+<!-- end -->
 - **∑ Formula** (inline or as a block) and **♫ Music notation** (an ABC tune), see below.
 
 *Main menu → Formatting Toolbar* hides the toolbar; the shortcuts keep working.
@@ -329,13 +336,20 @@ Minutes in coordinates usually need two digits and three decimals, e.g.
 
 ## Previews & export {#previews}
 
+<!-- if plantuml -->
 Markdown, reStructuredText, PlantUML and HTML files can be shown with a live preview next to
+<!-- end -->
+<!-- if !plantuml -->
+Markdown, reStructuredText and HTML files can be shown with a live preview next to
+<!-- end -->
 the text (Ctrl+Shift+V). Markdown and reStructuredText can be exported as **HTML**
 (Ctrl+Shift+E) or **PDF** (Ctrl+Shift+P) from the main menu or the editor's right-click
 menu. Relative images are taken from the folder of the document.
 
+<!-- if plantuml -->
 PlantUML needs a local PlantUML installation (`plantuml` command or a `plantuml*.jar` in
 `~/bin`).
+<!-- end -->
 
 ## Presentations {#slides}
 
@@ -494,10 +508,11 @@ switches between slides and presenter view.
 animations, `F` for fullscreen). *Export as PDF* creates one page per slide with all steps
 shown.
 
-## Tools {#tools}
+## Developer tools {#devtools}
 
-The *Format & tools* menu (header bar) and the editor's right-click menu work on the
-selection, or on the whole tab when nothing is selected:
+The **developer tools** (button in the header bar, and the *Developer Tools* submenu of the
+editor's right-click menu) work on the selection, or on the whole tab when nothing is
+selected:
 
 - **Beautify / Minify** JSON, MongoDB / JSON5, XML, YAML and SQL (Ctrl+Alt+B / Ctrl+Alt+M
   detect the format)
@@ -536,6 +551,7 @@ Notes with MongoDB shell code (`db.orders.aggregate([...])`) or JSON5 (unquoted 
 quotes, comments, trailing commas) are detected automatically and get the *MongoDB / JSON5*
 highlighting; files ending in `.mongodb`, `.mongodb.js` or `.json5` too.
 
+<!-- if devtools -->
 - **Beautify** puts each pipeline stage on its own line and keeps short documents on one line.
   Keys, quotes and comments stay as written. **Minify** removes comments.
 - **mongosh → Extended JSON** turns `ObjectId("…")`, `ISODate("…")`, `NumberLong(…)`,
@@ -560,6 +576,7 @@ back: select the array, `$pipeline = [...];`, `return [...];` or a call like
 - *Extended JSON / mongosh → PHP array* writes short array syntax with single quotes and
   trailing commas and uses the short class names (add the `use MongoDB\BSON\…;` imports).
   Comments are dropped in all conversions.
+<!-- end -->
 
 ## Geocaching tools {#geocaching}
 
@@ -651,17 +668,23 @@ file. *Restore Backup…* either **adds** the tabs of a backup to the current on
 |---|---|
 | Ctrl+N / Ctrl+T | New note |
 | Ctrl+Shift+N | New calculation |
+<!-- if kanban -->
 | Ctrl+Shift+K | New Kanban board |
+<!-- end -->
 | Ctrl+O, Ctrl+S, Ctrl+Shift+S | Open, save, save as |
 | Ctrl+W, Ctrl+Shift+T | Close tab, reopen closed tab |
 | F2 | Rename tab |
 | F5 | Reload file from disk |
 | Ctrl+F, Ctrl+H, F3, Shift+F3 | Find, replace, next, previous |
+<!-- if devtools -->
 | Ctrl+Alt+B, Ctrl+Alt+M | Beautify, minify |
+<!-- end -->
 | Ctrl+Shift+V | Toggle preview |
 | Ctrl+Shift+E, Ctrl+Shift+P | Export as HTML, PDF |
+<!-- if slides -->
 | Ctrl+F5, Shift+F5 | Start presentation from the beginning, from the current slide |
 | Ctrl+Shift+F5 | Present in a window |
+<!-- end -->
 | Ctrl+B, Ctrl+I, Ctrl+K | Markdown: bold, italic, link |
 | Ctrl+Enter | Check/uncheck checklist item, turn lines into a checklist |
 | Tab, Shift+Tab, Enter | Tables: next/previous cell, next row |
@@ -673,7 +696,9 @@ file. *Restore Backup…* either **adds** the tabs of a backup to the current on
 | Ctrl+mouse wheel, Ctrl +/−/0 | Font size |
 | Ctrl+Tab, Ctrl+PgUp/PgDn, Alt+1…9 | Switch tabs |
 | F1 | This help |
+<!-- if slides -->
 | Shift+F1 | Syntax help at the cursor (presentations) |
+<!-- end -->
 | Ctrl+Q | Quit |
 
 [Back to top](#top)

@@ -40,7 +40,7 @@ pub fn assist_at(iter: &gtk::TextIter) -> Option<(Assist, String)> {
         .downcast_ref::<sourceview5::Buffer>()
         .and_then(|b| b.language())
         .is_some_and(|l| l.id() == crate::slides::LANGUAGE);
-    if !is_slides {
+    if !is_slides || !crate::features::on(crate::features::Feature::Presentations) {
         return None;
     }
     let mut line_start = *iter;

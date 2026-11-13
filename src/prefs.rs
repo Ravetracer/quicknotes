@@ -20,6 +20,7 @@ pub trait Handler {
     fn set_font_size(&self, size: f64);
     fn set_ligatures(&self, on: bool);
     fn set_emmet_tab(&self, on: bool);
+    fn set_feature(&self, feature: crate::features::Feature, on: bool);
     fn set_language(&self, language: &str);
     /// `None` restores the default colour.
     fn set_tab_color(&self, kind: &str, color: Option<String>);
@@ -57,10 +58,11 @@ pub fn show(
     let dialog = adw::PreferencesDialog::new();
     dialog.set_title(t!("Preferences"));
     dialog.set_search_enabled(true);
-    // Room for five page titles; low enough to keep the window visible behind it.
-    dialog.set_content_width(840);
+    // Room for six page titles; low enough to keep the window visible behind it.
+    dialog.set_content_width(960);
     dialog.set_content_height(620);
     dialog.add(&general_page(parent, settings, &handler));
+    dialog.add(&features_page(settings, &handler));
     dialog.add(&themes_page(settings, &handler));
     dialog.add(&tabs_page(settings, colors, &handler));
     dialog.add(&security_page(&dialog, app_password, &handler));
@@ -141,6 +143,29 @@ fn general_page(parent: &impl IsA<gtk::Widget>, settings: &Settings, handler: &R
     });
     language.add(&lang_row);
     page.add(&language);
+    page
+}
+
+fn features_page(settings: &Settings, handler: &Rc<dyn Handler>) -> adw::PreferencesPage {
+    let page = adw::PreferencesPage::builder()
+        .title(t!("Features"))
+        .icon_name("application-x-addon-symbolic")
+        .build();
+    let group = adw::PreferencesGroup::builder()
+        .title(t!("Optional Features"))
+        .description(t!("Switched-off features disappear from menus, toolbar and help. Documents stay as they are: presentations and boards open as Markdown, charts show as code."))
+        .build();
+    for (feature, label, description) in crate::features::LIST {
+        let row = adw::SwitchRow::builder()
+            .title(crate::i18n::tr(label))
+            .subtitle(crate::i18n::tr(description))
+            .active(settings.features.get(*feature))
+            .build();
+        let (h, feature) = (handler.clone(), *feature);
+        row.connect_active_notify(move |row| h.set_feature(feature, row.is_active()));
+        group.add(&row);
+    }
+    page.add(&group);
     page
 }
 

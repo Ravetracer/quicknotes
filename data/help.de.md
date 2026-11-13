@@ -1,7 +1,7 @@
 # QuickNotes-Hilfe {#top}
 
 **Inhalt:** [Notizen & Tabs](#notes) · [Checklisten](#checklists) · [Tabellen](#tables) · [Formatierung](#formatting) · [Formeln & Noten](#notation) · [Diagramme](#charts) · [Kanban](#kanban) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
-[Vorschau & Export](#previews) · [Präsentationen](#slides) · [Werkzeuge](#tools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
+[Vorschau & Export](#previews) · [Präsentationen](#slides) · [Entwicklerwerkzeuge](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Sicherheit](#security) · [Sicherung](#backup) ·
 [Tastenkürzel](#shortcuts)
 
@@ -34,6 +34,12 @@ Jeder Tab ist entweder eine **Notiz** oder eine **geöffnete Datei**.
 *Hauptmenü → Einstellungen* (Strg+,) legt Editor-Schrift, Schriftgröße und Ligaturen, die
 Sprache der Oberfläche (gilt nach einem Neustart), das Farbdesign, die Tab-Position und die
 Tab-Farben fest und bietet Sicherung und Wiederherstellung der Notizen (*Import/Export*).
+
+*Funktionen* schaltet optionale Teile von QuickNotes ein und aus: Diagramme, Präsentationen,
+Kanban-Boards, die Geocaching-Werkzeuge, PlantUML und die Entwicklerwerkzeuge. Ausgeschaltete Funktionen verschwinden
+aus den Menüs, der Werkzeugleiste und dieser Hilfe; Dokumente bleiben, wie sie sind
+(Präsentationen und Boards öffnen sich dann als Markdown, Diagramme erscheinen als Code). Neue
+Installationen starten mit allen ausgeschaltet.
 
 *Designs* enthält das dunkle und helle Standarddesign sowie 165 Designs aus Dracula, den
 Dayle-Rees-Farbschemata und dem VSCode Ultimate Themes Pack. Ein Klick wendet ein Design sofort
@@ -99,8 +105,10 @@ schreibt das Markdown für dich, die Syntax musst du dir nicht merken:
 - Aufzählungen, nummerierte Listen, Checklisten und Zitate für die markierten Zeilen (nochmal
   zum Entfernen), Codeblöcke, Trennlinien und Tabellen.
 - **Link** (Strg+K) und **Bild**: Die Auswahl wird zum Text, eine markierte URL zum Ziel.
+<!-- if charts -->
 - **Diagramm** (ein Diagramm aus der Tabelle darüber, mit Beispieldaten, wenn es keine gibt),
   siehe [Diagramme](#charts).
+<!-- end -->
 - **∑ Formel** (im Text oder als Block) und **♫ Notenschrift** (eine ABC-Melodie), siehe unten.
 
 *Hauptmenü → Formatierungsleiste* blendet die Leiste aus; die Tastenkürzel funktionieren weiter.
@@ -341,14 +349,21 @@ leitet das Format ein).
 
 ## Vorschau & Export {#previews}
 
+<!-- if plantuml -->
 Markdown-, reStructuredText-, PlantUML- und HTML-Dateien lassen sich mit einer Live-Vorschau
+<!-- end -->
+<!-- if !plantuml -->
+Markdown-, reStructuredText- und HTML-Dateien lassen sich mit einer Live-Vorschau
+<!-- end -->
 neben dem Text anzeigen (Strg+Umschalt+V). Markdown und reStructuredText können über das
 Hauptmenü oder das Kontextmenü des Editors (rechte Maustaste) als **HTML**
 (Strg+Umschalt+E) oder **PDF** (Strg+Umschalt+P) exportiert werden.
 Relative Bilder werden aus dem Ordner des Dokuments geladen.
 
+<!-- if plantuml -->
 PlantUML benötigt eine lokale PlantUML-Installation (Befehl `plantuml` oder eine
 `plantuml*.jar` in `~/bin`).
+<!-- end -->
 
 ## Präsentationen {#slides}
 
@@ -511,10 +526,11 @@ und die Uhrzeit. Mit einem Bildschirm wechselt `P` zwischen Folien und Referente
 abspielt (Tastatur, Animationen, `F` für Vollbild). *Als PDF exportieren* erzeugt eine Seite
 pro Folie mit allen Schritten.
 
-## Werkzeuge {#tools}
+## Entwicklerwerkzeuge {#devtools}
 
-Das Menü *Formatieren & Werkzeuge* (Kopfleiste) und das Kontextmenü des Editors (rechte
-Maustaste) arbeiten auf der Auswahl oder, wenn nichts ausgewählt ist, auf dem ganzen Tab:
+Die **Entwicklerwerkzeuge** (Knopf in der Kopfleiste und das Untermenü *Entwicklerwerkzeuge*
+im Kontextmenü des Editors) arbeiten auf der Auswahl oder, wenn nichts ausgewählt ist, auf
+dem ganzen Tab:
 
 - **Formatieren / Minimieren** von JSON, MongoDB / JSON5, XML, YAML und SQL (Strg+Alt+B /
   Strg+Alt+M erkennen das Format)
@@ -555,6 +571,7 @@ Anführungszeichen, einfache Anführungszeichen, Kommentare, Komma am Ende) werd
 erkannt und als *MongoDB / JSON5* hervorgehoben; ebenso Dateien mit der Endung `.mongodb`,
 `.mongodb.js` oder `.json5`.
 
+<!-- if devtools -->
 - **Formatieren** setzt jede Pipeline-Stufe in eine eigene Zeile und lässt kurze Dokumente in
   einer Zeile. Schlüssel, Anführungszeichen und Kommentare bleiben, wie sie sind.
   **Minimieren** entfernt Kommentare.
@@ -580,6 +597,7 @@ Aufruf wie `->aggregate([...])` auswählen. `[...]` und `array(...)` funktionier
 - *Extended JSON / mongosh → PHP-Array* schreibt kurze Array-Syntax mit einfachen
   Anführungszeichen und Komma am Ende und verwendet die kurzen Klassennamen (die
   `use MongoDB\BSON\…;`-Importe ergänzen). Kommentare entfallen bei allen Umwandlungen.
+<!-- end -->
 
 ## Geocaching-Werkzeuge {#geocaching}
 
@@ -679,17 +697,23 @@ vorher in einer automatischen Sicherung abgelegt).
 |---|---|
 | Strg+N / Strg+T | Neue Notiz |
 | Strg+Umschalt+N | Neue Berechnung |
+<!-- if kanban -->
 | Strg+Umschalt+K | Neues Kanban-Board |
+<!-- end -->
 | Strg+O, Strg+S, Strg+Umschalt+S | Öffnen, Speichern, Speichern unter |
 | Strg+W, Strg+Umschalt+T | Tab schließen, geschlossenen Tab wiederherstellen |
 | F2 | Tab umbenennen |
 | F5 | Datei neu von der Festplatte laden |
 | Strg+F, Strg+H, F3, Umschalt+F3 | Suchen, Ersetzen, Nächstes, Vorheriges |
+<!-- if devtools -->
 | Strg+Alt+B, Strg+Alt+M | Formatieren, Minimieren |
+<!-- end -->
 | Strg+Umschalt+V | Vorschau ein/aus |
 | Strg+Umschalt+E, Strg+Umschalt+P | Als HTML, PDF exportieren |
+<!-- if slides -->
 | Strg+F5, Umschalt+F5 | Präsentation von Anfang an, ab aktueller Folie starten |
 | Strg+Umschalt+F5 | In einem Fenster präsentieren |
+<!-- end -->
 | Strg+B, Strg+I, Strg+K | Markdown: fett, kursiv, Link |
 | Strg+Enter | Checklisten-Eintrag abhaken, Zeilen zur Checkliste machen |
 | Tab, Umschalt+Tab, Enter | Tabellen: nächste/vorige Zelle, nächste Zeile |
@@ -701,7 +725,9 @@ vorher in einer automatischen Sicherung abgelegt).
 | Strg+Mausrad, Strg +/−/0 | Schriftgröße |
 | Strg+Tab, Strg+Bild↑/Bild↓, Alt+1…9 | Tab wechseln |
 | F1 | Diese Hilfe |
+<!-- if slides -->
 | Umschalt+F1 | Syntax-Hilfe an der Schreibmarke (Präsentationen) |
+<!-- end -->
 | Strg+Q | Beenden |
 
 [Zurück nach oben](#top)

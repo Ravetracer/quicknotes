@@ -21,7 +21,9 @@ after a restart.
   screen; export as stand-alone HTML or PDF
 - Image viewer (PNG, JPEG, GIF, WebP, SVG, BMP, ICO, TIFF, …) with zoom
 - Large files (logs): loaded asynchronously; highlighting and wrapping are switched off above 8 MB
-- Beautify/minify JSON, XML, YAML, SQL; JSON ↔ YAML; line tools; Base64/URL/JSON-string encode/decode
+- **Developer tools** (header bar and *Developer Tools* context submenu): beautify/minify JSON,
+  XML, YAML, SQL; JSON ↔ YAML; MongoDB and PHP array conversions; line tools;
+  Base64/URL/JSON-string encode/decode
 - **MongoDB / JSON5**: highlighting and auto-detection of mongosh queries and JSON5, beautify/minify
   (pipeline stages one per line), conversion mongosh ↔ Extended JSON v2 (relaxed and canonical)
   and PHP arrays (MongoDB PHP library / Doctrine) ↔ Extended JSON / mongosh, with placeholders
@@ -41,6 +43,9 @@ after a restart.
   document in the front matter
 - **Data import**: CSV/TSV files and spreadsheets (Excel, LibreOffice) become Markdown tables;
   cells copied from a spreadsheet can be pasted as table
+- **Optional features** (*Preferences → Features*): charts, presentations, Kanban boards, the
+  Geocaching tools, PlantUML and the developer tools can be switched off; they then disappear from menus, toolbar
+  and help. New installations start with them off
 - **Markdown tables** like Obsidian's *Advanced Tables*: automatic formatting, Tab/Enter
   navigation, insert/delete/move rows and columns, sorting, column alignment
 - **Kanban boards**: freely defined columns (title, colour, WIP limit) and swimlanes, drag & drop
@@ -103,7 +108,7 @@ after a restart.
 | F1 | Help |
 | Ctrl+Q | Quit |
 
-Tools act on the selection, or on the whole tab when nothing is selected.
+Developer tools act on the selection, or on the whole tab when nothing is selected.
 
 The complete user documentation is built into the app (F1); its source is
 [`data/help.md`](data/help.md).
