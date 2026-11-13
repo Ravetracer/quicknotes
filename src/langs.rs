@@ -12,6 +12,7 @@ const BUNDLED: &[(&str, &str)] = &[
     ("slides.lang", include_str!("../data/slides.lang")),
     ("mongodb.lang", include_str!("../data/mongodb.lang")),
     ("kanban.lang", include_str!("../data/kanban.lang")),
+    ("flashcards.lang", include_str!("../data/flashcards.lang")),
 ];
 
 /// Registers bundled language definitions. Must run before any language is used.
@@ -65,6 +66,9 @@ pub fn guess(path: Option<&Path>, content: &str) -> Option<Language> {
         if name.ends_with(".kanban.md") {
             return by_id(crate::kanban::LANGUAGE);
         }
+        if name.ends_with(".cards.md") || name.ends_with(".flashcards.md") {
+            return by_id(crate::flashcards::LANGUAGE);
+        }
         if name.ends_with(".slides.md") {
             return by_id(crate::slides::LANGUAGE);
         }
@@ -76,6 +80,9 @@ pub fn guess(path: Option<&Path>, content: &str) -> Option<Language> {
         if let Some(l) = lm.guess_language(Some(path), Some(&content_type)) {
             if l.id() == "markdown" && crate::kanban::is_board(content) {
                 return by_id(crate::kanban::LANGUAGE);
+            }
+            if l.id() == "markdown" && crate::flashcards::is_flashcards(content) {
+                return by_id(crate::flashcards::LANGUAGE);
             }
             if l.id() == "markdown" && crate::slides::is_presentation(content) {
                 return by_id(crate::slides::LANGUAGE);
@@ -143,6 +150,9 @@ pub fn sniff(content: &str) -> Option<&'static str> {
             if crate::kanban::is_board(t) {
                 return Some(crate::kanban::LANGUAGE);
             }
+            if crate::flashcards::is_flashcards(t) {
+                return Some(crate::flashcards::LANGUAGE);
+            }
             if crate::slides::is_presentation(t) {
                 return Some(crate::slides::LANGUAGE);
             }
@@ -181,6 +191,7 @@ mod tests {
         assert_eq!(sniff("---\npresentation: true\n---\n# Hi"), Some("slides"));
         assert_eq!(sniff("---\nkey: value\n"), Some("yaml"));
         assert_eq!(sniff("---\nkanban: 1\n---\n## To do\n"), Some("kanban"));
+        assert_eq!(sniff("---\nflashcards: true\n---\nQ::A\n"), Some("flashcards"));
     }
 }
 

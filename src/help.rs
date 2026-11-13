@@ -70,7 +70,64 @@ fn link_target(item: &str) -> Option<&str> {
     item.split_once("](#")?.1.split(')').next()
 }
 
-pub fn show(parent: &impl IsA<gtk::Window>, theme: &crate::themes::Theme, zoom: f64) {
+/// What the user is working on, for opening the help at the right section.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Doc<'a> {
+    Note,
+    Markdown,
+    Flashcards,
+    Slides,
+    Kanban,
+    Calc,
+    /// reStructuredText, HTML or PlantUML with a preview.
+    Preview,
+    /// Source code in a language (GtkSourceView id).
+    Code(&'a str),
+    Image,
+}
+
+/// Where the cursor is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Cursor<'a> {
+    /// Info string of the fenced code block around the cursor.
+    pub fence: Option<&'a str>,
+    pub in_table: bool,
+    pub on_task: bool,
+}
+
+/// The help section (`{#id}`) for the current document and cursor.
+pub fn topic(doc: Doc<'_>, cursor: Cursor<'_>, emmet: bool) -> &'static str {
+    let markdown = matches!(doc, Doc::Note | Doc::Markdown | Doc::Slides | Doc::Flashcards);
+    if markdown {
+        match cursor.fence.and_then(|f| f.split_whitespace().next()) {
+            Some("chart") => return "charts",
+            Some("math" | "abc") => return "notation",
+            _ => {}
+        }
+        if cursor.in_table {
+            return "tables";
+        }
+        if cursor.on_task && doc != Doc::Flashcards {
+            return "checklists";
+        }
+    }
+    match doc {
+        Doc::Flashcards => "flashcards",
+        Doc::Slides => "slides",
+        Doc::Kanban => "kanban",
+        Doc::Calc => "calc",
+        Doc::Markdown => "formatting",
+        Doc::Preview => "previews",
+        Doc::Code(crate::mongo::LANGUAGE) | Doc::Code("json5") => "mongodb",
+        Doc::Code(_) if emmet => "emmet",
+        Doc::Code(_) => "devtools",
+        Doc::Note | Doc::Image => "notes",
+    }
+}
+
+/// Shows the help, scrolled to the section `topic` (if it is there – it
+/// may belong to a switched-off feature).
+pub fn show(parent: &impl IsA<gtk::Window>, theme: &crate::themes::Theme, zoom: f64, topic: Option<&str>) {
     let help = match crate::i18n::lang() {
         crate::i18n::Lang::De => HELP_DE,
         crate::i18n::Lang::En => HELP_EN,
@@ -83,7 +140,17 @@ pub fn show(parent: &impl IsA<gtk::Window>, theme: &crate::themes::Theme, zoom: 
     webview.set_zoom_level(zoom);
     webview.set_background_color(&crate::editor::preview_bg(theme));
     if let Some(settings) = WebViewExt::settings(&webview) {
-        settings.set_enable_javascript(false);
+        // No scripts from the page; the app's own (scrolling) may run.
+        settings.set_enable_javascript(true);
+        settings.set_enable_javascript_markup(false);
+    }
+    if let Some(id) = topic.filter(|id| id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')) {
+        let js = format!("var e = document.getElementById('{id}'); if (e) e.scrollIntoView();");
+        webview.connect_load_changed(move |wv, event| {
+            if event == webkit6::LoadEvent::Finished {
+                wv.evaluate_javascript(&js, None, None, None::<&gio::Cancellable>, |_| {});
+            }
+        });
     }
     // In-page links (#section) navigate within the help, others open in the browser.
     webview.connect_decide_policy(|_, decision, kind| {
@@ -141,13 +208,54 @@ mod tests {
     }
 
     #[test]
+    fn topics_follow_document_and_cursor() {
+        let none = Cursor::default();
+        assert_eq!(topic(Doc::Flashcards, none, false), "flashcards");
+        assert_eq!(topic(Doc::Markdown, none, false), "formatting");
+        assert_eq!(topic(Doc::Markdown, Cursor { fence: Some("chart"), ..none }, false), "charts");
+        assert_eq!(topic(Doc::Slides, Cursor { fence: Some("math"), ..none }, false), "notation");
+        assert_eq!(topic(Doc::Note, Cursor { in_table: true, ..none }, false), "tables");
+        assert_eq!(topic(Doc::Note, Cursor { on_task: true, ..none }, false), "checklists");
+        assert_eq!(topic(Doc::Flashcards, Cursor { on_task: true, ..none }, false), "flashcards");
+        assert_eq!(topic(Doc::Code("html"), Cursor { fence: Some("chart"), ..none }, true), "emmet");
+        assert_eq!(topic(Doc::Code("json"), none, false), "devtools");
+        assert_eq!(topic(Doc::Code(crate::mongo::LANGUAGE), none, false), "mongodb");
+        assert_eq!(topic(Doc::Image, none, false), "notes");
+    }
+
+    #[test]
+    fn every_topic_is_a_section() {
+        let docs = [
+            Doc::Note, Doc::Markdown, Doc::Flashcards, Doc::Slides, Doc::Kanban, Doc::Calc, Doc::Preview,
+            Doc::Code("rust"), Doc::Code(crate::mongo::LANGUAGE), Doc::Image,
+        ];
+        let cursors = [
+            Cursor::default(),
+            Cursor { fence: Some("chart"), ..Default::default() },
+            Cursor { fence: Some("abc"), ..Default::default() },
+            Cursor { in_table: true, ..Default::default() },
+            Cursor { on_task: true, ..Default::default() },
+        ];
+        for help in [HELP_EN, HELP_DE] {
+            for doc in docs {
+                for cursor in cursors {
+                    for emmet in [false, true] {
+                        let id = topic(doc, cursor, emmet);
+                        assert!(help.contains(&format!("{{#{id}}}")), "missing section #{id}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn real_help_files_filter_cleanly() {
         for help in [HELP_EN, HELP_DE] {
             let ifs = help.matches("<!-- if ").count();
             assert_eq!(ifs, help.matches("<!-- end -->").count(), "unbalanced markers");
             let keys: Vec<&str> = crate::features::LIST.iter().map(|(f, ..)| f.key()).collect();
             let minimal = filter(help, |k| !keys.contains(&k));
-            for key in ["charts", "slides", "kanban", "geocaching", "devtools"] {
+            for key in ["charts", "slides", "kanban", "geocaching", "devtools", "flashcards"] {
                 assert!(!minimal.contains(&format!("{{#{key}}}")), "{key}");
                 assert!(!minimal.contains(&format!("](#{key})")), "{key}");
                 assert!(filter(help, |_| true).contains(&format!("{{#{key}}}")), "{key}");

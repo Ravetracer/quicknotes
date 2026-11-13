@@ -1,6 +1,6 @@
 # QuickNotes Help {#top}
 
-**Contents:** [Notes & tabs](#notes) · [Checklists](#checklists) · [Tables](#tables) · [Formatting](#formatting) · [Math & music](#notation) · [Charts](#charts) · [Kanban](#kanban) · [Calculations](#calc) · [Templates](#templates) ·
+**Contents:** [Notes & tabs](#notes) · [Checklists](#checklists) · [Tables](#tables) · [Formatting](#formatting) · [Math & music](#notation) · [Charts](#charts) · [Kanban](#kanban) · [Flash cards](#flashcards) · [Calculations](#calc) · [Templates](#templates) ·
 [Previews & export](#previews) · [Presentations](#slides) · [Developer tools](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Security](#security) · [Backup](#backup) ·
 [Shortcuts](#shortcuts)
@@ -34,7 +34,7 @@ interface language (applies after a restart), the colour theme, the tab position
 colours, and offers backup and restore of the notes (*Import/Export*).
 
 *Features* switches optional parts of QuickNotes on and off: charts, presentations, Kanban
-boards, the Geocaching tools, PlantUML and the developer tools. Switched-off features disappear from the menus, the
+boards, flash cards, the Geocaching tools, PlantUML and the developer tools. Switched-off features disappear from the menus, the
 toolbar and this help; documents stay as they are (presentations and boards then open as
 Markdown, charts show as code). New installations start with all of them off.
 
@@ -211,6 +211,79 @@ page), `palette:` a name (`default`, `gnome`, `macarons`, `vintage`, `roma`, `sh
       height: 300
       decimal: ","
     ---
+
+## Flash cards {#flashcards}
+
+**Flash cards** help you learn with spaced repetition: each card comes back when you are about
+to forget it. *Main menu → New Flash Cards* starts a document with examples. A Markdown
+document is a set of flash cards when its front matter says `flashcards: true` (or the file
+ends in `.cards.md`).
+
+    ---
+    flashcards: true
+    deck: Biology/Cells
+    ---
+
+    # Basics
+
+    Capital of France::Paris
+    Mitochondria:::Powerhouse of the cell
+
+    What is osmosis?
+    ?
+    Water moves through a membrane
+    from low to high concentration.
+
+    Which are organelles?
+    ?
+    - [x] Mitochondrion
+    - [x] Ribosome
+    - [ ] Cell wall
+    Ribosomes have no membrane.
+
+    The largest planet?
+    ?
+    - ( ) Mars
+    - (x) Jupiter
+
+- `Question::Answer` – a card on one line.
+- `Question:::Answer` – two cards: the question is also asked the other way round.
+- Question lines, a line with only `?`, then the answer lines – a card over several lines
+  (`??` for both ways). A blank line ends the card. Answers can use all of Markdown: lists,
+  code, formulas, images.
+- An answer of `- [x]` / `- [ ]` items is **multiple choice with check boxes** (any number of
+  right answers), `- (x)` / `- ( )` items is **multiple choice with radio buttons** (exactly
+  one right answer). Lines after the items explain the answer.
+
+**Decks:** `deck: Biology/Cells` in the front matter puts the cards into a deck and its
+sub-deck (as deep as you like; several documents can feed the same deck). Headings in the
+document form further sub-decks. Without `deck:` the title (or the file name) is the deck.
+
+**Learning:** the preview shows the decks with their progress and statistics. **Learn** opens
+the cards that are due and new ones (at most 20 new cards a day, `new-per-day:` changes it);
+**Practice** goes through all cards of a deck in random order without changing the schedule.
+In the study window:
+
+| Key | Action |
+|---|---|
+| Space, Enter, click | Show the answer (multiple choice: check the selection) |
+| 1–9 | Multiple choice: select an answer |
+| 1 – 4 | Again, Hard, Good, Easy (Space: Good) |
+| F11 | Full screen |
+| Esc | End |
+
+Each button tells when the card comes back. *Again* repeats the card in the same session.
+Wrong answers can be practised once more at the end. *Main menu → Learning Overview* shows
+the decks of all open flash card documents together.
+
+**Progress** is stored in QuickNotes' data folder, not in the document – encrypted while the
+app password is on, and included in backups. A card keeps its progress when its question is
+changed a little. Statistics count the answers, the right ones, the time spent learning and the
+days in a row.
+
+**Appearance:** `theme:` in the front matter chooses `light`, `dark`, `sepia`, `night` or
+`contrast` (default: like QuickNotes). `accent:`, `background:` and `color:` set colours
+(`#rrggbb`); text colours are adjusted automatically if they would be hard to read.
 
 ## Kanban boards {#kanban}
 
@@ -566,7 +639,7 @@ expand into code. Type an abbreviation and press **Tab** (or Ctrl+E):
 - Expanding with Tab can be switched off in *Preferences → General*; Ctrl+E always works.
   In other languages (notes, Markdown, code, …) Emmet is not active.
 
-### MongoDB queries and JSON5
+### MongoDB queries and JSON5 {#mongodb}
 
 Notes with MongoDB shell code (`db.orders.aggregate([...])`) or JSON5 (unquoted keys, single
 quotes, comments, trailing commas) are detected automatically and get the *MongoDB / JSON5*

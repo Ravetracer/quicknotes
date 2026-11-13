@@ -180,6 +180,13 @@ document.addEventListener('click', function (e) {{
   if (t.matches && t.matches('input.task') && window.webkit) {{
     window.webkit.messageHandlers.qn.postMessage(JSON.stringify({{ type: 'task', line: +t.dataset.line }}));
   }}
+  // Buttons that send their data attributes (`data-qn-msg` is the type).
+  var m = t.closest && t.closest('[data-qn-msg]');
+  if (m && !m.disabled && window.webkit) {{
+    var msg = Object.assign({{}}, m.dataset);
+    msg.type = m.dataset.qnMsg;
+    window.webkit.messageHandlers.qn.postMessage(JSON.stringify(msg));
+  }}
 }});
 window.setTheme = function (t, vars) {{
   document.documentElement.dataset.theme = t;
@@ -215,6 +222,39 @@ pub fn standalone(title: &str, body: &str) -> String {
 </body>
 </html>
 "#
+    )
+}
+
+/// A themed page with formulas, tunes and charts, whose `data-qn-msg`
+/// buttons send their data attributes to the app (message handler `qn`).
+pub fn app_page(title: &str, body: &str, theme: &Theme) -> String {
+    let (vars, theme) = (theme.preview_vars(), if theme.dark { "dark" } else { "light" });
+    let title = escape(title);
+    let notation = Libs::needed(body).head();
+    format!(
+        r#"<!DOCTYPE html>
+<html data-theme="{theme}" style="{vars}">
+<head>
+<meta charset="utf-8">
+<title>{title}</title>
+<style>{DOC_CSS}</style>
+{notation}</head>
+<body><main id="content">
+{body}
+</main>
+<script>
+qnRender(document.getElementById('content'));
+document.addEventListener('click', function (e) {{
+  var m = e.target.closest && e.target.closest('[data-qn-msg]');
+  if (m && !m.disabled && window.webkit) {{
+    var msg = Object.assign({{}}, m.dataset);
+    msg.type = m.dataset.qnMsg;
+    window.webkit.messageHandlers.qn.postMessage(JSON.stringify(msg));
+  }}
+}});
+</script>
+</body>
+</html>"#
     )
 }
 

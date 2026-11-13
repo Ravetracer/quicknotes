@@ -20,6 +20,7 @@ pub enum Feature {
     Geocaching,
     PlantUml,
     DevTools,
+    Flashcards,
 }
 
 /// The features with their preference labels and descriptions.
@@ -34,6 +35,7 @@ pub const LIST: &[(Feature, &str, &str)] = &[
         "Developer Tools",
         "Format, convert and encode JSON, XML, YAML, SQL, MongoDB and PHP arrays; line and case tools",
     ),
+    (Feature::Flashcards, "Flash Cards", "Learning with flash cards and spaced repetition"),
 ];
 
 impl Feature {
@@ -45,6 +47,7 @@ impl Feature {
             Self::Geocaching => 8,
             Self::PlantUml => 16,
             Self::DevTools => 32,
+            Self::Flashcards => 64,
         }
     }
 
@@ -58,6 +61,7 @@ impl Feature {
             Self::Geocaching => "geocaching",
             Self::PlantUml => "plantuml",
             Self::DevTools => "devtools",
+            Self::Flashcards => "flashcards",
         }
     }
 }
@@ -74,6 +78,8 @@ pub struct Features {
     /// Added after the other switches: on for settings that lack it.
     #[serde(default = "yes")]
     pub devtools: bool,
+    #[serde(default = "yes")]
+    pub flashcards: bool,
 }
 
 fn yes() -> bool {
@@ -83,7 +89,7 @@ fn yes() -> bool {
 impl Features {
     /// All features on (settings from before the switches existed).
     pub fn all() -> Self {
-        Self { charts: true, presentations: true, kanban: true, geocaching: true, plantuml: true, devtools: true }
+        Self { charts: true, presentations: true, kanban: true, geocaching: true, plantuml: true, devtools: true, flashcards: true }
     }
 
     pub fn get(&self, f: Feature) -> bool {
@@ -94,6 +100,7 @@ impl Features {
             Feature::Geocaching => self.geocaching,
             Feature::PlantUml => self.plantuml,
             Feature::DevTools => self.devtools,
+            Feature::Flashcards => self.flashcards,
         }
     }
 
@@ -105,6 +112,7 @@ impl Features {
             Feature::Geocaching => self.geocaching = on,
             Feature::PlantUml => self.plantuml = on,
             Feature::DevTools => self.devtools = on,
+            Feature::Flashcards => self.flashcards = on,
         }
     }
 

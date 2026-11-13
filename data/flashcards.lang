@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- QuickNotes flash cards: Markdown with front matter (`flashcards: true`),
+     cards as `Question::Answer`, `Question:::Answer` (both ways), or
+     question lines, a `?` / `??` line and answer lines; multiple choice
+     answers as `- [x]` / `- (x)` items (see src/flashcards.rs). -->
+<language id="flashcards" name="Flash Cards" version="2.0" section="Markup">
+  <metadata>
+    <property name="globs">*.cards.md;*.flashcards.md</property>
+    <property name="block-comment-start">&lt;!--</property>
+    <property name="block-comment-end">--&gt;</property>
+    <property name="suggested-suffix">.cards.md</property>
+  </metadata>
+
+  <styles>
+    <style id="front-matter" name="Front matter" map-to="def:comment"/>
+    <style id="key" name="Setting" map-to="def:type"/>
+    <style id="separator" name="Question/answer separator" map-to="def:keyword"/>
+    <style id="choice" name="Choice marker" map-to="def:special-char"/>
+  </styles>
+
+  <definitions>
+    <context id="front-matter" style-ref="front-matter" first-line-only="true" class="no-spell-check">
+      <start>^---\s*$</start>
+      <end>^(---|\.\.\.)\s*$</end>
+      <include>
+        <context id="key" style-ref="key">
+          <match>^\s*-?\s*[A-Za-z_-]+(?=:)</match>
+        </context>
+      </include>
+    </context>
+
+    <context id="separator" style-ref="separator">
+      <match>(:::|::|^\s*\?\??\s*$)</match>
+    </context>
+
+    <context id="choice" style-ref="choice">
+      <match>^\s*[-*+]\s+(\[[ xX]\]|\([ xX]\))</match>
+    </context>
+
+    <context id="flashcards">
+      <include>
+        <context ref="front-matter"/>
+        <context ref="choice"/>
+        <context ref="separator"/>
+        <context ref="markdown:markdown"/>
+      </include>
+    </context>
+  </definitions>
+</language>

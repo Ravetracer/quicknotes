@@ -87,6 +87,8 @@ pub struct Backup {
     pub notes: HashMap<String, String>,
     /// Sealed contents of password-protected tabs by tab id.
     pub locked: HashMap<String, Vec<u8>>,
+    /// Learning progress of flash cards (JSON).
+    pub learning: Option<Vec<u8>>,
 }
 
 /// What goes into a backup besides the session.
@@ -94,6 +96,8 @@ pub struct Backup {
 pub struct Contents {
     pub notes: Vec<(String, String)>,
     pub locked: Vec<(String, Vec<u8>)>,
+    /// Learning progress of flash cards (JSON).
+    pub learning: Option<Vec<u8>>,
 }
 
 impl From<&Backup> for Contents {
@@ -101,6 +105,7 @@ impl From<&Backup> for Contents {
         Contents {
             notes: b.notes.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
             locked: b.locked.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            learning: b.learning.clone(),
         }
     }
 }
@@ -164,6 +169,9 @@ fn archive(created: &str, session: &Session, contents: &Contents) -> std::io::Re
             add(&format!("notes/{id}.locked"), sealed)?;
         }
     }
+    if let Some(learning) = &contents.learning {
+        add("learning.json", learning)?;
+    }
     tar.into_inner()?.finish()
 }
 
@@ -212,6 +220,7 @@ fn parse(data: &[u8]) -> Result<Backup, ReadError> {
     let mut session = None;
     let mut notes = HashMap::new();
     let mut locked = HashMap::new();
+    let mut learning = None;
     let mut total = 0u64;
 
     for entry in archive.entries().map_err(|_| not_backup())? {
@@ -238,6 +247,7 @@ fn parse(data: &[u8]) -> Result<Backup, ReadError> {
                         .map_err(|e| t!("The backup's session is damaged: {}", e))?,
                 );
             }
+            "learning.json" => learning = Some(data.clone()),
             n => {
                 if let Some(id) = n.strip_prefix("notes/").and_then(|f| f.strip_suffix(".txt")) {
                     if valid_id(id) {
@@ -257,7 +267,7 @@ fn parse(data: &[u8]) -> Result<Backup, ReadError> {
         return Err(t!("The backup was created by a newer QuickNotes version").to_owned().into());
     }
     let session = session.ok_or_else(not_backup)?;
-    Ok(Backup { manifest, session, notes, locked })
+    Ok(Backup { manifest, session, notes, locked, learning })
 }
 
 /// Tab ids are lowercase hex (see `store::new_id`).
@@ -294,12 +304,14 @@ mod tests {
         let contents = Contents {
             notes: vec![("abc1".to_owned(), "hello\nwörld".to_owned())],
             locked: vec![("abc2".to_owned(), vec![1, 2, 3])],
+            learning: Some(b"{\"cards\":{}}".to_vec()),
         };
         write(&path, "2026-11-05T12:00:00", &session, &contents, None).unwrap();
         assert!(!is_sealed(&path));
 
         let backup = read(&path, None, None).unwrap();
         assert_eq!(backup.manifest.format, FORMAT);
+        assert_eq!(backup.learning.as_deref(), Some(&b"{\"cards\":{}}"[..]));
         assert_eq!(backup.manifest.created, "2026-11-05T12:00:00");
         assert_eq!(backup.session.tabs[0].id, "abc1");
         assert_eq!(backup.session.settings.font_family, "Fira Code");
@@ -313,7 +325,7 @@ mod tests {
         let path = tmp("sealed.qnbackup");
         let mut session = Session::default();
         session.tabs.push(TabMeta { id: "abc1".into(), title: Some("Secret title".into()), ..Default::default() });
-        let notes = Contents { notes: vec![("abc1".to_owned(), "the secret note".to_owned())], locked: Vec::new() };
+        let notes = Contents { notes: vec![("abc1".to_owned(), "the secret note".to_owned())], locked: Vec::new(), learning: None };
         let kdf = crate::crypto::tests::fast_kdf();
         let seal = Seal::Password { key: kdf.derive("pw").unwrap(), kdf };
         write(&path, "2026-11-12T10:00:00", &session, &notes, Some(&seal)).unwrap();

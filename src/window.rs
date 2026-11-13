@@ -14,6 +14,7 @@ use crate::{checklist, crypto, format, format_bar, html, kanban, langs, md_forma
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use sourceview5::prelude::*;
+use webkit6::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -104,6 +105,10 @@ pub struct Window {
     /// Header button with the developer tools.
     tools_btn: gtk::MenuButton,
     presentation: RefCell<Option<Rc<Presentation>>>,
+    /// The running study session of flash cards.
+    study: RefCell<Option<Rc<crate::study::Study>>>,
+    /// The learning overview window and its web view.
+    cards_overview: RefCell<Option<(gtk::Window, webkit6::WebView)>>,
     tab_bar: adw::TabBar,
     /// Vertical tabs (sidebar) and the pane holding it next to the tabs.
     tab_list: Rc<TabList>,
@@ -498,6 +503,7 @@ impl Window {
             zoom: Cell::new(settings.font_size / BASE_FONT),
             plantuml_command: RefCell::new(settings.plantuml_command.clone()),
             format_bar: Cell::new(settings.format_bar),
+            learning: RefCell::new(crate::learning::Store::load()),
         });
 
         let this = Rc::new(Self {
@@ -529,6 +535,8 @@ impl Window {
             image_export: Cell::new((0, 0)),
             tools_btn: tools_btn.clone(),
             presentation: RefCell::new(None),
+            study: RefCell::new(None),
+            cards_overview: RefCell::new(None),
             tab_bar,
             tab_list,
             content,
@@ -631,6 +639,27 @@ impl Window {
                 w.new_kanban();
             }
         });
+        self.action("new-flashcards", &[], |w| {
+            if features::on(Feature::Flashcards) {
+                w.new_flashcards();
+            }
+        });
+        self.action("cards-overview", &[], |w| {
+            if features::on(Feature::Flashcards) {
+                w.show_cards_overview();
+            }
+        });
+        let learn = gio::SimpleAction::new("cards-learn", Some(glib::VariantTy::STRING));
+        let weak = self.weak();
+        learn.connect_activate(move |_, param| {
+            let (Some(this), Some(target)) = (weak.upgrade(), param.and_then(|p| p.str())) else { return };
+            let (mode, deck) = target.split_once('\t').unwrap_or(("learn", target));
+            match this.current_text() {
+                Some(t) if t.preview_kind() == Some(PreviewKind::Flashcards) => this.study(vec![t], deck, mode == "practice"),
+                _ => {}
+            }
+        });
+        self.win.add_action(&learn);
         self.action("lock-app", &[], |w| w.lock_app());
         self.action("tab-protect", &[], |w| {
             if let Some(t) = w.menu_text_tab() {
@@ -657,7 +686,8 @@ impl Window {
         self.action("present-window", &["<Control><Shift>F5"], |w| w.present(true, presenter::Layout::Window));
         self.action("syntax-help", &["<Shift>F1"], |w| w.show_syntax_help());
         self.action("help", &["F1"], |w| {
-            crate::help::show(&w.win, w.shared.theme.get(), w.shared.zoom.get());
+            let topic = w.help_topic();
+            crate::help::show(&w.win, w.shared.theme.get(), w.shared.zoom.get(), topic);
         });
         self.action("open", &["<Control>o"], |w| w.open_dialog());
         self.action("save", &["<Control>s"], |w| w.save());
@@ -1398,6 +1428,192 @@ impl Window {
         self.sync_ui();
     }
 
+    fn new_flashcards(self: &Rc<Self>) {
+        let t = self.new_note();
+        t.language_locked.set(true);
+        t.set_text_irreversible(&crate::flashcards::template());
+        t.set_language_id(Some(crate::flashcards::LANGUAGE));
+        t.set_preview(true);
+        self.mark_dirty(&t.id);
+        self.refresh_title(&t.id);
+        self.sync_ui();
+    }
+
+    /// The help section for the current tab and cursor (F1).
+    fn help_topic(&self) -> Option<&'static str> {
+        use crate::help::{Cursor, Doc};
+        let t = match self.current()? {
+            Tab::Text(t) => t,
+            _ => return Some(crate::help::topic(Doc::Image, Cursor::default(), false)),
+        };
+        let language = t.language_id();
+        let doc = match t.preview_kind() {
+            Some(PreviewKind::Flashcards) => Doc::Flashcards,
+            Some(PreviewKind::Slides) => Doc::Slides,
+            Some(PreviewKind::Kanban) => Doc::Kanban,
+            Some(PreviewKind::Markdown) => Doc::Markdown,
+            Some(PreviewKind::Rst | PreviewKind::Html | PreviewKind::PlantUml) => Doc::Preview,
+            None if t.is_calc() => Doc::Calc,
+            None => match language.as_deref() {
+                None => Doc::Note,
+                Some(l) => Doc::Code(l),
+            },
+        };
+        let fence = t.fence_at_cursor();
+        let cursor = Cursor { fence: fence.as_deref(), in_table: t.table_at_cursor().is_some(), on_task: t.on_task_line() };
+        Some(crate::help::topic(doc, cursor, t.emmet_syntax().is_some()))
+    }
+
+    /// Text tabs with flash cards.
+    fn flashcard_tabs(&self) -> Vec<Rc<EditorTab>> {
+        self.text_tabs().into_iter().filter(|t| t.preview_kind() == Some(PreviewKind::Flashcards)).collect()
+    }
+
+    /// Learns the deck `deck` (path; empty: all) of the flash cards in `tabs`:
+    /// due and new cards, or all of them in `practice` (schedule unchanged).
+    fn study(self: &Rc<Self>, tabs: Vec<Rc<EditorTab>>, deck: &str, practice: bool) {
+        use crate::flashcards::{self, Card};
+        use crate::learning::{self, CardRef};
+        if tabs.is_empty() {
+            return;
+        }
+        let today = learning::today();
+        let docs: Vec<(String, flashcards::Doc, bool)> =
+            tabs.iter().map(|t| (t.card_doc_id(), t.flashcards(), t.lock().is_some())).collect();
+        // Edited cards keep their progress.
+        {
+            let mut store = self.shared.learning.borrow_mut();
+            let mut changed = false;
+            for (id, doc, locked) in &docs {
+                let texts: Vec<String> = doc.cards.iter().map(Card::front_text).collect();
+                let refs: Vec<CardRef<'_>> = doc.cards.iter().zip(&texts).map(|(c, t)| CardRef { key: &c.key, front: t }).collect();
+                changed |= store.adopt(id, &refs, !locked);
+            }
+            if changed {
+                let _ = store.save();
+            }
+        }
+        let store = self.shared.learning.borrow();
+        let pairs: Vec<(&Card, Option<&learning::CardState>)> =
+            docs.iter().flat_map(|(_, doc, _)| doc.cards.iter().map(|c| (c, store.state(&c.key)))).collect();
+        let keys: std::collections::HashSet<&str> = pairs.iter().map(|(c, _)| c.key.as_str()).collect();
+        let settings = docs[0].1.settings.clone();
+        let chosen = flashcards::session_cards(&pairs, deck, practice, store.new_today(&keys, today), settings.new_per_day, today);
+        if chosen.is_empty() {
+            drop(store);
+            self.toast(if practice { t!("This deck has no cards") } else { t!("Nothing to learn right now – practise instead?") });
+            return;
+        }
+        // Which document each card comes from (for the progress).
+        let mut owners: HashMap<String, (String, bool)> = HashMap::new();
+        for (id, doc, locked) in &docs {
+            for c in &doc.cards {
+                owners.entry(c.key.clone()).or_insert((id.clone(), *locked));
+            }
+        }
+        let cards: Vec<flashcards::StudyCard> =
+            chosen.iter().map(|c| flashcards::study_card(c, store.state(&c.key), practice, today)).collect();
+        drop(store);
+        let title = if deck.is_empty() {
+            docs[0].1.cards.first().and_then(|c| c.deck.first()).cloned().unwrap_or_else(|| tabs[0].title())
+        } else {
+            deck.replace('/', " › ")
+        };
+        let colors = flashcards::colors(&settings, self.shared.theme.get().dark);
+        let page = flashcards::study_page(&title, &cards, &colors, practice);
+        if let Some(running) = self.study.borrow_mut().take() {
+            running.close();
+        }
+        let shared = self.shared.clone();
+        let on_answer = move |a: crate::study::Answer| {
+            let (doc, locked) = owners.get(&a.key).cloned().unwrap_or_default();
+            let text = if locked { "" } else { a.text.as_str() };
+            let mut store = shared.learning.borrow_mut();
+            let answered =
+                learning::Answered { key: &a.key, doc: &doc, front: text, rating: a.rating, ms: a.ms, practice: a.practice };
+            store.review(&answered, learning::today(), learning::now_unix());
+            if let Err(e) = store.save() {
+                eprintln!("quicknotes: cannot save the learning progress: {e}");
+            }
+        };
+        let weak = self.weak();
+        let on_close = move || {
+            let Some(this) = weak.upgrade() else { return };
+            this.study.borrow_mut().take();
+            for t in this.flashcard_tabs() {
+                t.refresh_preview();
+            }
+            this.refresh_cards_overview();
+        };
+        let study = crate::study::Study::open(&self.win, &title, &page, tabs[0].base_uri(), on_answer, on_close);
+        *self.study.borrow_mut() = Some(study);
+    }
+
+    /// The decks of all open flash card tabs, in a window of their own.
+    fn show_cards_overview(self: &Rc<Self>) {
+        if let Some((win, _)) = self.cards_overview.borrow().as_ref() {
+            win.present();
+        }
+        if self.cards_overview.borrow().is_some() {
+            self.refresh_cards_overview();
+            return;
+        }
+        let webview = webkit6::WebView::new();
+        webview.set_vexpand(true);
+        webview.set_background_color(&crate::editor::preview_bg(self.shared.theme.get()));
+        if let Some(ucm) = webview.user_content_manager() {
+            ucm.register_script_message_handler("qn", None);
+            let weak = self.weak();
+            ucm.connect_script_message_received(Some("qn"), move |_, value| {
+                let Some(this) = weak.upgrade() else { return };
+                let Ok(msg) = serde_json::from_str::<serde_json::Value>(&value.to_str()) else { return };
+                if msg.get("type").and_then(|v| v.as_str()) == Some("learn") {
+                    let deck = msg.get("deck").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                    let practice = msg.get("mode").and_then(|v| v.as_str()) == Some("practice");
+                    let tabs = this.flashcard_tabs();
+                    this.study(tabs, &deck, practice);
+                }
+            });
+        }
+        let header = adw::HeaderBar::new();
+        let content = adw::ToolbarView::new();
+        content.add_top_bar(&header);
+        content.set_content(Some(&webview));
+        let win = adw::Window::builder()
+            .title(t!("Learning Overview"))
+            .default_width(820)
+            .default_height(720)
+            .transient_for(&self.win)
+            .content(&content)
+            .build();
+        let weak = self.weak();
+        win.connect_close_request(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.cards_overview.borrow_mut().take();
+            }
+            glib::Propagation::Proceed
+        });
+        *self.cards_overview.borrow_mut() = Some((win.clone().upcast(), webview));
+        self.refresh_cards_overview();
+        win.present();
+    }
+
+    fn refresh_cards_overview(&self) {
+        let Some((_, webview)) = self.cards_overview.borrow().clone() else { return };
+        let docs: Vec<(String, crate::flashcards::Doc)> =
+            self.flashcard_tabs().iter().map(|t| (t.card_doc_id(), t.flashcards())).collect();
+        let store = self.shared.learning.borrow();
+        let studied: Vec<crate::flashcards::Studied<'_>> =
+            docs.iter().map(|(id, doc)| crate::flashcards::Studied::new(doc, id, &store)).collect();
+        let mut body = crate::flashcards::overview_html(&studied, &store, crate::learning::today(), false);
+        if docs.is_empty() {
+            body = format!("<p>{}</p>", html::escape(t!("No flash cards are open. Create some with Main menu → New Flash Cards.")));
+        }
+        drop(store);
+        let page = html::app_page(t!("Learning Overview"), &body, self.shared.theme.get());
+        webview.load_html(&page, None);
+    }
+
     /// Starts the presentation of the current tab.
     fn present(self: &Rc<Self>, from_cursor: bool, layout: presenter::Layout) {
         let Some(t) = self.current_text() else { return };
@@ -1696,6 +1912,7 @@ impl Window {
                 contents.notes.push((t.id.clone(), t.text()));
             }
         }
+        contents.learning = Some(self.shared.learning.borrow().to_json());
         (session, contents)
     }
 
@@ -1831,6 +2048,7 @@ impl Window {
             store::set_app_key(Some(key.clone()));
             *this.vault.borrow_mut() = Some(lock);
             let failed = store::convert_notes(None) + this.reseal_auto_backups(None, Some(&key));
+            let _ = this.shared.learning.borrow().save();
             this.persist_all();
             this.menu_context.set(None);
             this.sync_ui();
@@ -1895,6 +2113,7 @@ impl Window {
             store::set_app_key(None);
             *this.vault.borrow_mut() = None;
             let failed = store::convert_notes(Some(&key)) + this.reseal_auto_backups(Some(&key), None);
+            let _ = this.shared.learning.borrow().save();
             this.persist_all();
             this.menu_context.set(None);
             this.sync_ui();
@@ -2047,6 +2266,12 @@ impl Window {
         self.persist_all();
         if let Some(running) = self.presentation.borrow_mut().take() {
             running.end();
+        }
+        if let Some(study) = self.study.borrow_mut().take() {
+            study.close();
+        }
+        if let Some((win, _)) = self.cards_overview.borrow_mut().take() {
+            win.close();
         }
         show_unlock(&app, store::load_session(), Vec::new());
         self.locking.set(true);
@@ -2257,6 +2482,11 @@ impl Window {
     }
 
     fn import_add(self: &Rc<Self>, backup: crate::backup::Backup) {
+        if let Some(data) = &backup.learning {
+            let mut store = self.shared.learning.borrow_mut();
+            store.merge(crate::learning::Store::from_backup(data));
+            let _ = store.save();
+        }
         let (restored, missing) = self.import_tabs(&backup, true);
         let mut msg = match restored {
             0 => t!("All tabs of the backup are already open").to_owned(),
@@ -2313,6 +2543,11 @@ impl Window {
         self.apply_tab_colors();
         self.sync_layout();
 
+        if let Some(data) = &backup.learning {
+            let mut store = self.shared.learning.borrow_mut();
+            *store = crate::learning::Store::from_backup(data);
+            let _ = store.save();
+        }
         let (count, missing) = self.import_tabs(&backup, false);
         if self.view.n_pages() == 0 {
             self.new_note();
@@ -3630,7 +3865,7 @@ impl Window {
         if selected {
             label = t!("Selection: {}", label);
         }
-        if t.tasks_enabled() {
+        if t.checklists_enabled() {
             let (done, total) = checklist::progress(&text);
             if total > 0 {
                 label = format!("{label}  ·  {}", t!("✓ {} of {} done", done, total));
@@ -4074,17 +4309,19 @@ enum TabStyle {
     Slides,
     Calc,
     Kanban,
+    Cards,
     Image,
 }
 
 impl TabStyle {
-    const ALL: [Self; 7] = [Self::Note, Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Kanban, Self::Image];
+    const ALL: [Self; 8] = [Self::Note, Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Kanban, Self::Cards, Self::Image];
 
     fn of(tab: &Tab) -> Self {
         let Tab::Text(t) = tab else { return Self::Image };
         match t.preview_kind() {
             Some(PreviewKind::Slides) => Self::Slides,
             Some(PreviewKind::Kanban) => Self::Kanban,
+            Some(PreviewKind::Flashcards) => Self::Cards,
             Some(kind) if kind.is_document() => Self::Document,
             _ if t.is_calc() => Self::Calc,
             _ if t.language_id().is_none() => Self::Note,
@@ -4093,13 +4330,14 @@ impl TabStyle {
     }
 
     /// Types with their own colour (plain notes keep the default look).
-    const COLORED: [Self; 6] = [Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Kanban, Self::Image];
+    const COLORED: [Self; 7] = [Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Kanban, Self::Cards, Self::Image];
 
     /// Whether tabs of this type exist with the current features.
     fn available(&self) -> bool {
         match self {
             Self::Slides => features::on(Feature::Presentations),
             Self::Kanban => features::on(Feature::Kanban),
+            Self::Cards => features::on(Feature::Flashcards),
             _ => true,
         }
     }
@@ -4113,6 +4351,7 @@ impl TabStyle {
             Self::Slides => "slides",
             Self::Calc => "calc",
             Self::Kanban => "kanban",
+            Self::Cards => "flashcards",
             Self::Image => "image",
         }
     }
@@ -4125,6 +4364,7 @@ impl TabStyle {
             Self::Slides => t!("Presentations"),
             Self::Calc => t!("Calculations"),
             Self::Kanban => t!("Kanban boards"),
+            Self::Cards => t!("Flash cards"),
             Self::Image => t!("Images"),
         }
     }
@@ -4137,6 +4377,7 @@ impl TabStyle {
             Self::Slides => "#9141ac",
             Self::Calc => "#33d17a",
             Self::Kanban => "#e5a50a",
+            Self::Cards => "#c061cb",
             Self::Image => "#ff7800",
         }
     }
@@ -4149,6 +4390,7 @@ impl TabStyle {
             Self::Slides => "tab-slides",
             Self::Calc => "tab-calc",
             Self::Kanban => "tab-kanban",
+            Self::Cards => "tab-flashcards",
             Self::Image => "tab-image",
         }
     }
@@ -4393,6 +4635,9 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
     if context.features.kanban {
         file.push((t!("New Kanban Board"), "win.new-kanban"));
     }
+    if context.features.flashcards {
+        file.push((t!("New Flash Cards"), "win.new-flashcards"));
+    }
     file.push((t!("Open File…"), "win.open"));
     if text {
         file.extend([(t!("Save"), "win.save"), (t!("Save As…"), "win.save-as")]);
@@ -4434,10 +4679,13 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
     if text {
         view.push((t!("Word Wrap"), "win.wrap"));
     }
-    if matches!(context.style, Some(TabStyle::Document | TabStyle::Slides)) {
+    if matches!(context.style, Some(TabStyle::Document | TabStyle::Slides | TabStyle::Cards)) {
         view.push((t!("Formatting Toolbar"), "win.format-bar"));
     }
     view.push((t!("Distraction-Free Mode"), "win.focus-mode"));
+    if context.features.flashcards {
+        view.push((t!("Learning Overview"), "win.cards-overview"));
+    }
     menu.append_section(None, &menu_section(&view));
 
     menu.append_section(
@@ -4463,7 +4711,7 @@ fn editor_context_menu(style: TabStyle, emmet: bool) -> gio::Menu {
     if emmet {
         menu.append_section(None, &emmet_section());
     }
-    if matches!(style, TabStyle::Note | TabStyle::Document | TabStyle::Slides) {
+    if matches!(style, TabStyle::Note | TabStyle::Document | TabStyle::Slides | TabStyle::Cards) {
         menu.append_section(
             None,
             &menu_section(&[

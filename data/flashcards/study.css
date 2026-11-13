@@ -1,0 +1,54 @@
+/* Study window of QuickNotes flash cards. Colours come from the variables
+   set on <html> (see src/flashcards.rs: every text colour is readable on
+   its background). */
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); }
+body { font-family: "Cantarell", "Inter", "Segoe UI", sans-serif; font-size: 18px; line-height: 1.55; }
+#app { display: flex; flex-direction: column; height: 100%; }
+header { display: flex; align-items: center; gap: 16px; padding: 12px 24px; color: var(--muted); font-size: 15px; }
+header .title { color: var(--fg); font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.progress { flex: 0 0 30%; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.progress i { display: block; height: 100%; background: var(--accent); transition: width .2s; }
+main { flex: 1; overflow: auto; display: flex; justify-content: center; align-items: flex-start; padding: 24px; }
+.card { width: 100%; max-width: 780px; margin: auto 0; background: var(--card); border: 1px solid var(--border);
+  border-radius: 16px; padding: 32px 40px; box-shadow: 0 6px 24px rgba(0,0,0,.18); }
+.deck { color: var(--muted); font-size: 14px; margin-bottom: 12px; }
+.front { font-size: 1.35em; }
+.front > :first-child, .back > :first-child { margin-top: 0; }
+.front > :last-child, .back > :last-child { margin-bottom: 0; }
+.back { border-top: 2px dashed var(--border); margin-top: 24px; padding-top: 20px; }
+.clickable { cursor: pointer; }
+a { color: var(--accent); }
+code, pre { font-family: "Monospace", monospace; font-size: .9em; }
+pre { background: var(--bg); padding: 10px 14px; border-radius: 8px; overflow-x: auto; }
+code { background: var(--bg); padding: .1em .3em; border-radius: 4px; }
+pre code { background: none; padding: 0; }
+img { max-width: 100%; }
+table { border-collapse: collapse; } th, td { border: 1px solid var(--border); padding: 4px 10px; }
+ul.choices { list-style: none; padding: 0; margin: 20px 0 0; }
+ul.choices li { margin: 8px 0; }
+ul.choices label { display: flex; gap: 12px; align-items: center; padding: 10px 14px; border: 2px solid var(--border);
+  border-radius: 10px; cursor: pointer; }
+ul.choices label:hover { border-color: var(--accent); }
+ul.choices input { width: 1.2em; height: 1.2em; accent-color: var(--accent); margin: 0; }
+ul.choices .num { color: var(--muted); font-size: 14px; min-width: 1em; }
+ul.choices li.ok label { border-color: var(--good); }
+ul.choices li.ok .mark::after { content: "✓"; color: var(--good); font-weight: 700; }
+ul.choices li.bad label { border-color: var(--bad); }
+ul.choices li.bad .mark::after { content: "✗"; color: var(--bad); font-weight: 700; }
+ul.choices .mark { margin-left: auto; }
+.result { font-weight: 700; margin-top: 16px; }
+.result.ok { color: var(--good); } .result.bad { color: var(--bad); }
+footer { padding: 16px 24px 20px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.buttons { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+button { font: inherit; font-size: 16px; min-width: 120px; padding: 10px 18px; border-radius: 10px; cursor: pointer;
+  border: 2px solid var(--accent); background: var(--accent); color: var(--on-accent); }
+button.outline { background: transparent; color: var(--accent); }
+button.again { border-color: var(--bad); background: transparent; color: var(--bad); }
+button.easy { border-color: var(--good); background: transparent; color: var(--good); }
+button:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
+button small { display: block; font-size: 12px; opacity: .85; }
+.keys { color: var(--muted); font-size: 13px; }
+.summary { text-align: center; }
+.summary h1 { margin-top: 0; }
+.qn-chart { width: 100%; }

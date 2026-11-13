@@ -41,10 +41,13 @@ after a restart.
   calendar, Sankey, network graph, treemap, sunburst, tree, parallel coordinates and theme
   river; numbers in English or German notation with units and currencies; defaults per
   document in the front matter
+- **Flash cards** with spaced repetition (Anki-like scheduling): Obsidian-compatible syntax
+  (`Q::A`, `Q:::A`, multi-line cards) plus multiple choice, nested decks, a study window with
+  themes, progress and statistics (stored encrypted with the app password, included in backups)
 - **Data import**: CSV/TSV files and spreadsheets (Excel, LibreOffice) become Markdown tables;
   cells copied from a spreadsheet can be pasted as table
-- **Optional features** (*Preferences → Features*): charts, presentations, Kanban boards, the
-  Geocaching tools, PlantUML and the developer tools can be switched off; they then disappear from menus, toolbar
+- **Optional features** (*Preferences → Features*): charts, presentations, Kanban boards, flash
+  cards, the Geocaching tools, PlantUML and the developer tools can be switched off; they then disappear from menus, toolbar
   and help. New installations start with them off
 - **Markdown tables** like Obsidian's *Advanced Tables*: automatic formatting, Tab/Enter
   navigation, insert/delete/move rows and columns, sorting, column alignment

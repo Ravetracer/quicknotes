@@ -28,6 +28,8 @@ pub struct Shared {
     pub plantuml_command: RefCell<Option<String>>,
     /// Formatting toolbar above Markdown editors.
     pub format_bar: Cell<bool>,
+    /// Learning progress of flash cards.
+    pub learning: RefCell<crate::learning::Store>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -39,6 +41,8 @@ pub enum PreviewKind {
     Slides,
     /// Kanban board: the board replaces the editor (the source can be shown next to it).
     Kanban,
+    /// Flash cards: the preview shows the decks and the learning progress.
+    Flashcards,
 }
 
 impl PreviewKind {
@@ -52,6 +56,8 @@ impl PreviewKind {
             // Switched-off features: presentations and boards are Markdown.
             Some(slides::LANGUAGE) if !features::on(Feature::Presentations) => Some(Self::Markdown),
             Some(kanban::LANGUAGE) if !features::on(Feature::Kanban) => Some(Self::Markdown),
+            Some(crate::flashcards::LANGUAGE) if !features::on(Feature::Flashcards) => Some(Self::Markdown),
+            Some(crate::flashcards::LANGUAGE) => Some(Self::Flashcards),
             Some(slides::LANGUAGE) => Some(Self::Slides),
             Some(kanban::LANGUAGE) => Some(Self::Kanban),
             _ => None,
@@ -73,7 +79,7 @@ impl PreviewKind {
         match self {
             Self::PlantUml => 700,
             Self::Html => 400,
-            Self::Markdown | Self::Rst | Self::Slides => 250,
+            Self::Markdown | Self::Rst | Self::Slides | Self::Flashcards => 250,
             Self::Kanban => 60,
         }
     }
@@ -740,7 +746,42 @@ impl EditorTab {
 
     /// Task items are recognised in plain notes, Markdown and presentations.
     pub fn tasks_enabled(&self) -> bool {
-        !self.large.get() && matches!(self.language_id().as_deref(), None | Some("markdown") | Some(slides::LANGUAGE))
+        !self.large.get()
+            && matches!(self.language_id().as_deref(), None | Some("markdown") | Some(slides::LANGUAGE) | Some(crate::flashcards::LANGUAGE))
+    }
+
+    /// Checked items are shown done (struck through) and counted – not in
+    /// flash cards, where `- [x]` marks a right answer.
+    pub fn checklists_enabled(&self) -> bool {
+        self.tasks_enabled() && self.language_id().as_deref() != Some(crate::flashcards::LANGUAGE)
+    }
+
+    /// Info string of the fenced code block the cursor is in (`chart`, `math`, …).
+    pub fn fence_at_cursor(&self) -> Option<String> {
+        let line = self.buffer.iter_at_mark(&self.buffer.get_insert()).line().max(0) as usize;
+        let text = self.text();
+        let mut open: Option<(String, String)> = None;
+        for (i, l) in text.lines().enumerate().take(line + 1) {
+            let t = l.trim_start();
+            let marker: String = t.chars().take_while(|c| *c == '`' || *c == '~').collect();
+            match &open {
+                Some((m, _)) if marker.len() >= m.len() && marker.starts_with(&m[..1]) && t.trim() == marker => {
+                    if i == line {
+                        return open.map(|(_, info)| info);
+                    }
+                    open = None;
+                }
+                None if marker.len() >= 3 => open = Some((marker.clone(), t[marker.len()..].trim().to_owned())),
+                _ => {}
+            }
+        }
+        open.map(|(_, info)| info)
+    }
+
+    /// Whether the cursor line is a checklist item.
+    pub fn on_task_line(&self) -> bool {
+        let line = self.buffer.iter_at_mark(&self.buffer.get_insert()).line();
+        self.line_text(line).is_some_and(|l| checklist::parse(&l).is_some())
     }
 
     fn line_text(&self, line: i32) -> Option<String> {
@@ -754,7 +795,7 @@ impl EditorTab {
 
     /// Line whose task box is under the widget position `x`, `y`.
     fn task_box_at(&self, x: f64, y: f64) -> Option<i32> {
-        if !self.tasks_enabled() {
+        if !self.checklists_enabled() {
             return None;
         }
         let (bx, by) = self.view.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
@@ -1140,7 +1181,7 @@ impl EditorTab {
         let (start, end) = self.buffer.bounds();
         self.buffer.remove_tag_by_name(TASK_DONE_TAG, &start, &end);
         self.buffer.remove_tag_by_name(TASK_BOX_TAG, &start, &end);
-        if !self.tasks_enabled() {
+        if !self.checklists_enabled() {
             return;
         }
         let text = self.text();
@@ -1575,7 +1616,7 @@ impl EditorTab {
     /// Shows the formatting toolbar for Markdown and presentations (not in
     /// distraction-free mode).
     pub fn sync_format_bar(&self) {
-        let markdown = matches!(self.preview_kind(), Some(PreviewKind::Markdown | PreviewKind::Slides));
+        let markdown = matches!(self.preview_kind(), Some(PreviewKind::Markdown | PreviewKind::Slides | PreviewKind::Flashcards));
         self.format_bar.set_visible(markdown && self.shared.format_bar.get() && !self.focus.get());
         format_bar::sync_features(&self.format_bar);
     }
@@ -1719,6 +1760,12 @@ impl EditorTab {
                     }
                     Some("undo") if t.buffer.can_undo() => t.buffer.undo(),
                     Some("redo") if t.buffer.can_redo() => t.buffer.redo(),
+                    Some("learn") => {
+                        let mode = msg.get("mode").and_then(|v| v.as_str()).unwrap_or("learn");
+                        let deck = msg.get("deck").and_then(|v| v.as_str()).unwrap_or("");
+                        let target = format!("{mode}\t{deck}").to_variant();
+                        let _ = t.view.activate_action("win.cards-learn", Some(&target));
+                    }
                     Some("task") => {
                         if let Some(line) = msg.get("line").and_then(|v| v.as_i64()) {
                             t.toggle_task(line as i32);
@@ -1771,7 +1818,7 @@ impl EditorTab {
         match self.preview_kind()? {
             PreviewKind::Markdown => Some(markdown::to_html(&self.text())),
             PreviewKind::Rst => Some(rst::to_html(&self.text(), self.base_dir().as_deref())),
-            PreviewKind::PlantUml | PreviewKind::Html | PreviewKind::Slides | PreviewKind::Kanban => None,
+            PreviewKind::PlantUml | PreviewKind::Html | PreviewKind::Slides | PreviewKind::Kanban | PreviewKind::Flashcards => None,
         }
     }
 
@@ -1847,6 +1894,41 @@ impl EditorTab {
             p.webview.evaluate_javascript(&js, None, None, None::<&gio::Cancellable>, |_| {});
         } else {
             *p.pending.borrow_mut() = Some(js);
+        }
+    }
+
+    /// Identifies the document for the learning progress: its file, or the
+    /// note.
+    pub fn card_doc_id(&self) -> String {
+        match self.path.borrow().as_ref() {
+            Some(p) => p.to_string_lossy().into_owned(),
+            None => format!("note:{}", self.id),
+        }
+    }
+
+    /// The flash cards of this tab.
+    pub fn flashcards(&self) -> crate::flashcards::Doc {
+        let fallback = self.path.borrow().as_ref().and_then(|p| p.file_name()).map(|n| {
+            let n = n.to_string_lossy();
+            n.trim_end_matches(".md").trim_end_matches(".cards").trim_end_matches(".flashcards").to_owned()
+        });
+        crate::flashcards::parse(&self.text(), &fallback.unwrap_or_else(|| self.title()))
+    }
+
+    /// Decks, progress and cards in the preview.
+    fn render_flashcards(self: &Rc<Self>) {
+        let doc = self.flashcards();
+        let store = self.shared.learning.borrow();
+        let studied = [crate::flashcards::Studied::new(&doc, &self.card_doc_id(), &store)];
+        let html = crate::flashcards::overview_html(&studied, &store, crate::learning::today(), true);
+        drop(store);
+        self.set_preview_html(&html);
+    }
+
+    /// Redraws the preview (e.g. after learning).
+    pub fn refresh_preview(self: &Rc<Self>) {
+        if self.preview_visible() {
+            self.schedule_render(0);
         }
     }
 
@@ -1962,6 +2044,7 @@ impl EditorTab {
             Some(PreviewKind::Html) => self.render_html_page(),
             Some(PreviewKind::Slides) => self.render_slides(),
             Some(PreviewKind::Kanban) => self.render_kanban(),
+            Some(PreviewKind::Flashcards) => self.render_flashcards(),
             None => {}
         }
     }

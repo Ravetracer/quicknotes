@@ -1,6 +1,6 @@
 # QuickNotes-Hilfe {#top}
 
-**Inhalt:** [Notizen & Tabs](#notes) · [Checklisten](#checklists) · [Tabellen](#tables) · [Formatierung](#formatting) · [Formeln & Noten](#notation) · [Diagramme](#charts) · [Kanban](#kanban) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
+**Inhalt:** [Notizen & Tabs](#notes) · [Checklisten](#checklists) · [Tabellen](#tables) · [Formatierung](#formatting) · [Formeln & Noten](#notation) · [Diagramme](#charts) · [Kanban](#kanban) · [Lernkarten](#flashcards) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
 [Vorschau & Export](#previews) · [Präsentationen](#slides) · [Entwicklerwerkzeuge](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Sicherheit](#security) · [Sicherung](#backup) ·
 [Tastenkürzel](#shortcuts)
@@ -36,7 +36,7 @@ Sprache der Oberfläche (gilt nach einem Neustart), das Farbdesign, die Tab-Posi
 Tab-Farben fest und bietet Sicherung und Wiederherstellung der Notizen (*Import/Export*).
 
 *Funktionen* schaltet optionale Teile von QuickNotes ein und aus: Diagramme, Präsentationen,
-Kanban-Boards, die Geocaching-Werkzeuge, PlantUML und die Entwicklerwerkzeuge. Ausgeschaltete Funktionen verschwinden
+Kanban-Boards, Lernkarten, die Geocaching-Werkzeuge, PlantUML und die Entwicklerwerkzeuge. Ausgeschaltete Funktionen verschwinden
 aus den Menüs, der Werkzeugleiste und dieser Hilfe; Dokumente bleiben, wie sie sind
 (Präsentationen und Boards öffnen sich dann als Markdown, Diagramme erscheinen als Code). Neue
 Installationen starten mit allen ausgeschaltet.
@@ -217,6 +217,80 @@ unter `echarts:` und wird ins Diagramm übernommen, z. B.
       height: 300
       decimal: ","
     ---
+
+## Lernkarten {#flashcards}
+
+**Lernkarten** helfen beim Lernen mit verteilter Wiederholung: Jede Karte kommt wieder, kurz
+bevor man sie vergessen würde. *Hauptmenü → Neue Lernkarten* legt ein Dokument mit Beispielen
+an. Ein Markdown-Dokument ist ein Satz Lernkarten, wenn sein Front Matter `flashcards: true`
+enthält (oder die Datei auf `.cards.md` endet).
+
+    ---
+    flashcards: true
+    deck: Biologie/Zellen
+    ---
+
+    # Grundlagen
+
+    Hauptstadt von Frankreich::Paris
+    Mitochondrien:::Kraftwerk der Zelle
+
+    Was ist Osmose?
+    ?
+    Wasser wandert durch eine Membran
+    von niedriger zu hoher Konzentration.
+
+    Was sind Organellen?
+    ?
+    - [x] Mitochondrium
+    - [x] Ribosom
+    - [ ] Zellwand
+    Ribosomen haben keine Membran.
+
+    Der größte Planet?
+    ?
+    - ( ) Mars
+    - (x) Jupiter
+
+- `Frage::Antwort` – eine Karte in einer Zeile.
+- `Frage:::Antwort` – zwei Karten: Die Frage wird auch umgekehrt gestellt.
+- Zeilen der Frage, eine Zeile nur mit `?`, dann die Zeilen der Antwort – eine Karte über
+  mehrere Zeilen (`??` für beide Richtungen). Eine Leerzeile beendet die Karte. Antworten
+  können alles aus Markdown nutzen: Listen, Code, Formeln, Bilder.
+- Eine Antwort aus `- [x]`-/`- [ ]`-Punkten ist **Multiple Choice mit Kontrollkästchen**
+  (beliebig viele richtige Antworten), aus `- (x)`-/`- ( )`-Punkten **Multiple Choice mit
+  Optionsfeldern** (genau eine richtige Antwort). Zeilen nach den Punkten erklären die Antwort.
+
+**Stapel:** `deck: Biologie/Zellen` im Front Matter legt die Karten in einen Stapel und seinen
+Unterstapel (beliebig tief; mehrere Dokumente können denselben Stapel füllen). Überschriften
+im Dokument bilden weitere Unterstapel. Ohne `deck:` ist der Titel (oder der Dateiname) der
+Stapel.
+
+**Lernen:** Die Vorschau zeigt die Stapel mit Fortschritt und Statistik. **Lernen** öffnet die
+fälligen Karten und neue (höchstens 20 neue am Tag, `new-per-day:` ändert das); **Üben** geht
+alle Karten eines Stapels in zufälliger Reihenfolge durch, ohne den Plan zu ändern. Im
+Lernfenster:
+
+| Taste | Aktion |
+|---|---|
+| Leertaste, Enter, Klick | Antwort zeigen (Multiple Choice: Auswahl prüfen) |
+| 1–9 | Multiple Choice: Antwort auswählen |
+| 1 – 4 | Nochmal, Schwer, Gut, Leicht (Leertaste: Gut) |
+| F11 | Vollbild |
+| Esc | Beenden |
+
+Jeder Knopf zeigt, wann die Karte wiederkommt. *Nochmal* wiederholt die Karte in derselben
+Runde. Falsch beantwortete Karten lassen sich am Ende noch einmal üben. *Hauptmenü →
+Lernübersicht* zeigt die Stapel aller geöffneten Lernkarten-Dokumente zusammen.
+
+Der **Fortschritt** wird im Datenordner von QuickNotes gespeichert, nicht im Dokument –
+verschlüsselt, solange das App-Passwort an ist, und in Sicherungen enthalten. Eine Karte behält
+ihren Fortschritt, wenn ihre Frage leicht geändert wird. Die Statistik zählt Antworten,
+richtige Antworten, die Lernzeit und die Tage in Folge.
+
+**Aussehen:** `theme:` im Front Matter wählt `light`, `dark`, `sepia`, `night` oder `contrast`
+(Standard: wie QuickNotes). `accent:`, `background:` und `color:` setzen Farben (`#rrggbb`);
+schwer lesbare Textfarben werden automatisch angepasst.
 
 ## Kanban-Boards {#kanban}
 
@@ -586,7 +660,7 @@ zu Code erweitert. Abkürzung tippen und **Tab** (oder Strg+E) drücken:
 - Das Erweitern mit Tab lässt sich unter *Einstellungen → Allgemein* abschalten; Strg+E
   funktioniert immer. In anderen Sprachen (Notizen, Markdown, Code, …) ist Emmet nicht aktiv.
 
-### MongoDB-Abfragen und JSON5
+### MongoDB-Abfragen und JSON5 {#mongodb}
 
 Notizen mit MongoDB-Shell-Code (`db.orders.aggregate([...])`) oder JSON5 (Schlüssel ohne
 Anführungszeichen, einfache Anführungszeichen, Kommentare, Komma am Ende) werden automatisch
