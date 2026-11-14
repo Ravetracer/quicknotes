@@ -78,6 +78,9 @@ after a restart.
 - **Tab passwords**: single notes encrypted with their own password, open/closed lock on the tab
 - Backup of all notes into a single file and restore (add to or replace the current tabs), optionally
   encrypted with a password (Argon2id + XChaCha20-Poly1305)
+- **GitHub sync**: notes, folders and trash kept in a GitHub repository, end-to-end encrypted with a
+  sync password (also in public repositories); sign-in with a device code or a personal access
+  token, both-sides changes kept as conflict copies
 - Editor font selectable in the preferences (e.g. fonts with ligatures like Fira Code); ligatures can be switched off
 
 ## Keyboard shortcuts
@@ -211,8 +214,17 @@ Tabs of files that don't exist on this computer are skipped.
 ├── notes/<id>.txt    # note contents and unsaved changes of opened files
 ├── language-specs/   # bundled syntax definitions (PlantUML)
 ├── icons/            # bundled application icon (for the window/About dialog)
-└── backups/          # automatic backups taken before "Restore → Replace"
+├── backups/          # automatic backups taken before "Restore → Replace"
+└── github-sync.json  # what was synced last time (encrypted with the app password)
 ```
+
+## GitHub sync
+
+*Preferences → Sync* keeps the notes library in a GitHub repository (folder `quicknotes/`):
+`vault.json` holds a random key wrapped with the sync password (Argon2id), `index.enc` the
+folders and the notes' metadata, `notes/<id>.enc` each note – all sealed with
+XChaCha20-Poly1305. Every sync is one commit via the Git data API; changes are merged three-way
+against the last synced state. The GitHub token and the key are kept in the Secret Service.
 
 ## Notes on X11 drag and drop
 

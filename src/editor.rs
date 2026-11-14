@@ -675,6 +675,15 @@ impl EditorTab {
         }
     }
 
+    /// Removes the tab password without asking (the note came without one
+    /// from a sync).
+    pub fn drop_lock(&self) {
+        if self.tab_lock.borrow_mut().take().is_some() {
+            self.frame.set_visible_child_name("editor");
+            self.lock_changed();
+        }
+    }
+
     /// The content as stored for a protected tab.
     pub fn sealed_content(&self) -> Option<Vec<u8>> {
         let lock = self.tab_lock.borrow();

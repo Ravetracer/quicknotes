@@ -57,6 +57,13 @@ pub struct Settings {
     /// The notes sidebar (folders) is shown.
     pub notes_sidebar: bool,
     pub notes_sidebar_width: i32,
+    /// GitHub sync: signed-in account (login); empty when signed out. The
+    /// token is in the keyring.
+    pub github_account: String,
+    /// GitHub sync: repository (`owner/name`); empty when none is set up.
+    pub github_repo: String,
+    /// GitHub sync: sync at start and when closing.
+    pub github_sync: bool,
 }
 
 impl Default for Settings {
@@ -82,6 +89,9 @@ impl Default for Settings {
             features: Default::default(),
             notes_sidebar: true,
             notes_sidebar_width: 240,
+            github_account: String::new(),
+            github_repo: String::new(),
+            github_sync: false,
         }
     }
 }

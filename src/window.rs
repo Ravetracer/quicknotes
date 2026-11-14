@@ -12,7 +12,7 @@ use crate::presenter::{self, Presentation};
 use crate::prefs::{self, MAX_FONT, MIN_FONT};
 use crate::tab_list::TabList;
 use crate::themes::{self, Theme};
-use crate::{checklist, crypto, format, format_bar, html, kanban, langs, md_format, slides, stats, table, APP_ID};
+use crate::{checklist, crypto, format, format_bar, github, html, kanban, langs, md_format, slides, stats, table, APP_ID};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use sourceview5::prelude::*;
@@ -20,7 +20,10 @@ use webkit6::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use base64::Engine;
 use std::rc::{Rc, Weak};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use zeroize::Zeroizing;
 
@@ -148,6 +151,13 @@ pub struct Window {
     /// Sealed contents of password-protected tabs that are not open (closed
     /// tabs for *Reopen*, tabs of a backup being restored).
     sealed_tabs: RefCell<HashMap<String, Vec<u8>>>,
+    /// GitHub sync: a run is going on; the window closes after syncing;
+    /// cancels a pending sign-in.
+    sync_busy: Cell<bool>,
+    sync_closing: Cell<bool>,
+    sync_cancel: RefCell<Option<Arc<AtomicBool>>>,
+    /// Notes deleted elsewhere whose tab closes without keeping them.
+    sync_discard: RefCell<HashSet<String>>,
 }
 
 thread_local! {
@@ -191,6 +201,7 @@ fn open_main(app: &adw::Application, session: Session, files: Vec<PathBuf>) {
         w.open_path(path);
     }
     w.win.present();
+    w.github_startup();
 }
 
 /// The unlock window shown instead of the notes while the app password is on.
@@ -597,6 +608,10 @@ impl Window {
             vault: RefCell::new(None),
             locking: Cell::new(false),
             sealed_tabs: RefCell::new(HashMap::new()),
+            sync_busy: Cell::new(false),
+            sync_closing: Cell::new(false),
+            sync_cancel: RefCell::new(None),
+            sync_discard: RefCell::new(HashSet::new()),
         });
 
         *menu_target.borrow_mut() = Some(this.weak());
@@ -682,6 +697,7 @@ impl Window {
                 w.new_presentation();
             }
         });
+        self.action("github-sync", &[], |w| w.github_sync_now());
         self.action("new-kanban", &["<Control><Shift>k"], |w| {
             if features::on(Feature::Kanban) {
                 w.new_kanban();
@@ -1135,6 +1151,10 @@ impl Window {
             if let Some(this) = weak.upgrade() {
                 if !this.locking.get() {
                     this.persist_all();
+                    if this.github_ready() && !this.sync_closing.replace(true) {
+                        this.close_with_sync();
+                        return glib::Propagation::Stop;
+                    }
                 }
             }
             WINDOW.with(|w| w.borrow_mut().take());
@@ -2051,8 +2071,611 @@ impl Window {
         *self.presentation.borrow_mut() = Some(presentation);
     }
 
+    // ===== GitHub sync ======================================================
+
+    /// A repository is set up for syncing (and the features it needs are on).
+    fn github_connected(&self) -> bool {
+        let s = self.settings.borrow();
+        features::on(Feature::Sync) && features::on(Feature::Folders) && !s.github_account.is_empty() && !s.github_repo.is_empty()
+    }
+
+    /// Automatic sync (start, close) is on.
+    fn github_ready(&self) -> bool {
+        self.github_connected() && self.settings.borrow().github_sync
+    }
+
+    /// An open note as it is synced; `None` for files and tabs that are
+    /// still loading or unlocked (their content is in flux).
+    fn sync_note(&self, t: &EditorTab) -> Option<github::Note> {
+        if t.path.borrow().is_some() || t.loading.get() {
+            return None;
+        }
+        let (lock, content, label) = match t.lock_state() {
+            LockState::Unlocked => return None,
+            LockState::Locked => {
+                (t.lock(), b64().encode(t.sealed_content()?), t.custom_title.borrow().clone())
+            }
+            LockState::Open => (None, t.text(), Some(t.title())),
+        };
+        let meta = github::Meta {
+            title: t.custom_title.borrow().clone(),
+            language: t.language_id(),
+            language_locked: t.language_locked.get(),
+            folder: self.tab_folders.borrow().get(&t.id).cloned(),
+            trashed: false,
+        };
+        Some(github::Note { id: t.id.clone(), meta, label, lock, content })
+    }
+
+    /// All notes (open or in the library) and the ones to leave alone.
+    fn sync_notes(&self, state: &github::State) -> (Vec<github::Note>, HashSet<String>) {
+        let mut notes = Vec::new();
+        let mut skip = HashSet::new();
+        for t in self.text_tabs() {
+            if t.path.borrow().is_some() {
+                continue;
+            }
+            // A fresh empty note is not worth sending (it disappears when closed).
+            let fresh = t.lock().is_none() && t.is_empty() && t.custom_title.borrow().is_none();
+            match self.sync_note(&t) {
+                Some(n) if !(fresh && !state.notes.contains_key(&n.id)) => notes.push(n),
+                _ => {
+                    skip.insert(t.id.clone());
+                }
+            }
+        }
+        for m in self.library.borrow().iter().filter(|m| m.path.is_none() && m.kind == TabKind::Text) {
+            let content = match m.lock {
+                Some(_) => store::read_locked(&m.id).map(|sealed| b64().encode(sealed)),
+                None => store::read_note(&m.id),
+            };
+            let Some(content) = content else {
+                skip.insert(m.id.clone());
+                continue;
+            };
+            let meta = github::Meta {
+                title: m.title.clone(),
+                language: m.language.clone(),
+                language_locked: m.language_locked,
+                folder: m.folder.clone(),
+                trashed: m.trashed,
+            };
+            notes.push(github::Note { id: m.id.clone(), meta, label: m.label.clone(), lock: m.lock.clone(), content });
+        }
+        (notes, skip)
+    }
+
+    /// Fetches and sends changes after the start, once all tabs are loaded.
+    fn github_startup(self: &Rc<Self>) {
+        if !self.github_ready() {
+            return;
+        }
+        let weak = self.weak();
+        let tries = Cell::new(0);
+        glib::timeout_add_local(Duration::from_millis(300), move || {
+            let Some(this) = weak.upgrade() else { return glib::ControlFlow::Break };
+            tries.set(tries.get() + 1);
+            if this.text_tabs().iter().any(|t| t.loading.get()) && tries.get() < 60 {
+                return glib::ControlFlow::Continue;
+            }
+            this.github_sync(|this, summary| {
+                if let Some(s) = summary.filter(|s| !s.is_empty()) {
+                    this.toast(&s);
+                }
+            });
+            glib::ControlFlow::Break
+        });
+    }
+
+    /// *Sync with GitHub* from the menu or the preferences.
+    fn github_sync_now(self: &Rc<Self>) {
+        if !features::on(Feature::Sync) {
+            return;
+        }
+        if !features::on(Feature::Folders) {
+            self.toast(t!("GitHub sync needs the note folders – switch them on in the preferences (Features)"));
+            return;
+        }
+        if !self.github_connected() {
+            self.toast(t!("Set up GitHub sync in the preferences (Sync)"));
+            return;
+        }
+        self.github_sync(|this, summary| match summary {
+            Some(s) if !s.is_empty() => this.toast(&s),
+            Some(_) => this.toast(t!("Synced with GitHub – everything is up to date")),
+            None => {}
+        });
+    }
+
+    /// Runs a sync in a worker thread; `done` gets a summary of what changed
+    /// (empty: nothing), or `None` when it failed (an error was shown).
+    fn github_sync(self: &Rc<Self>, done: impl FnOnce(&Rc<Self>, Option<String>) + 'static) {
+        if self.sync_busy.get() {
+            // Wait for the running sync (e.g. the one at start when closing early).
+            let weak = self.weak();
+            glib::timeout_add_local_once(Duration::from_millis(250), move || {
+                if let Some(this) = weak.upgrade() {
+                    this.github_sync(done);
+                }
+            });
+            return;
+        }
+        self.sync_busy.set(true);
+        self.persist();
+        let state = github::load_state();
+        let (notes, skip) = self.sync_notes(&state);
+        let snapshot: HashMap<String, String> = notes.iter().map(|n| (n.id.clone(), n.hash())).collect();
+        let job = github::Job {
+            repo: self.settings.borrow().github_repo.clone(),
+            notes,
+            skip,
+            folders: self.folders.borrow().iter().map(github::SyncFolder::from).collect(),
+            state,
+            stamp: glib::DateTime::now_local()
+                .and_then(|d| d.format("%Y-%m-%d %H:%M"))
+                .map(|s| s.to_string())
+                .unwrap_or_default(),
+        };
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let result = gio::spawn_blocking(move || github::sync(job)).await;
+            this.sync_busy.set(false);
+            let summary = match result {
+                Ok(Ok(outcome)) => Some(this.github_apply(outcome, &snapshot)),
+                Ok(Err(github::Error::Auth(e))) => {
+                    eprintln!("quicknotes: GitHub: {e}");
+                    this.toast(t!("GitHub: please sign in again in the preferences (Sync)"));
+                    None
+                }
+                Ok(Err(e)) => {
+                    this.toast(&t!("GitHub sync failed: {}", e));
+                    None
+                }
+                Err(_) => None,
+            };
+            done(&this, summary);
+        });
+    }
+
+    /// The open text tab of a note.
+    fn text_tab(&self, id: &str) -> Option<Rc<EditorTab>> {
+        match self.tabs.borrow().get(id).map(|e| e.tab.clone()) {
+            Some(Tab::Text(t)) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// Applies what a sync brought; a summary of it for a toast.
+    fn github_apply(self: &Rc<Self>, mut outcome: github::Outcome, snapshot: &HashMap<String, String>) -> String {
+        // Tabs edited while the sync ran keep the edit.
+        let edited = |t: &EditorTab| self.sync_note(t).map(|n| n.hash()).as_ref() != snapshot.get(&t.id);
+        {
+            let mut folders = self.folders.borrow_mut();
+            let collapsed: HashSet<String> = folders.iter().filter(|f| f.collapsed).map(|f| f.id.clone()).collect();
+            *folders = outcome
+                .folders
+                .iter()
+                .map(|f| Folder { id: f.id.clone(), name: f.name.clone(), parent: f.parent.clone(), collapsed: collapsed.contains(&f.id) })
+                .collect();
+        }
+        let (mut received, mut deleted, mut conflicts) = (0, 0, outcome.conflicts);
+        for change in std::mem::take(&mut outcome.changes) {
+            match change {
+                github::Change::Put { id, meta, label, lock, content } => {
+                    received += 1;
+                    if let Some(t) = self.text_tab(&id) {
+                        if content.is_some() && edited(&t) {
+                            // The repository's version goes next to it (and
+                            // is sent with the next sync).
+                            let title = Some(format!("{} ({})", meta.title.clone().or(label.clone()).unwrap_or_else(|| t.title()), t!("GitHub version")));
+                            let meta = github::Meta { title, ..meta };
+                            self.add_synced_note(store::new_id(), meta, label, lock, content);
+                            conflicts += 1;
+                        } else {
+                            self.apply_to_tab(&t, meta, lock, content);
+                        }
+                        continue;
+                    }
+                    let known = self.library.borrow().iter().any(|m| m.id == id);
+                    if known {
+                        self.apply_to_library(&id, meta, label, lock, content);
+                    } else if content.is_some() {
+                        self.add_synced_note(id, meta, label, lock, content);
+                    }
+                }
+                github::Change::Delete { id } => {
+                    let page = self.tabs.borrow().get(&id).map(|e| e.page.clone());
+                    match (page, self.text_tab(&id)) {
+                        (Some(_), Some(t)) if edited(&t) => {
+                            // Kept; sent again as a new note next time.
+                            outcome.state.notes.remove(&id);
+                            continue;
+                        }
+                        (Some(page), _) => {
+                            self.sync_discard.borrow_mut().insert(id.clone());
+                            self.view.close_page(&page);
+                        }
+                        (None, _) => {
+                            self.library.borrow_mut().retain(|m| m.id != id);
+                            store::delete_note(&id);
+                        }
+                    }
+                    self.closed.borrow_mut().retain(|(m, _)| m.id != id);
+                    deleted += 1;
+                }
+            }
+        }
+        github::save_state(&outcome.state);
+        self.refresh_tree();
+        self.persist_all();
+        self.sync_ui();
+        let mut parts = Vec::new();
+        if received > 0 {
+            parts.push(t!("{} received", received));
+        }
+        if outcome.sent > 0 {
+            parts.push(t!("{} sent", outcome.sent));
+        }
+        if deleted > 0 {
+            parts.push(t!("{} deleted elsewhere", deleted));
+        }
+        if conflicts > 0 {
+            parts.push(t!("{} conflicts kept as copies", conflicts));
+        }
+        if parts.is_empty() {
+            String::new()
+        } else {
+            format!("GitHub: {}", parts.join(", "))
+        }
+    }
+
+    /// A synced change to an open note.
+    fn apply_to_tab(self: &Rc<Self>, t: &Rc<EditorTab>, meta: github::Meta, lock: Option<crypto::Lock>, content: Option<String>) {
+        *t.custom_title.borrow_mut() = meta.title.clone();
+        t.language_locked.set(meta.language_locked);
+        if t.language_id() != meta.language {
+            t.set_language_id(meta.language.as_deref());
+        }
+        match &meta.folder {
+            Some(f) => {
+                self.tab_folders.borrow_mut().insert(t.id.clone(), f.clone());
+            }
+            None => {
+                self.tab_folders.borrow_mut().remove(&t.id);
+            }
+        }
+        if let Some(content) = content {
+            match lock {
+                Some(lock) => {
+                    if let Ok(sealed) = b64().decode(content.as_bytes()) {
+                        t.set_locked(lock, sealed);
+                        self.update_lock_icon(t);
+                    }
+                }
+                None => {
+                    t.drop_lock();
+                    let (mut start, mut end) = t.buffer.bounds();
+                    t.buffer.begin_user_action();
+                    t.buffer.delete(&mut start, &mut end);
+                    t.buffer.insert(&mut start, &content);
+                    t.buffer.end_user_action();
+                }
+            }
+        }
+        self.mark_dirty(&t.id);
+        self.refresh_title(&t.id);
+        if meta.trashed {
+            self.trash_note(&t.id);
+        }
+    }
+
+    /// A synced change to a note of the library (not open).
+    fn apply_to_library(&self, id: &str, meta: github::Meta, label: Option<String>, lock: Option<crypto::Lock>, content: Option<String>) {
+        if let Some(content) = &content {
+            Self::store_synced(id, lock.is_some(), content);
+        }
+        if let Some(m) = self.library.borrow_mut().iter_mut().find(|m| m.id == id) {
+            m.title = meta.title;
+            m.language = meta.language;
+            m.language_locked = meta.language_locked;
+            m.folder = meta.folder;
+            m.trashed = meta.trashed;
+            if content.is_some() {
+                m.lock = lock;
+                m.label = label;
+            }
+        }
+    }
+
+    /// Stores a received note's content.
+    fn store_synced(id: &str, locked: bool, content: &str) {
+        let result = if locked {
+            match b64().decode(content.as_bytes()) {
+                Ok(sealed) => store::write_locked(id, &sealed),
+                Err(e) => Err(std::io::Error::other(e)),
+            }
+        } else {
+            store::write_note(id, content)
+        };
+        if let Err(e) = result {
+            eprintln!("quicknotes: cannot store synced note {id}: {e}");
+        }
+    }
+
+    /// A note that came from the repository: into the library.
+    fn add_synced_note(&self, id: String, meta: github::Meta, label: Option<String>, lock: Option<crypto::Lock>, content: Option<String>) {
+        let Some(content) = content else { return };
+        Self::store_synced(&id, lock.is_some(), &content);
+        let label = label.or_else(|| lock.is_some().then(|| t!("Protected note").to_owned()));
+        self.library.borrow_mut().push(TabMeta {
+            id,
+            kind: TabKind::Text,
+            title: meta.title,
+            language: meta.language,
+            language_locked: meta.language_locked,
+            wrap: true,
+            lock,
+            folder: meta.folder,
+            trashed: meta.trashed,
+            label,
+            ..Default::default()
+        });
+    }
+
+    /// Sends the notes to GitHub before the window closes.
+    fn close_with_sync(self: &Rc<Self>) {
+        let dialog = adw::AlertDialog::new(
+            Some(t!("Syncing with GitHub…")),
+            Some(t!("Your notes are sent to GitHub. The window closes afterwards.")),
+        );
+        let spinner = gtk::Spinner::builder().spinning(true).width_request(32).height_request(32).build();
+        dialog.set_extra_child(Some(&spinner));
+        dialog.add_responses(&[("skip", t!("Close Without Syncing"))]);
+        dialog.set_close_response("skip");
+        let weak = self.weak();
+        dialog.connect_response(None, move |_, _| {
+            if let Some(this) = weak.upgrade() {
+                this.win.close();
+            }
+        });
+        dialog.present(Some(&self.win));
+        let finished = Rc::new(Cell::new(false));
+        let finish = {
+            let dialog = dialog.clone();
+            move |this: &Rc<Self>| {
+                if !finished.replace(true) {
+                    dialog.force_close();
+                    this.win.close();
+                }
+            }
+        };
+        let on_timeout = finish.clone();
+        let weak = self.weak();
+        glib::timeout_add_local_once(Duration::from_secs(60), move || {
+            if let Some(this) = weak.upgrade() {
+                on_timeout(&this);
+            }
+        });
+        self.github_sync(move |this, _| finish(this));
+    }
+
+    /// Signs in (device code or token) and stores the token.
+    fn github_sign_in(self: &Rc<Self>, use_token: bool, done: Box<dyn Fn(Result<String, String>)>) {
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let token = if use_token { this.ask_token().await } else { this.device_sign_in().await };
+            let token = match token {
+                Ok(t) => t,
+                Err(e) => {
+                    done(Err(e));
+                    return;
+                }
+            };
+            let check = token.clone();
+            match gio::spawn_blocking(move || github::user(&check)).await {
+                Ok(Ok(login)) => {
+                    if let Err(e) = github::secret::store(github::secret::TOKEN, &token) {
+                        done(Err(t!("Cannot store the token in the keyring: {}", e)));
+                        return;
+                    }
+                    this.settings.borrow_mut().github_account = login.clone();
+                    this.persist_all();
+                    this.sync_ui();
+                    done(Ok(login));
+                }
+                Ok(Err(e)) => done(Err(e.to_string())),
+                Err(_) => done(Err(t!("Sign-in failed").into())),
+            }
+        });
+    }
+
+    /// Asks for a personal access token.
+    async fn ask_token(&self) -> Result<Zeroizing<String>, String> {
+        let dialog = adw::AlertDialog::new(
+            Some(t!("Personal Access Token")),
+            Some(t!("Create a fine-grained token for your notes repository with the permission “Contents: Read and write” and paste it here. It is kept in the keyring.")),
+        );
+        let fields = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        let entry = gtk::PasswordEntry::builder()
+            .show_peek_icon(true)
+            .placeholder_text(t!("Token"))
+            .activates_default(true)
+            .build();
+        fields.append(&entry);
+        fields.append(&gtk::LinkButton::with_label(github::TOKEN_PAGE, t!("Create a token on GitHub")));
+        dialog.set_extra_child(Some(&fields));
+        dialog.add_responses(&[("cancel", t!("_Cancel")), ("ok", t!("_Sign In"))]);
+        dialog.set_response_appearance("ok", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("ok"));
+        dialog.set_close_response("cancel");
+        dialog.set_response_enabled("ok", false);
+        let d = dialog.clone();
+        entry.connect_changed(move |e| d.set_response_enabled("ok", !e.text().trim().is_empty()));
+        dialog.set_focus(Some(&entry));
+        let response = dialog.choose_future(&self.win).await;
+        let token = Zeroizing::new(entry.text().trim().to_owned());
+        entry.set_text("");
+        if response == "ok" {
+            Ok(token)
+        } else {
+            Err(t!("Sign-in cancelled").into())
+        }
+    }
+
+    /// The device flow: shows the code, waits until it was entered on github.com.
+    async fn device_sign_in(&self) -> Result<Zeroizing<String>, String> {
+        let code = match gio::spawn_blocking(github::device_start).await {
+            Ok(Ok(c)) => c,
+            Ok(Err(e)) => return Err(e.to_string()),
+            Err(_) => return Err(t!("Sign-in failed").into()),
+        };
+        let dialog = adw::AlertDialog::new(
+            Some(t!("Sign In to GitHub")),
+            Some(t!("Enter this code on GitHub to give QuickNotes access to your repositories. The dialog closes by itself afterwards.")),
+        );
+        let fields = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        let label = gtk::Label::builder().label(&code.user_code).selectable(true).build();
+        label.add_css_class("title-1");
+        fields.append(&label);
+        let open = gtk::Button::builder().label(t!("Copy Code and Open GitHub")).halign(gtk::Align::Center).build();
+        open.add_css_class("suggested-action");
+        open.add_css_class("pill");
+        let (user_code, uri, win) = (code.user_code.clone(), code.verification_uri.clone(), self.win.clone());
+        open.connect_clicked(move |_| {
+            win.clipboard().set_text(&user_code);
+            gtk::UriLauncher::new(&uri).launch(Some(&win), None::<&gio::Cancellable>, |_| {});
+        });
+        fields.append(&open);
+        fields.append(&gtk::Spinner::builder().spinning(true).build());
+        dialog.set_extra_child(Some(&fields));
+        dialog.add_responses(&[("cancel", t!("_Cancel"))]);
+        dialog.set_close_response("cancel");
+        let cancel = Arc::new(AtomicBool::new(false));
+        if let Some(old) = self.sync_cancel.replace(Some(cancel.clone())) {
+            old.store(true, Ordering::Relaxed);
+        }
+        let c = cancel.clone();
+        dialog.connect_response(None, move |_, _| c.store(true, Ordering::Relaxed));
+        dialog.present(Some(&self.win));
+        let result = gio::spawn_blocking(move || github::device_finish(&code, cancel)).await;
+        dialog.force_close();
+        match result {
+            Ok(Ok(token)) => Ok(Zeroizing::new(token)),
+            Ok(Err(github::Error::Cancelled)) => Err(t!("Sign-in cancelled").into()),
+            Ok(Err(e)) => Err(e.to_string()),
+            Err(_) => Err(t!("Sign-in failed").into()),
+        }
+    }
+
+    /// Signs out: forgets token, repository, key and sync state.
+    fn github_sign_out(self: &Rc<Self>) {
+        self.github_disconnect();
+        github::secret::clear(github::secret::TOKEN);
+        self.settings.borrow_mut().github_account.clear();
+        self.persist_all();
+    }
+
+    /// Sets up a repository: checks it, asks for the sync password (a new
+    /// one for a repository without QuickNotes data), keeps the key.
+    fn github_connect(self: &Rc<Self>, input: String, done: Box<dyn Fn(Result<String, String>)>) {
+        let Some(repo) = github::parse_repo(&input) else {
+            done(Err(t!("Enter the repository as owner/name").into()));
+            return;
+        };
+        let Some(token) = github::secret::load(github::secret::TOKEN) else {
+            done(Err(t!("Sign in first").into()));
+            return;
+        };
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let (t, r) = (token.clone(), repo.clone());
+            let info = match gio::spawn_blocking(move || github::inspect(&t, &r)).await {
+                Ok(Ok(info)) => info,
+                Ok(Err(e)) => return done(Err(e.to_string())),
+                Err(_) => return done(Err(t!("Sign-in failed").into())),
+            };
+            let key = match info.vault.clone() {
+                Some(lock) => {
+                    let body = t!("Enter the sync password of {} – the one chosen when it was first used with QuickNotes.", info.repo);
+                    match this.verify_password(lock, t!("Sync Password"), &body, t!("_Connect")).await {
+                        Some(key) => key,
+                        None => return done(Err(t!("Cancelled").into())),
+                    }
+                }
+                None => {
+                    let body = if info.private {
+                        t!("Choose a sync password for {}. Your notes are encrypted with it before they are sent; other computers need it once to connect. A forgotten password cannot be recovered.", info.repo)
+                    } else {
+                        t!("{} is a public repository. Your notes are encrypted with the sync password before they are sent, but anyone can see how many there are and when they change. Choose a strong password – a forgotten one cannot be recovered.", info.repo)
+                    };
+                    let answer = this
+                        .ask_password(PasswordPrompt {
+                            heading: t!("Choose a Sync Password"),
+                            body: &body,
+                            confirm: true,
+                            ok: t!("_Set Up"),
+                            skip: None,
+                            error: None,
+                        })
+                        .await;
+                    let PasswordAnswer::Password(password) = answer else {
+                        return done(Err(t!("Cancelled").into()));
+                    };
+                    let Ok((lock, key)) =
+                        gio::spawn_blocking(move || crypto::Lock::create(&password, crypto::Kdf::new())).await
+                    else {
+                        return done(Err(t!("Cancelled").into()));
+                    };
+                    let (t, r) = (token.clone(), info.repo.clone());
+                    match gio::spawn_blocking(move || github::create_vault(&t, &r, &lock)).await {
+                        Ok(Ok(())) => key,
+                        Ok(Err(e)) => return done(Err(e.to_string())),
+                        Err(_) => return done(Err(t!("Sign-in failed").into())),
+                    }
+                }
+            };
+            if let Err(e) = github::secret::store(&github::secret::key_name(&info.repo), &key.export()) {
+                return done(Err(t!("Cannot store the key in the keyring: {}", e)));
+            }
+            {
+                let mut s = this.settings.borrow_mut();
+                s.github_repo = info.repo.clone();
+                s.github_sync = true;
+            }
+            this.persist_all();
+            done(Ok(if info.private {
+                t!("{} (private repository)", info.repo)
+            } else {
+                t!("{} (public repository, encrypted)", info.repo)
+            }));
+            this.github_sync_now();
+        });
+    }
+
+    /// Stops syncing with the repository (its data stays on GitHub).
+    fn github_disconnect(self: &Rc<Self>) {
+        let repo = std::mem::take(&mut self.settings.borrow_mut().github_repo);
+        if !repo.is_empty() {
+            github::secret::clear(&github::secret::key_name(&repo));
+        }
+        github::clear_state();
+        self.settings.borrow_mut().github_sync = false;
+        self.persist_all();
+    }
+
     /// Removes a tab from bookkeeping and remembers it for t!("Reopen Closed Tab").
     fn forget(self: &Rc<Self>, tab: &Tab) {
+        let id = tab.meta().id;
+        if self.sync_discard.borrow_mut().remove(&id) {
+            // Deleted elsewhere.
+            self.tabs.borrow_mut().remove(&id);
+            self.dirty.borrow_mut().remove(&id);
+            self.tab_folders.borrow_mut().remove(&id);
+            store::delete_note(&id);
+            self.refresh_tree();
+            self.schedule_persist();
+            return;
+        }
         if features::on(Feature::Folders) {
             self.forget_into_library(tab);
             return;
@@ -4926,6 +5549,10 @@ impl TabStyle {
     }
 }
 
+fn b64() -> base64::engine::GeneralPurpose {
+    base64::engine::general_purpose::STANDARD
+}
+
 /// The title of a closed tab of the notes library.
 fn library_title(meta: &TabMeta) -> String {
     meta.label
@@ -4959,6 +5586,27 @@ impl PrefsBridge {
 }
 
 impl prefs::Handler for PrefsBridge {
+    fn github_sign_in(&self, token: bool, done: Box<dyn Fn(Result<String, String>)>) {
+        self.with(|w| w.github_sign_in(token, done));
+    }
+    fn github_sign_out(&self) {
+        self.with(|w| w.github_sign_out());
+    }
+    fn github_connect(&self, repo: String, done: Box<dyn Fn(Result<String, String>)>) {
+        self.with(|w| w.github_connect(repo, done));
+    }
+    fn github_disconnect(&self) {
+        self.with(|w| w.github_disconnect());
+    }
+    fn set_github_sync(&self, on: bool) {
+        self.with(|w| {
+            w.settings.borrow_mut().github_sync = on;
+            w.persist_all();
+        });
+    }
+    fn github_sync_now(&self) {
+        self.with(|w| w.github_sync_now());
+    }
     fn set_theme(&self, id: &str) {
         self.with(|w| w.set_theme(id));
     }
@@ -5177,6 +5825,9 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
         file.push((t!("Reload from Disk"), "win.reload"));
     }
     menu.append_section(None, &menu_section(&file));
+    if context.features.sync {
+        menu.append_section(None, &menu_section(&[(t!("Sync with GitHub"), "win.github-sync")]));
+    }
     if let Some(state) = context.lock.filter(|s| *s != LockState::Locked) {
         menu.append_section(None, &lock_items(false, Some(state)));
     }

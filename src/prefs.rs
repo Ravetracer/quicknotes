@@ -30,6 +30,16 @@ pub trait Handler {
     /// Sets, changes or removes the app password; `done` gets whether it is on afterwards.
     fn app_password(&self, action: PasswordAction, done: Box<dyn Fn(bool)>);
     fn lock_app(&self);
+    /// Signs in to GitHub (device code in the browser, or a pasted token
+    /// when `token`); `done` gets the account or an error.
+    fn github_sign_in(&self, token: bool, done: Box<dyn Fn(Result<String, String>)>);
+    fn github_sign_out(&self);
+    /// Sets up the repository for syncing (asks for the sync password);
+    /// `done` gets a description of it or an error.
+    fn github_connect(&self, repo: String, done: Box<dyn Fn(Result<String, String>)>);
+    fn github_disconnect(&self);
+    fn set_github_sync(&self, on: bool);
+    fn github_sync_now(&self);
 }
 
 #[derive(Clone, Copy)]
@@ -58,14 +68,18 @@ pub fn show(
     let dialog = adw::PreferencesDialog::new();
     dialog.set_title(t!("Preferences"));
     dialog.set_search_enabled(true);
-    // Room for six page titles; low enough to keep the window visible behind it.
-    dialog.set_content_width(960);
+    // Room for all page titles; low enough to keep the window visible behind it.
+    let sync = crate::features::on(crate::features::Feature::Sync);
+    dialog.set_content_width(if sync { 1080 } else { 960 });
     dialog.set_content_height(620);
     dialog.add(&general_page(parent, settings, &handler));
     dialog.add(&features_page(settings, &handler));
     dialog.add(&themes_page(settings, &handler));
     dialog.add(&tabs_page(settings, colors, &handler));
     dialog.add(&security_page(&dialog, app_password, &handler));
+    if sync {
+        dialog.add(&sync_page(settings, &handler));
+    }
     dialog.add(&import_export_page(&dialog, &handler));
     dialog.present(Some(parent));
 }
@@ -372,6 +386,164 @@ fn security_page(dialog: &adw::PreferencesDialog, on: bool, handler: &Rc<dyn Han
             d.close();
         }
         h.lock_app();
+    });
+    page
+}
+
+fn sync_page(settings: &Settings, handler: &Rc<dyn Handler>) -> adw::PreferencesPage {
+    let page = adw::PreferencesPage::builder()
+        .title(t!("Sync"))
+        .icon_name("emblem-synchronizing-symbolic")
+        .build();
+    let group = adw::PreferencesGroup::builder()
+        .title("GitHub")
+        .description(t!("Notes, folders and the trash are kept in a GitHub repository, encrypted with a sync password – even a public repository shows nothing readable. Changes are fetched when QuickNotes starts and sent when it closes. Files opened from disk are not synced."))
+        .build();
+
+    let account = adw::ActionRow::builder().title(t!("Account")).build();
+    let sign_in = gtk::Button::builder().label(t!("Sign In…")).valign(gtk::Align::Center).build();
+    sign_in.add_css_class("suggested-action");
+    sign_in.set_tooltip_text(Some(t!("Enter a code on github.com")));
+    let token = gtk::Button::builder().label(t!("Use Token…")).valign(gtk::Align::Center).build();
+    token.set_tooltip_text(Some(t!("Sign in with a personal access token")));
+    let sign_out = gtk::Button::builder().label(t!("Sign Out")).valign(gtk::Align::Center).build();
+    for b in [&sign_in, &token, &sign_out] {
+        account.add_suffix(b);
+    }
+    group.add(&account);
+
+    let repo = adw::EntryRow::builder()
+        .title(t!("Repository (owner/name)"))
+        .text(&settings.github_repo)
+        .show_apply_button(true)
+        .build();
+    group.add(&repo);
+    let status = adw::ActionRow::builder().title(t!("Status")).build();
+    let disconnect = gtk::Button::builder().label(t!("Disconnect")).valign(gtk::Align::Center).build();
+    disconnect.set_tooltip_text(Some(t!("Stop syncing with this repository (its data stays on GitHub)")));
+    status.add_suffix(&disconnect);
+    group.add(&status);
+
+    let auto = adw::SwitchRow::builder()
+        .title(t!("Sync Automatically"))
+        .subtitle(t!("Fetch changes at start, send them when closing"))
+        .active(settings.github_sync)
+        .build();
+    let h = handler.clone();
+    auto.connect_active_notify(move |row| h.set_github_sync(row.is_active()));
+    group.add(&auto);
+    let now = button_row(t!("Sync Now"), t!("Fetch and send changes right away"), "emblem-synchronizing-symbolic");
+    let h = handler.clone();
+    now.connect_activated(move |_| h.github_sync_now());
+    group.add(&now);
+    page.add(&group);
+
+    // The shown state; errors keep what was set before.
+    #[derive(Clone, Default)]
+    struct View {
+        account: Option<String>,
+        repo: Option<String>,
+    }
+    let view = Rc::new(std::cell::RefCell::new(View {
+        account: Some(settings.github_account.clone()).filter(|a| !a.is_empty()),
+        repo: Some(settings.github_repo.clone()).filter(|r| !r.is_empty() && !settings.github_account.is_empty()),
+    }));
+    type Show = Rc<dyn Fn(Option<&str>, Option<&str>)>;
+    let show: Show = {
+        let (account, sign_in, token, sign_out, repo, status, disconnect, auto, now, view) = (
+            account.clone(),
+            sign_in.clone(),
+            token.clone(),
+            sign_out.clone(),
+            repo.clone(),
+            status.clone(),
+            disconnect.clone(),
+            auto.clone(),
+            now.clone(),
+            view.clone(),
+        );
+        // Errors of the account (first) or the repository (second).
+        Rc::new(move |account_error: Option<&str>, repo_error: Option<&str>| {
+            let v = view.borrow().clone();
+            let signed_in = v.account.is_some();
+            let subtitle = match (&v.account, account_error) {
+                (_, Some(e)) => format!("⚠ {}", glib::markup_escape_text(e)),
+                (Some(a), None) => glib::markup_escape_text(&t!("Signed in as {}", a)).to_string(),
+                (None, None) => t!("Not signed in").to_owned(),
+            };
+            account.set_subtitle(&subtitle);
+            sign_in.set_visible(!crate::github::CLIENT_ID.is_empty());
+            sign_in.set_label(if signed_in { t!("Sign In Again…") } else { t!("Sign In…") });
+            sign_in.set_sensitive(true);
+            token.set_sensitive(true);
+            sign_out.set_visible(signed_in);
+            repo.set_sensitive(signed_in);
+            let subtitle = match (&v.repo, repo_error) {
+                (_, Some(e)) => format!("⚠ {}", glib::markup_escape_text(e)),
+                (Some(r), None) => glib::markup_escape_text(r).to_string(),
+                (None, None) if signed_in => t!("Enter a repository and press Enter").to_owned(),
+                (None, None) => t!("Sign in first").to_owned(),
+            };
+            status.set_subtitle(&subtitle);
+            disconnect.set_visible(v.repo.is_some());
+            auto.set_sensitive(v.repo.is_some());
+            now.set_sensitive(v.repo.is_some());
+        })
+    };
+    show(None, None);
+
+    for (button, use_token) in [(&sign_in, false), (&token, true)] {
+        let (h, show, view) = (handler.clone(), show.clone(), view.clone());
+        let (sign_in, token) = (sign_in.clone(), token.clone());
+        button.connect_clicked(move |_| {
+            sign_in.set_sensitive(false);
+            token.set_sensitive(false);
+            let (show, view) = (show.clone(), view.clone());
+            h.github_sign_in(
+                use_token,
+                Box::new(move |result| match result {
+                    Ok(login) => {
+                        view.borrow_mut().account = Some(login);
+                        show(None, None);
+                    }
+                    Err(e) => show(Some(&e), None),
+                }),
+            );
+        });
+    }
+    let (h, show_c, view_c, auto_c) = (handler.clone(), show.clone(), view.clone(), auto.clone());
+    sign_out.connect_clicked(move |_| {
+        h.github_sign_out();
+        *view_c.borrow_mut() = View::default();
+        auto_c.set_active(false);
+        show_c(None, None);
+    });
+    let (h, show_c, view_c, auto_c) = (handler.clone(), show.clone(), view.clone(), auto.clone());
+    repo.connect_apply(move |row| {
+        row.set_sensitive(false);
+        let (show, view, auto, row) = (show_c.clone(), view_c.clone(), auto_c.clone(), row.clone());
+        h.github_connect(
+            row.text().to_string(),
+            Box::new(move |result| {
+                row.set_sensitive(true);
+                match result {
+                    Ok(description) => {
+                        view.borrow_mut().repo = Some(description);
+                        auto.set_active(true);
+                        show(None, None);
+                    }
+                    Err(e) => show(None, Some(&e)),
+                }
+            }),
+        );
+    });
+    let (h, show_c, view_c, auto_c, repo_c) = (handler.clone(), show.clone(), view.clone(), auto.clone(), repo.clone());
+    disconnect.connect_clicked(move |_| {
+        h.github_disconnect();
+        view_c.borrow_mut().repo = None;
+        repo_c.set_text("");
+        auto_c.set_active(false);
+        show_c(None, None);
     });
     page
 }

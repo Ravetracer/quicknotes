@@ -2,7 +2,7 @@
 
 **Contents:** [Notes & tabs](#notes) · [Folders](#folders) · [Checklists](#checklists) · [Tables](#tables) · [Formatting](#formatting) · [Math & music](#notation) · [Charts](#charts) · [Kanban](#kanban) · [Flash cards](#flashcards) · [Calculations](#calc) · [Templates](#templates) ·
 [Previews & export](#previews) · [Presentations](#slides) · [Developer tools](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
-[Security](#security) · [Backup](#backup) ·
+[Security](#security) · [Backup](#backup) · [GitHub sync](#sync) ·
 [Shortcuts](#shortcuts)
 
 ## Notes & tabs {#notes}
@@ -777,6 +777,39 @@ file. *Restore Backup…* either **adds** the tabs of a backup to the current on
   an encrypted backup asks for its password. The key is derived with Argon2id, the data is
   encrypted and authenticated with XChaCha20-Poly1305 – without the password the backup cannot
   be read, and a forgotten password cannot be recovered.
+
+## GitHub sync {#sync}
+
+Keeps your notes in step on several computers through a GitHub repository –
+*Preferences → Sync*:
+
+1. **Sign in**: *Sign In…* shows a code; *Copy Code and Open GitHub*, paste it on github.com and
+   confirm. Alternatively *Use Token…* with a fine-grained personal access token that has access
+   to the repository and the permission *Contents: Read and write*.
+2. **Repository**: create a repository on GitHub (ideally a private one), enter it as
+   `owner/name` and press Enter. The first time you choose a **sync password**; every further
+   computer asks for it once.
+3. From then on QuickNotes fetches changes when it starts and sends them when it closes
+   (*Sync Automatically*). *Main menu → Sync with GitHub* syncs right away.
+
+- **What is synced**: all notes – open ones and those in the library – with their title, syntax
+  and folder, the folders and the trash. Files opened from disk are not synced.
+  Password-protected notes travel encrypted with their own password; while one is unlocked it
+  waits until it is locked again.
+- **Everything is encrypted** before it leaves the computer, in a private as well as in a
+  public repository: GitHub only sees encrypted files in the folder `quicknotes/` (and how many
+  there are and when they change). The key is random and protected by the sync password
+  (Argon2id, XChaCha20-Poly1305). Key and GitHub token are kept in the keyring (Secret Service),
+  never in the settings.
+- **Conflicts**: when a note was changed on two computers between two syncs, both versions are
+  kept – the other one as a copy with “conflict” and the time in its title. Renaming, moving to
+  another folder and editing the content are merged separately, so they don't conflict.
+- **Deleting** a note for good (from the trash) deletes it on the other computers too, unless it
+  was changed there in the meantime.
+- Every sync is one commit, so the repository's history keeps older (encrypted) versions.
+- *Disconnect* stops syncing with the repository (its data stays on GitHub); *Sign Out* also
+  forgets the token. The sync needs the [note folders](#folders).
+- A forgotten sync password cannot be recovered; the notes on your computers are not affected.
 
 ## Keyboard shortcuts {#shortcuts}
 

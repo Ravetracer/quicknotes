@@ -149,6 +149,17 @@ impl Key {
         String::from_utf8(plain.to_vec()).map(Zeroizing::new).map_err(|_| Error::Format)
     }
 
+    /// The raw key (Base64), for a secret store such as the keyring.
+    pub fn export(&self) -> Zeroizing<String> {
+        Zeroizing::new(b64().encode(self.0.as_ref()))
+    }
+
+    pub fn import(encoded: &str) -> Result<Key, Error> {
+        let bytes = Zeroizing::new(b64().decode(encoded.trim()).map_err(|_| Error::Format)?);
+        let bytes: [u8; 32] = bytes.as_slice().try_into().map_err(|_| Error::Format)?;
+        Ok(Key(Zeroizing::new(bytes)))
+    }
+
     /// This key encrypted with `kek` (Base64), for storing it.
     pub fn wrap(&self, kek: &Key) -> String {
         b64().encode(kek.seal(self.0.as_ref(), b"quicknotes-key"))
@@ -243,6 +254,15 @@ pub mod tests {
         let relocked = Lock::rewrap(&opened, "new password", fast_kdf());
         assert!(relocked.open("correct horse").is_err());
         assert_eq!(relocked.open("new password").unwrap().open(&sealed, b"").unwrap().as_slice(), b"data");
+    }
+
+    #[test]
+    fn keys_export_and_import() {
+        let key = Key::random();
+        let sealed = key.seal(b"x", b"");
+        let back = Key::import(&key.export()).unwrap();
+        assert_eq!(back.open(&sealed, b"").unwrap().as_slice(), b"x");
+        assert_eq!(Key::import("too short").unwrap_err(), Error::Format);
     }
 
     #[test]

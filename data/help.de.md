@@ -2,7 +2,7 @@
 
 **Inhalt:** [Notizen & Tabs](#notes) · [Ordner](#folders) · [Checklisten](#checklists) · [Tabellen](#tables) · [Formatierung](#formatting) · [Formeln & Noten](#notation) · [Diagramme](#charts) · [Kanban](#kanban) · [Lernkarten](#flashcards) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
 [Vorschau & Export](#previews) · [Präsentationen](#slides) · [Entwicklerwerkzeuge](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
-[Sicherheit](#security) · [Sicherung](#backup) ·
+[Sicherheit](#security) · [Sicherung](#backup) · [GitHub-Sync](#sync) ·
 [Tastenkürzel](#shortcuts)
 
 ## Notizen & Tabs {#notes}
@@ -811,6 +811,43 @@ vorher in einer automatischen Sicherung abgelegt).
   Schlüssel wird mit Argon2id abgeleitet, die Daten werden mit XChaCha20-Poly1305 verschlüsselt
   und gegen Veränderung geschützt – ohne Passwort ist die Sicherung nicht lesbar, ein
   vergessenes Passwort lässt sich nicht wiederherstellen.
+
+## GitHub-Sync {#sync}
+
+Hält deine Notizen über ein GitHub-Repository auf mehreren Rechnern gleich –
+*Einstellungen → Sync*:
+
+1. **Anmelden**: *Anmelden …* zeigt einen Code; *Code kopieren und GitHub öffnen*, auf
+   github.com einfügen und bestätigen. Alternativ *Token verwenden …* mit einem
+   Fine-grained-Zugriffstoken, das Zugriff auf das Repository und die Berechtigung
+   *Contents: Read and write* hat.
+2. **Repository**: Lege auf GitHub ein Repository an (am besten ein privates), gib es als
+   `Besitzer/Name` ein und drücke Enter. Beim ersten Mal wählst du ein **Sync-Passwort**; jeder
+   weitere Rechner fragt einmalig danach.
+3. Ab dann holt QuickNotes Änderungen beim Start und sendet sie beim Schließen
+   (*Automatisch abgleichen*). *Hauptmenü → Mit GitHub abgleichen* gleicht sofort ab.
+
+- **Was abgeglichen wird**: alle Notizen – offene und die in der Bibliothek – mit Titel, Syntax
+  und Ordner, die Ordner und der Papierkorb. Von der Festplatte geöffnete Dateien nicht.
+  Passwortgeschützte Notizen reisen mit ihrem eigenen Passwort verschlüsselt; ist eine gerade
+  entsperrt, wartet sie, bis sie wieder gesperrt ist.
+- **Alles wird verschlüsselt**, bevor es den Rechner verlässt – in privaten wie in öffentlichen
+  Repositorys: GitHub sieht nur verschlüsselte Dateien im Ordner `quicknotes/` (und wie viele es
+  sind und wann sie sich ändern). Der Schlüssel ist zufällig und durch das Sync-Passwort
+  geschützt (Argon2id, XChaCha20-Poly1305). Schlüssel und GitHub-Token liegen im Schlüsselbund
+  (Secret Service), nie in den Einstellungen.
+- **Konflikte**: Wurde eine Notiz zwischen zwei Abgleichen auf zwei Rechnern geändert, bleiben
+  beide Fassungen erhalten – die andere als Kopie mit „Konflikt“ und der Uhrzeit im Titel.
+  Umbenennen, in einen anderen Ordner verschieben und den Inhalt bearbeiten werden getrennt
+  zusammengeführt und geraten daher nicht in Konflikt.
+- **Endgültig löschen** (aus dem Papierkorb) löscht eine Notiz auch auf den anderen Rechnern,
+  außer sie wurde dort inzwischen geändert.
+- Jeder Abgleich ist ein Commit; die Historie des Repositorys enthält also ältere
+  (verschlüsselte) Fassungen.
+- *Trennen* beendet den Abgleich mit dem Repository (seine Daten bleiben auf GitHub);
+  *Abmelden* vergisst zusätzlich das Token. Der Sync braucht die [Notizordner](#folders).
+- Ein vergessenes Sync-Passwort lässt sich nicht wiederherstellen; die Notizen auf deinen
+  Rechnern sind davon nicht betroffen.
 
 ## Tastenkürzel {#shortcuts}
 

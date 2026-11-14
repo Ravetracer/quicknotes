@@ -10,7 +10,7 @@
 //! switches existed get all of them on.
 
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU16, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Feature {
@@ -22,6 +22,7 @@ pub enum Feature {
     DevTools,
     Flashcards,
     Folders,
+    Sync,
 }
 
 /// The features with their preference labels and descriptions.
@@ -38,10 +39,11 @@ pub const LIST: &[(Feature, &str, &str)] = &[
     ),
     (Feature::Flashcards, "Flash Cards", "Learning with flash cards and spaced repetition"),
     (Feature::Folders, "Note Folders", "A notes sidebar with folders; closed notes stay in it"),
+    (Feature::Sync, "GitHub Sync", "Encrypted sync of the notes with a GitHub repository"),
 ];
 
 impl Feature {
-    fn bit(self) -> u8 {
+    fn bit(self) -> u16 {
         match self {
             Self::Charts => 1,
             Self::Presentations => 2,
@@ -51,6 +53,7 @@ impl Feature {
             Self::DevTools => 32,
             Self::Flashcards => 64,
             Self::Folders => 128,
+            Self::Sync => 256,
         }
     }
 
@@ -66,6 +69,7 @@ impl Feature {
             Self::DevTools => "devtools",
             Self::Flashcards => "flashcards",
             Self::Folders => "folders",
+            Self::Sync => "sync",
         }
     }
 }
@@ -86,6 +90,8 @@ pub struct Features {
     pub flashcards: bool,
     #[serde(default = "yes")]
     pub folders: bool,
+    #[serde(default = "yes")]
+    pub sync: bool,
 }
 
 fn yes() -> bool {
@@ -95,7 +101,7 @@ fn yes() -> bool {
 impl Features {
     /// All features on (settings from before the switches existed).
     pub fn all() -> Self {
-        Self { charts: true, presentations: true, kanban: true, geocaching: true, plantuml: true, devtools: true, flashcards: true, folders: true }
+        Self { charts: true, presentations: true, kanban: true, geocaching: true, plantuml: true, devtools: true, flashcards: true, folders: true, sync: true }
     }
 
     pub fn get(&self, f: Feature) -> bool {
@@ -108,6 +114,7 @@ impl Features {
             Feature::DevTools => self.devtools,
             Feature::Flashcards => self.flashcards,
             Feature::Folders => self.folders,
+            Feature::Sync => self.sync,
         }
     }
 
@@ -121,14 +128,15 @@ impl Features {
             Feature::DevTools => self.devtools = on,
             Feature::Flashcards => self.flashcards = on,
             Feature::Folders => self.folders = on,
+            Feature::Sync => self.sync = on,
         }
     }
 
-    fn bits(&self) -> u8 {
+    fn bits(&self) -> u16 {
         LIST.iter().filter(|(f, ..)| self.get(*f)).map(|(f, ..)| f.bit()).sum()
     }
 
-    fn from_bits(bits: u8) -> Self {
+    fn from_bits(bits: u16) -> Self {
         let mut out = Self::default();
         for (f, ..) in LIST {
             out.set(*f, bits & f.bit() != 0);
@@ -138,7 +146,7 @@ impl Features {
 }
 
 /// The features in use; all on until the settings are applied (and in tests).
-static CURRENT: AtomicU8 = AtomicU8::new(u8::MAX);
+static CURRENT: AtomicU16 = AtomicU16::new(u16::MAX);
 
 pub fn apply(features: Features) {
     CURRENT.store(features.bits(), Ordering::Relaxed);

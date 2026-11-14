@@ -16,6 +16,7 @@ mod flashcards;
 mod format;
 mod format_bar;
 mod geocaching;
+mod github;
 mod help;
 mod import;
 mod html;
