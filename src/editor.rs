@@ -43,6 +43,8 @@ pub enum PreviewKind {
     Kanban,
     /// Flash cards: the preview shows the decks and the learning progress.
     Flashcards,
+    /// Mind map drawn from the outline.
+    Mindmap,
 }
 
 impl PreviewKind {
@@ -58,6 +60,8 @@ impl PreviewKind {
             Some(kanban::LANGUAGE) if !features::on(Feature::Kanban) => Some(Self::Markdown),
             Some(crate::flashcards::LANGUAGE) if !features::on(Feature::Flashcards) => Some(Self::Markdown),
             Some(crate::flashcards::LANGUAGE) => Some(Self::Flashcards),
+            Some(crate::mindmap::LANGUAGE) if !features::on(Feature::Mindmaps) => Some(Self::Markdown),
+            Some(crate::mindmap::LANGUAGE) => Some(Self::Mindmap),
             Some(slides::LANGUAGE) => Some(Self::Slides),
             Some(kanban::LANGUAGE) => Some(Self::Kanban),
             _ => None,
@@ -81,6 +85,7 @@ impl PreviewKind {
             Self::Html => 400,
             Self::Markdown | Self::Rst | Self::Slides | Self::Flashcards => 250,
             Self::Kanban => 60,
+            Self::Mindmap => 150,
         }
     }
 }
@@ -104,6 +109,8 @@ enum Shell {
     Slides,
     /// The Kanban board.
     Kanban,
+    /// The mind map.
+    Mindmap,
 }
 
 struct Preview {
@@ -764,7 +771,10 @@ impl EditorTab {
     /// Task items are recognised in plain notes, Markdown and presentations.
     pub fn tasks_enabled(&self) -> bool {
         !self.large.get()
-            && matches!(self.language_id().as_deref(), None | Some("markdown") | Some(slides::LANGUAGE) | Some(crate::flashcards::LANGUAGE))
+            && matches!(
+                self.language_id().as_deref(),
+                None | Some("markdown") | Some(slides::LANGUAGE) | Some(crate::flashcards::LANGUAGE) | Some(crate::mindmap::LANGUAGE)
+            )
     }
 
     /// Checked items are shown done (struck through) and counted – not in
@@ -1668,6 +1678,7 @@ impl EditorTab {
     /// Shows the formatting toolbar for Markdown and presentations (not in
     /// distraction-free mode).
     pub fn sync_format_bar(&self) {
+        // Not for mind maps: the toolbar's width would squeeze the map.
         let markdown = matches!(self.preview_kind(), Some(PreviewKind::Markdown | PreviewKind::Slides | PreviewKind::Flashcards));
         self.format_bar.set_visible(markdown && self.shared.format_bar.get() && !self.focus.get());
         format_bar::sync_features(&self.format_bar);
@@ -1814,6 +1825,18 @@ impl EditorTab {
                             t.goto_slide(i);
                         }
                     }
+                    Some("add") => {
+                        let line = msg.get("line").and_then(|v| v.as_u64());
+                        let text = msg.get("text").and_then(|v| v.as_str());
+                        if let (Some(line), Some(text)) = (line, text) {
+                            t.add_mindmap_child(line as usize, text);
+                        }
+                    }
+                    Some("line") => {
+                        if let Some(line) = msg.get("line").and_then(|v| v.as_i64()) {
+                            t.goto_line(line as i32);
+                        }
+                    }
                     Some("kanban") => {
                         if let Some(board) = msg.get("board") {
                             t.apply_board(board.clone());
@@ -1881,7 +1904,12 @@ impl EditorTab {
         match self.preview_kind()? {
             PreviewKind::Markdown => Some(markdown::to_html(&self.text())),
             PreviewKind::Rst => Some(rst::to_html(&self.text(), self.base_dir().as_deref())),
-            PreviewKind::PlantUml | PreviewKind::Html | PreviewKind::Slides | PreviewKind::Kanban | PreviewKind::Flashcards => None,
+            PreviewKind::PlantUml
+            | PreviewKind::Html
+            | PreviewKind::Slides
+            | PreviewKind::Kanban
+            | PreviewKind::Flashcards
+            | PreviewKind::Mindmap => None,
         }
     }
 
@@ -1958,6 +1986,55 @@ impl EditorTab {
         } else {
             *p.pending.borrow_mut() = Some(js);
         }
+    }
+
+    /// The mind map of this tab.
+    pub fn mindmap(&self) -> crate::mindmap::Map {
+        let fallback = self.path.borrow().as_ref().and_then(|p| p.file_name()).map(|n| {
+            n.to_string_lossy().trim_end_matches(".md").trim_end_matches(".mindmap").to_owned()
+        });
+        crate::mindmap::parse(&self.text(), &fallback.unwrap_or_else(|| self.title()))
+    }
+
+    fn render_mindmap(&self) {
+        let js = format!("QM.update({})", serde_json::to_string(&self.mindmap()).unwrap_or_default());
+        let preview = self.preview.borrow();
+        let Some(p) = preview.as_ref() else { return };
+        if p.shell.get() != Shell::Mindmap {
+            let theme = self.shared.theme.get();
+            self.load_page(p, &crate::mindmap::page(theme.dark, &theme.preview_vars()), Shell::Mindmap);
+            *p.pending.borrow_mut() = Some(js);
+        } else if p.loaded.get() {
+            p.webview.evaluate_javascript(&js, None, None, None::<&gio::Cancellable>, |_| {});
+        } else {
+            *p.pending.borrow_mut() = Some(js);
+        }
+    }
+
+    /// Adds a branch below the node on `line` (from the "+" of the preview).
+    fn add_mindmap_child(&self, line: usize, child: &str) {
+        let Some((at, new)) = crate::mindmap::new_child(&self.text(), line, child) else { return };
+        let lines = self.buffer.line_count().max(1) as usize;
+        self.buffer.begin_user_action();
+        if at < lines {
+            if let Some(mut iter) = self.buffer.iter_at_line(at as i32) {
+                self.buffer.insert(&mut iter, &format!("{new}\n"));
+            }
+        } else {
+            let mut end = self.buffer.end_iter();
+            let text = self.text();
+            let sep = if text.is_empty() || text.ends_with('\n') { "" } else { "\n" };
+            self.buffer.insert(&mut end, &format!("{sep}{new}\n"));
+        }
+        self.buffer.end_user_action();
+    }
+
+    /// Puts the cursor at the start of `line` (0-based) and shows it.
+    fn goto_line(&self, line: i32) {
+        let Some(iter) = self.buffer.iter_at_line(line) else { return };
+        self.buffer.place_cursor(&iter);
+        self.view.scroll_to_mark(&self.buffer.get_insert(), 0.1, true, 0.0, 0.3);
+        self.view.grab_focus();
     }
 
     /// Identifies the document for the learning progress: its file, or the
@@ -2108,6 +2185,7 @@ impl EditorTab {
             Some(PreviewKind::Slides) => self.render_slides(),
             Some(PreviewKind::Kanban) => self.render_kanban(),
             Some(PreviewKind::Flashcards) => self.render_flashcards(),
+            Some(PreviewKind::Mindmap) => self.render_mindmap(),
             None => {}
         }
     }

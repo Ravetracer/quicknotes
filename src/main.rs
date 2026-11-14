@@ -33,6 +33,7 @@ mod library;
 mod mongo;
 mod markdown;
 mod md_format;
+mod mindmap;
 mod notation;
 mod notes_tree;
 mod obsidian;

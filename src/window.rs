@@ -868,6 +868,12 @@ impl Window {
         self.action("export-pdf", &["<Control><Shift>p"], |w| w.export(ExportFormat::Pdf));
         self.action("export-image", &[], |w| w.export_image());
         self.action("export-epub", &[], |w| w.export_epub());
+        self.action("export-svg", &[], |w| w.export(ExportFormat::Svg));
+        self.action("new-mindmap", &[], |w| {
+            if features::on(Feature::Mindmaps) {
+                w.new_mindmap();
+            }
+        });
         self.action("preferences", &["<Control>comma"], |w| w.show_preferences());
         self.action("emmet-expand", &["<Control>e"], |w| {
             if let Some(t) = w.current_text() {
@@ -1567,6 +1573,17 @@ impl Window {
         self.sync_ui();
     }
 
+    fn new_mindmap(self: &Rc<Self>) {
+        let t = self.new_note();
+        t.language_locked.set(true);
+        t.set_text_irreversible(&crate::mindmap::template());
+        t.set_language_id(Some(crate::mindmap::LANGUAGE));
+        t.set_preview(true);
+        self.mark_dirty(&t.id);
+        self.refresh_title(&t.id);
+        self.sync_ui();
+    }
+
     fn new_flashcards(self: &Rc<Self>) {
         let t = self.new_note();
         t.language_locked.set(true);
@@ -2015,6 +2032,7 @@ impl Window {
             Some(PreviewKind::Flashcards) => Doc::Flashcards,
             Some(PreviewKind::Slides) => Doc::Slides,
             Some(PreviewKind::Kanban) => Doc::Kanban,
+            Some(PreviewKind::Mindmap) => Doc::Mindmap,
             Some(PreviewKind::Markdown) => Doc::Markdown,
             Some(PreviewKind::Rst | PreviewKind::Html | PreviewKind::PlantUml) => Doc::Preview,
             None if t.is_calc() => Doc::Calc,
@@ -3930,6 +3948,13 @@ impl Window {
     /// Exports the current Markdown/reStructuredText document.
     fn export(self: &Rc<Self>, format: ExportFormat) {
         let Some(t) = self.current_text() else { return };
+        if t.preview_kind() == Some(PreviewKind::Mindmap) {
+            self.export_mindmap(&t, format);
+            return;
+        }
+        if format == ExportFormat::Svg {
+            return;
+        }
         if let Some(deck) = t.deck() {
             self.export_presentation(&t, deck, format);
             return;
@@ -3941,7 +3966,7 @@ impl Window {
         let title = html::first_heading(&body).unwrap_or_else(|| t.title());
         let ext = match format {
             ExportFormat::Html => "html",
-            ExportFormat::Pdf => "pdf",
+            ExportFormat::Pdf | ExportFormat::Svg => "pdf",
         };
         let stem = t
             .path
@@ -3969,7 +3994,7 @@ impl Window {
                     let result = std::fs::write(&path, document).map_err(|e| e.to_string());
                     this.export_done(&path, result);
                 }
-                ExportFormat::Pdf => {
+                ExportFormat::Pdf | ExportFormat::Svg => {
                     this.toast(t!("Exporting PDF…"));
                     let weak = this.weak();
                     let target = path.clone();
@@ -3983,12 +4008,100 @@ impl Window {
         });
     }
 
+    /// Exports a mind map as SVG, or as PDF on an A4 page turned to fit.
+    fn export_mindmap(self: &Rc<Self>, t: &Rc<EditorTab>, format: ExportFormat) {
+        let map = t.mindmap();
+        let ext = if format == ExportFormat::Svg { "svg" } else { "pdf" };
+        let stem = t
+            .path
+            .borrow()
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|s| s.to_string_lossy().trim_end_matches(".md").trim_end_matches(".mindmap").to_owned())
+            .unwrap_or_else(|| file_name_for(&t.title()));
+        let dialog = gtk::FileDialog::builder()
+            .title(t!("Export as {}", ext.to_uppercase()))
+            .modal(true)
+            .initial_name(format!("{stem}.{ext}"))
+            .build();
+        if let Some(dir) = t.base_dir() {
+            dialog.set_initial_folder(Some(&gio::File::for_path(dir)));
+        }
+        let page = crate::mindmap::export_page(&map);
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let Ok(file) = dialog.save_future(Some(&this.win)).await else { return };
+            let Some(path) = file.path() else { return };
+            this.toast(&t!("Exporting {}…", ext.to_uppercase()));
+            let weak = this.weak();
+            crate::export::run_script(page, None, crate::mindmap::EXPORT_SCRIPT.to_owned(), move |result| {
+                let Some(this) = weak.upgrade() else { return };
+                #[derive(serde::Deserialize)]
+                struct Drawn {
+                    svg: String,
+                    width: f64,
+                    height: f64,
+                    background: String,
+                }
+                let drawn = result.and_then(|json| {
+                    // The script result is a JSON string holding the JSON object.
+                    let inner: String = serde_json::from_str(&json).unwrap_or(json);
+                    serde_json::from_str::<Drawn>(&inner).map_err(|e| e.to_string())
+                });
+                let drawn = match drawn {
+                    Ok(d) => d,
+                    Err(e) => {
+                        this.export_done(&path, Err(e));
+                        return;
+                    }
+                };
+                if format == ExportFormat::Svg {
+                    let svg = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{}\n", drawn.svg);
+                    let result = std::fs::write(&path, svg).map_err(|e| e.to_string());
+                    this.export_done(&path, result);
+                    return;
+                }
+                let landscape = drawn.width > drawn.height;
+                let (width_mm, height_mm) = if landscape { (297.0, 210.0) } else { (210.0, 297.0) };
+                let html = crate::mindmap::pdf_page(&drawn.svg, &drawn.background, width_mm, height_mm);
+                let weak = this.weak();
+                let target = path.clone();
+                crate::export::pdf(html, None, path, crate::export::Page::Custom { width_mm, height_mm }, move |result| {
+                    let Some(this) = weak.upgrade() else { return };
+                    if result.is_err() {
+                        this.export_done(&target, result);
+                        return;
+                    }
+                    // The printer may still be writing: shrink once the file is complete.
+                    let path = target.clone();
+                    glib::spawn_future_local(async move {
+                        let mut last = 0;
+                        for _ in 0..50 {
+                            glib::timeout_future(std::time::Duration::from_millis(100)).await;
+                            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                            if size > 0 && size == last {
+                                break;
+                            }
+                            last = size;
+                        }
+                        let p = path.clone();
+                        let shrunk = gio::spawn_blocking(move || crate::export::dedup_pdf(&p)).await;
+                        if let Ok(Err(e)) = shrunk {
+                            eprintln!("quicknotes: PDF not shrunk: {e}");
+                        }
+                        this.export_done(&path, Ok(()));
+                    });
+                });
+            });
+        });
+    }
+
     /// Exports a presentation as stand-alone HTML file (with keyboard
     /// navigation and animations) or as PDF with one slide per page.
     fn export_presentation(self: &Rc<Self>, t: &Rc<EditorTab>, deck: slides::Deck, format: ExportFormat) {
         let ext = match format {
             ExportFormat::Html => "html",
-            ExportFormat::Pdf => "pdf",
+            ExportFormat::Pdf | ExportFormat::Svg => "pdf",
         };
         let stem = t
             .path
@@ -4007,7 +4120,7 @@ impl Window {
         }
         let mode = match format {
             ExportFormat::Html => slides::Mode::Export,
-            ExportFormat::Pdf => slides::Mode::Print,
+            ExportFormat::Pdf | ExportFormat::Svg => slides::Mode::Print,
         };
         let document = slides::page(mode, Some(&deck), slides::PageOptions::default());
         let base_uri = t.slides_base_uri();
@@ -4021,7 +4134,7 @@ impl Window {
                     let result = std::fs::write(&path, document).map_err(|e| e.to_string());
                     this.export_done(&path, result);
                 }
-                ExportFormat::Pdf => {
+                ExportFormat::Pdf | ExportFormat::Svg => {
                     this.toast(t!("Exporting PDF…"));
                     let weak = this.weak();
                     let target = path.clone();
@@ -4853,12 +4966,14 @@ impl Window {
                 self.set_toggle("preview", t.preview_kind().is_some(), t.preview_toggle_state());
                 self.set_toggle("wrap", true, t.wrap());
                 let exportable = t.preview_kind().is_some_and(PreviewKind::is_document);
+                let mindmap = t.preview_kind() == Some(PreviewKind::Mindmap);
                 self.set_enabled("export-html", exportable);
-                self.set_enabled("export-pdf", exportable);
+                self.set_enabled("export-pdf", exportable || mindmap);
+                self.set_enabled("export-svg", mindmap);
                 let slides = t.preview_kind() == Some(PreviewKind::Slides);
                 self.set_presentable(slides);
                 self.set_calc_tools(t.is_calc());
-                let markdown = matches!(t.preview_kind(), Some(PreviewKind::Markdown | PreviewKind::Slides));
+                let markdown = matches!(t.preview_kind(), Some(PreviewKind::Markdown | PreviewKind::Slides | PreviewKind::Mindmap));
                 self.set_format_enabled(markdown);
                 let emmet = t.emmet_syntax();
                 self.set_enabled("emmet-expand", emmet.is_some());
@@ -5575,11 +5690,13 @@ enum TabStyle {
     Calc,
     Kanban,
     Cards,
+    Mindmap,
     Image,
 }
 
 impl TabStyle {
-    const ALL: [Self; 8] = [Self::Note, Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Kanban, Self::Cards, Self::Image];
+    const ALL: [Self; 9] =
+        [Self::Note, Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Kanban, Self::Cards, Self::Mindmap, Self::Image];
 
     fn of(tab: &Tab) -> Self {
         let Tab::Text(t) = tab else { return Self::Image };
@@ -5587,6 +5704,7 @@ impl TabStyle {
             Some(PreviewKind::Slides) => Self::Slides,
             Some(PreviewKind::Kanban) => Self::Kanban,
             Some(PreviewKind::Flashcards) => Self::Cards,
+            Some(PreviewKind::Mindmap) => Self::Mindmap,
             Some(kind) if kind.is_document() => Self::Document,
             _ if t.is_calc() => Self::Calc,
             _ if t.language_id().is_none() => Self::Note,
@@ -5604,8 +5722,12 @@ impl TabStyle {
             Some(slides::LANGUAGE) if features::on(Feature::Presentations) => Self::Slides,
             Some(kanban::LANGUAGE) if features::on(Feature::Kanban) => Self::Kanban,
             Some(crate::flashcards::LANGUAGE) if features::on(Feature::Flashcards) => Self::Cards,
+            Some(crate::mindmap::LANGUAGE) if features::on(Feature::Mindmaps) => Self::Mindmap,
             Some("calc") => Self::Calc,
-            Some("markdown" | "rst" | "html" | "plantuml" | slides::LANGUAGE | kanban::LANGUAGE | crate::flashcards::LANGUAGE) => {
+            Some(
+                "markdown" | "rst" | "html" | "plantuml" | slides::LANGUAGE | kanban::LANGUAGE | crate::flashcards::LANGUAGE
+                | crate::mindmap::LANGUAGE,
+            ) => {
                 Self::Document
             }
             Some(_) => Self::Code,
@@ -5621,12 +5743,14 @@ impl TabStyle {
             Self::Calc => "accessories-calculator-symbolic",
             Self::Kanban => "view-grid-symbolic",
             Self::Cards => "starred-symbolic",
+            Self::Mindmap => "qn-format-mindmap-symbolic",
             Self::Image => "image-x-generic-symbolic",
         }
     }
 
     /// Types with their own colour (plain notes keep the default look).
-    const COLORED: [Self; 7] = [Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Kanban, Self::Cards, Self::Image];
+    const COLORED: [Self; 8] =
+        [Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Kanban, Self::Cards, Self::Mindmap, Self::Image];
 
     /// Whether tabs of this type exist with the current features.
     fn available(&self) -> bool {
@@ -5634,6 +5758,7 @@ impl TabStyle {
             Self::Slides => features::on(Feature::Presentations),
             Self::Kanban => features::on(Feature::Kanban),
             Self::Cards => features::on(Feature::Flashcards),
+            Self::Mindmap => features::on(Feature::Mindmaps),
             _ => true,
         }
     }
@@ -5648,6 +5773,7 @@ impl TabStyle {
             Self::Calc => "calc",
             Self::Kanban => "kanban",
             Self::Cards => "flashcards",
+            Self::Mindmap => "mindmap",
             Self::Image => "image",
         }
     }
@@ -5661,6 +5787,7 @@ impl TabStyle {
             Self::Calc => t!("Calculations"),
             Self::Kanban => t!("Kanban boards"),
             Self::Cards => t!("Flash cards"),
+            Self::Mindmap => t!("Mind maps"),
             Self::Image => t!("Images"),
         }
     }
@@ -5674,6 +5801,7 @@ impl TabStyle {
             Self::Calc => "#33d17a",
             Self::Kanban => "#e5a50a",
             Self::Cards => "#c061cb",
+            Self::Mindmap => "#e01b24",
             Self::Image => "#ff7800",
         }
     }
@@ -5687,6 +5815,7 @@ impl TabStyle {
             Self::Calc => "tab-calc",
             Self::Kanban => "tab-kanban",
             Self::Cards => "tab-flashcards",
+            Self::Mindmap => "tab-mindmap",
             Self::Image => "tab-image",
         }
     }
@@ -5696,7 +5825,7 @@ impl TabStyle {
     }
 
     fn exportable(self) -> bool {
-        matches!(self, Self::Document | Self::Slides)
+        matches!(self, Self::Document | Self::Slides | Self::Mindmap)
     }
 }
 
@@ -5933,6 +6062,9 @@ fn menu_section(items: &[(&str, &str)]) -> gio::Menu {
 }
 
 fn export_section(style: TabStyle) -> gio::Menu {
+    if style == TabStyle::Mindmap {
+        return menu_section(&[(t!("Export as PDF…"), "win.export-pdf"), (t!("Export as SVG…"), "win.export-svg")]);
+    }
     let mut items = vec![
         (t!("Export as HTML…"), "win.export-html"),
         (t!("Export as PDF…"), "win.export-pdf"),
@@ -5967,6 +6099,9 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
     }
     if context.features.flashcards {
         file.push((t!("New Flash Cards"), "win.new-flashcards"));
+    }
+    if context.features.mindmaps {
+        file.push((t!("New Mind Map"), "win.new-mindmap"));
     }
     file.push((t!("Open File…"), "win.open"));
     if context.features.folders {
@@ -6331,10 +6466,12 @@ fn iso_now() -> String {
         .unwrap_or_default()
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum ExportFormat {
     Html,
     Pdf,
+    /// Mind maps only.
+    Svg,
 }
 
 /// A file name (without extension) derived from a document title.

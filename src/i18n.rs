@@ -1104,6 +1104,20 @@ const DE: &[(&str, &str)] = &[
     (", 1 attachment", ", 1 Anhang"),
     ("more than {} files – is this an Obsidian vault?", "mehr als {} Dateien – ist das ein Obsidian-Vault?"),
     (" ({} were already imported)", " ({} waren schon importiert)"),
+    // Mind maps
+    ("Exporting {}…", "Exportiere {}…"),
+    ("Mind maps", "Mindmaps"),
+    ("Export as SVG…", "Als SVG exportieren…"),
+    ("New Mind Map", "Neue Mindmap"),
+    ("Mind Maps", "Mindmaps"),
+    ("Mind maps from Markdown outlines, with SVG and PDF export", "Mindmaps aus Markdown-Gliederungen, mit SVG- und PDF-Export"),
+    ("Zoom in (+)", "Vergrößern (+)"),
+    ("Zoom out (−)", "Verkleinern (−)"),
+    ("Fit to view (0)", "Einpassen (0)"),
+    ("Fold or unfold", "Ein- oder ausklappen"),
+    ("Double-click: go to the line", "Doppelklick: zur Zeile springen"),
+    ("Add a branch", "Ast hinzufügen"),
+    ("New branch – Enter adds it, Esc closes", "Neuer Ast – Enter fügt ihn hinzu, Esc schließt"),
 ];
 
 #[cfg(test)]
@@ -1152,6 +1166,7 @@ mod tests {
             include_str!("calc_assist.rs"),
             include_str!("convert_dialog.rs"),
             include_str!("obsidian.rs"),
+            include_str!("mindmap.rs"),
         ];
         let mut keys = Vec::new();
         for src in sources {

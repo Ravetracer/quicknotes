@@ -1,6 +1,6 @@
 # QuickNotes Help {#top}
 
-**Contents:** [Notes & tabs](#notes) · [Folders](#folders) · [Checklists](#checklists) · [Tables](#tables) · [Formatting](#formatting) · [Math & music](#notation) · [Charts](#charts) · [Kanban](#kanban) · [Flash cards](#flashcards) · [Calculations](#calc) · [Templates](#templates) ·
+**Contents:** [Notes & tabs](#notes) · [Folders](#folders) · [Checklists](#checklists) · [Tables](#tables) · [Formatting](#formatting) · [Math & music](#notation) · [Charts](#charts) · [Kanban](#kanban) · [Mind maps](#mindmaps) · [Flash cards](#flashcards) · [Calculations](#calc) · [Templates](#templates) ·
 [Previews & export](#previews) · [Presentations](#slides) · [Developer tools](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Security](#security) · [Backup](#backup) · [GitHub sync](#sync) ·
 [Shortcuts](#shortcuts)
@@ -348,6 +348,52 @@ on the phone. *Preview* (Ctrl+Shift+V) shows this source next to the board; chan
 update the board. Saved as a file, boards get the extension `.kanban.md`. The board view
 rewrites the source in its own layout – free text between the cards becomes part of the card
 above it.
+
+## Mind maps {#mindmaps}
+
+A **mind map** is drawn from a Markdown outline. Create one with *New Mind Map* in the main
+menu, or give a Markdown file the front matter `mindmap: 1` (or the ending `.mindmap.md`).
+
+```
+---
+mindmap: 1
+theme: pastel      # default, pastel, vivid, mono, dark, ocean, forest
+layout: both       # both, right, down
+font: Cantarell    # optional
+---
+# Holiday 2027
+- Destination {color: #e01b24}
+  - **Portugal**
+  - Spain
+- Budget
+  - Flights ~ 600 €
+- Packing list {folded}
+  - [x] passport
+  - [ ] sun cream
+```
+
+- The first `#` heading is the centre. Nested list items (`-`, `*`, `+`, `1.`) are the
+  branches; `##`, `###` … headings work as branches, too, with lists below them. A line
+  without a marker continues the node above.
+- Text keeps its Markdown styling: **bold**, *italic*, `code`, ~~strikethrough~~ and links;
+  `[ ]` / `[x]` show a checkbox. Long text wraps.
+- At the end of a line, `{color: #e01b24}` (or just `{#e01b24}`) colours a branch and everything
+  below it, `{folded}` starts it folded.
+- **Layouts**: `both` puts the branches left and right of the centre, `right` grows a tree to
+  the right, `down` draws an organisation chart.
+- **Themes** set the colours; `default` follows the light or dark look of QuickNotes. Own branch
+  colours: `colors: ['#e01b24', '#3584e4']`.
+
+In the preview, **Ctrl+mouse wheel** (or `+`, `−`) zooms, the mouse wheel or dragging moves the
+map, `0` or the button at the bottom fits it in again. The small knob next to a branch folds
+and unfolds it, a **double-click** on a node jumps to its line. A click on a checkbox ticks the
+task (in the text, too). The **+** next to a node (shown when the mouse is over it) adds a
+branch: type the text and press Enter – the input stays open for the next one, Esc closes it.
+The new line is written like its siblings (same indentation and list marker).
+
+**Export** (main menu or context menu): *Export as PDF…* puts the map on one A4 page – landscape
+or portrait, whichever suits it – and *Export as SVG…* saves it as a vector image. Exports use
+the light look for the `default` theme.
 
 ## Calculations {#calc}
 

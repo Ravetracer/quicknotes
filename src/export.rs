@@ -176,6 +176,54 @@ fn print_loaded(
     op.print();
 }
 
+/// Shrinks a written PDF: WebKit embeds a font file again for many runs of
+/// text, so identical streams are kept once.
+pub fn dedup_pdf(path: &Path) -> Result<(), String> {
+    use lopdf::{Document, Object, ObjectId};
+    use std::collections::HashMap;
+    let mut doc = Document::load(path).map_err(|e| e.to_string())?;
+    let mut first: HashMap<(String, Vec<u8>), ObjectId> = HashMap::new();
+    let mut replace: HashMap<ObjectId, ObjectId> = HashMap::new();
+    for (id, obj) in &doc.objects {
+        if let Object::Stream(stream) = obj {
+            let key = (format!("{:?}", stream.dict), stream.content.clone());
+            match first.get(&key) {
+                Some(keep) => {
+                    replace.insert(*id, *keep);
+                }
+                None => {
+                    first.insert(key, *id);
+                }
+            }
+        }
+    }
+    if replace.is_empty() {
+        return Ok(());
+    }
+    fn fix(obj: &mut Object, map: &HashMap<ObjectId, ObjectId>) {
+        match obj {
+            Object::Reference(r) => {
+                if let Some(n) = map.get(r) {
+                    *r = *n;
+                }
+            }
+            Object::Array(items) => items.iter_mut().for_each(|o| fix(o, map)),
+            Object::Dictionary(d) => d.iter_mut().for_each(|(_, o)| fix(o, map)),
+            Object::Stream(s) => s.dict.iter_mut().for_each(|(_, o)| fix(o, map)),
+            _ => {}
+        }
+    }
+    for obj in doc.objects.values_mut() {
+        fix(obj, &replace);
+    }
+    doc.trailer.iter_mut().for_each(|(_, o)| fix(o, &replace));
+    for id in replace.keys() {
+        doc.objects.remove(id);
+    }
+    doc.save(path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 // ----- images ------------------------------------------------------------------
 
 /// A temporary file for an intermediate PDF.

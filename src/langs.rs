@@ -13,6 +13,7 @@ const BUNDLED: &[(&str, &str)] = &[
     ("mongodb.lang", include_str!("../data/mongodb.lang")),
     ("kanban.lang", include_str!("../data/kanban.lang")),
     ("flashcards.lang", include_str!("../data/flashcards.lang")),
+    ("mindmap.lang", include_str!("../data/mindmap.lang")),
 ];
 
 /// Registers bundled language definitions. Must run before any language is used.
@@ -69,6 +70,9 @@ pub fn guess(path: Option<&Path>, content: &str) -> Option<Language> {
         if name.ends_with(".cards.md") || name.ends_with(".flashcards.md") {
             return by_id(crate::flashcards::LANGUAGE);
         }
+        if name.ends_with(".mindmap.md") {
+            return by_id(crate::mindmap::LANGUAGE);
+        }
         if name.ends_with(".slides.md") {
             return by_id(crate::slides::LANGUAGE);
         }
@@ -83,6 +87,9 @@ pub fn guess(path: Option<&Path>, content: &str) -> Option<Language> {
             }
             if l.id() == "markdown" && crate::flashcards::is_flashcards(content) {
                 return by_id(crate::flashcards::LANGUAGE);
+            }
+            if l.id() == "markdown" && crate::mindmap::is_mindmap(content) {
+                return by_id(crate::mindmap::LANGUAGE);
             }
             if l.id() == "markdown" && crate::slides::is_presentation(content) {
                 return by_id(crate::slides::LANGUAGE);
@@ -152,6 +159,9 @@ pub fn sniff(content: &str) -> Option<&'static str> {
             }
             if crate::flashcards::is_flashcards(t) {
                 return Some(crate::flashcards::LANGUAGE);
+            }
+            if crate::mindmap::is_mindmap(t) {
+                return Some(crate::mindmap::LANGUAGE);
             }
             if crate::slides::is_presentation(t) {
                 return Some(crate::slides::LANGUAGE);

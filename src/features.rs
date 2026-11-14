@@ -23,6 +23,7 @@ pub enum Feature {
     Flashcards,
     Folders,
     Sync,
+    Mindmaps,
 }
 
 /// The features with their preference labels and descriptions.
@@ -40,6 +41,7 @@ pub const LIST: &[(Feature, &str, &str)] = &[
     (Feature::Flashcards, "Flash Cards", "Learning with flash cards and spaced repetition"),
     (Feature::Folders, "Note Folders", "A notes sidebar with folders; closed notes stay in it"),
     (Feature::Sync, "GitHub Sync", "Encrypted sync of the notes with a GitHub repository"),
+    (Feature::Mindmaps, "Mind Maps", "Mind maps from Markdown outlines, with SVG and PDF export"),
 ];
 
 impl Feature {
@@ -54,6 +56,7 @@ impl Feature {
             Self::Flashcards => 64,
             Self::Folders => 128,
             Self::Sync => 256,
+            Self::Mindmaps => 512,
         }
     }
 
@@ -70,6 +73,7 @@ impl Feature {
             Self::Flashcards => "flashcards",
             Self::Folders => "folders",
             Self::Sync => "sync",
+            Self::Mindmaps => "mindmaps",
         }
     }
 }
@@ -92,6 +96,8 @@ pub struct Features {
     pub folders: bool,
     #[serde(default = "yes")]
     pub sync: bool,
+    #[serde(default = "yes")]
+    pub mindmaps: bool,
 }
 
 fn yes() -> bool {
@@ -101,7 +107,7 @@ fn yes() -> bool {
 impl Features {
     /// All features on (settings from before the switches existed).
     pub fn all() -> Self {
-        Self { charts: true, presentations: true, kanban: true, geocaching: true, plantuml: true, devtools: true, flashcards: true, folders: true, sync: true }
+        Self { charts: true, presentations: true, kanban: true, geocaching: true, plantuml: true, devtools: true, flashcards: true, folders: true, sync: true, mindmaps: true }
     }
 
     pub fn get(&self, f: Feature) -> bool {
@@ -115,6 +121,7 @@ impl Features {
             Feature::Flashcards => self.flashcards,
             Feature::Folders => self.folders,
             Feature::Sync => self.sync,
+            Feature::Mindmaps => self.mindmaps,
         }
     }
 
@@ -129,6 +136,7 @@ impl Features {
             Feature::Flashcards => self.flashcards = on,
             Feature::Folders => self.folders = on,
             Feature::Sync => self.sync = on,
+            Feature::Mindmaps => self.mindmaps = on,
         }
     }
 

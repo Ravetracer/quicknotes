@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- QuickNotes mind maps: Markdown outline with front matter (`mindmap: 1`);
+     the first `#` heading is the centre, headings and nested list items are
+     branches, `{color: …}` / `{folded}` at the line end (see src/mindmap.rs). -->
+<language id="mindmap" name="Mind Map" version="2.0" section="Markup">
+  <metadata>
+    <property name="globs">*.mindmap.md</property>
+    <property name="block-comment-start">&lt;!--</property>
+    <property name="block-comment-end">--&gt;</property>
+    <property name="suggested-suffix">.mindmap.md</property>
+  </metadata>
+
+  <styles>
+    <style id="front-matter" name="Front matter" map-to="def:comment"/>
+    <style id="key" name="Setting" map-to="def:type"/>
+    <style id="attributes" name="Node attributes" map-to="def:special-char"/>
+  </styles>
+
+  <definitions>
+    <context id="front-matter" style-ref="front-matter" first-line-only="true" class="no-spell-check">
+      <start>^---\s*$</start>
+      <end>^(---|\.\.\.)\s*$</end>
+      <include>
+        <context id="key" style-ref="key">
+          <match>^\s*-?\s*[A-Za-z_-]+(?=:)</match>
+        </context>
+      </include>
+    </context>
+
+    <context id="attributes" style-ref="attributes">
+      <match>\{\s*((colou?r|farbe)\s*:\s*[^,}]+|#[0-9A-Fa-f]{3,8}|folded|collapsed|zu)(\s*,\s*((colou?r|farbe)\s*:\s*[^,}]+|#[0-9A-Fa-f]{3,8}|folded|collapsed|zu))*\s*\}\s*$</match>
+    </context>
+
+    <context id="mindmap">
+      <include>
+        <context ref="front-matter"/>
+        <context ref="attributes"/>
+        <context ref="markdown:markdown"/>
+      </include>
+    </context>
+  </definitions>
+</language>

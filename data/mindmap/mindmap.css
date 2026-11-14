@@ -1,0 +1,28 @@
+/* QuickNotes mind map preview (see mindmap.js). */
+:root { --bg: #ffffff; --fg: #1f2328; --border: #d1d9e0; --link: #1a5fb4; }
+html[data-theme="dark"] { --bg: #1e1e1e; --fg: #e6e6e6; --border: #3a3a3a; --link: #78aeed; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--fg); }
+#map { position: absolute; inset: 0; }
+svg.canvas { display: block; cursor: grab; user-select: none; -webkit-user-select: none; }
+svg.canvas.dragging { cursor: grabbing; }
+.node { cursor: default; }
+.knob, .check, .add { cursor: pointer; }
+.node .add { opacity: 0; transition: opacity .12s; }
+.node:hover .add { opacity: 1; }
+.add-input {
+  position: fixed; z-index: 2; width: 240px; padding: 5px 9px; font: 14px Cantarell, sans-serif;
+  color: var(--fg); background: var(--bg); border: 2px solid var(--link); border-radius: 7px; outline: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,.25);
+}
+a { cursor: pointer; }
+.toolbar {
+  position: fixed; right: 10px; bottom: 10px; display: flex; gap: 4px;
+  background: color-mix(in srgb, var(--bg) 85%, transparent); border: 1px solid var(--border);
+  border-radius: 8px; padding: 3px;
+}
+.toolbar button {
+  font: 600 15px Cantarell, sans-serif; width: 28px; height: 26px; border: none; border-radius: 5px;
+  background: transparent; color: var(--fg); cursor: pointer;
+}
+.toolbar button:hover { background: color-mix(in srgb, var(--fg) 12%, transparent); }
+@media print { .toolbar { display: none; } }

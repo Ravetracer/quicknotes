@@ -1,6 +1,6 @@
 # QuickNotes-Hilfe {#top}
 
-**Inhalt:** [Notizen & Tabs](#notes) · [Ordner](#folders) · [Checklisten](#checklists) · [Tabellen](#tables) · [Formatierung](#formatting) · [Formeln & Noten](#notation) · [Diagramme](#charts) · [Kanban](#kanban) · [Lernkarten](#flashcards) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
+**Inhalt:** [Notizen & Tabs](#notes) · [Ordner](#folders) · [Checklisten](#checklists) · [Tabellen](#tables) · [Formatierung](#formatting) · [Formeln & Noten](#notation) · [Diagramme](#charts) · [Kanban](#kanban) · [Mindmaps](#mindmaps) · [Lernkarten](#flashcards) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
 [Vorschau & Export](#previews) · [Präsentationen](#slides) · [Entwicklerwerkzeuge](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Sicherheit](#security) · [Sicherung](#backup) · [GitHub-Sync](#sync) ·
 [Tastenkürzel](#shortcuts)
@@ -362,6 +362,54 @@ in jedem Editor und auf dem Handy nutzbar. *Vorschau* (Strg+Umschalt+V) zeigt di
 dem Board; Änderungen daran aktualisieren das Board. Als Datei gespeichert bekommen Boards die
 Endung `.kanban.md`. Die Board-Ansicht schreibt die Quelle in ihrem eigenen Format – freier Text
 zwischen den Karten wird Teil der Karte darüber.
+
+## Mindmaps {#mindmaps}
+
+Eine **Mindmap** entsteht aus einer Markdown-Gliederung. Neu anlegen mit *Neue Mindmap* im
+Hauptmenü, oder eine Markdown-Datei mit dem Front Matter `mindmap: 1` (oder der Endung
+`.mindmap.md`) versehen.
+
+```
+---
+mindmap: 1
+theme: pastel      # default, pastel, vivid, mono, dark, ocean, forest
+layout: both       # both, right, down
+font: Cantarell    # optional
+---
+# Urlaub 2027
+- Reiseziel {color: #e01b24}
+  - **Portugal**
+  - Spanien
+- Budget
+  - Flüge ~ 600 €
+- Packliste {folded}
+  - [x] Reisepass
+  - [ ] Sonnencreme
+```
+
+- Die erste `#`-Überschrift ist die Mitte. Verschachtelte Listenpunkte (`-`, `*`, `+`, `1.`)
+  sind die Äste; `##`-, `###`-… Überschriften funktionieren ebenfalls als Äste, mit Listen
+  darunter. Eine Zeile ohne Markierung setzt den Knoten darüber fort.
+- Der Text behält seine Markdown-Formatierung: **fett**, *kursiv*, `Code`, ~~durchgestrichen~~
+  und Links; `[ ]` / `[x]` zeigen ein Kästchen. Langer Text wird umbrochen.
+- Am Zeilenende färbt `{color: #e01b24}` (oder kurz `{#e01b24}`) einen Ast samt allem darunter,
+  `{folded}` lässt ihn zugeklappt beginnen.
+- **Anordnung**: `both` verteilt die Äste links und rechts der Mitte, `right` lässt einen Baum
+  nach rechts wachsen, `down` zeichnet ein Organigramm.
+- **Themes** bestimmen die Farben; `default` folgt dem hellen oder dunklen Aussehen von
+  QuickNotes. Eigene Astfarben: `colors: ['#e01b24', '#3584e4']`.
+
+In der Vorschau zoomt **Strg+Mausrad** (oder `+`, `−`), das Mausrad oder Ziehen verschiebt die
+Karte, `0` oder der Knopf unten passt sie wieder ein. Der kleine Knopf neben einem Ast klappt ihn
+zu und auf, ein **Doppelklick** auf einen Knoten springt zu seiner Zeile. Ein Klick auf ein
+Kästchen hakt die Aufgabe ab (auch im Text). Das **+** neben einem Knoten (sichtbar, wenn die Maus
+darüber ist) fügt einen Ast hinzu: Text eingeben und Enter drücken – das Feld bleibt für den
+nächsten offen, Esc schließt es. Die neue Zeile wird wie ihre Geschwister geschrieben (gleiche
+Einrückung und Listenmarkierung).
+
+**Export** (Hauptmenü oder Kontextmenü): *Als PDF exportieren…* setzt die Mindmap auf eine
+A4-Seite – quer oder hoch, je nachdem, was besser passt – und *Als SVG exportieren…* speichert
+sie als Vektorgrafik. Exporte nutzen beim Theme `default` das helle Aussehen.
 
 ## Berechnungen {#calc}
 

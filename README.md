@@ -68,6 +68,10 @@ after a restart.
 - Font size via Ctrl+mouse wheel or Ctrl +/−/0 (the preview follows)
 - **Calculation sheets**: variables, operators, functions and live results per line;
   templates like `> N ab° cd.{e*3:3}` fill in calculated values (e.g. Geocaching coordinates)
+- **Mind maps** from Markdown outlines (switchable): branches left/right, to the right or as an
+  org chart, themes and branch colours, Markdown styling in the nodes, zoom/fold/jump to the
+  line, tick checkboxes and add branches right in the preview, export as SVG or as PDF (A4,
+  landscape or portrait to fit)
 - **Obsidian vaults**: import a vault with its folders and attachments into the notes library;
   the Markdown preview understands `[[wikilinks]]` (click opens the note), `![[embeds]]`,
   callouts, `==highlights==`, `%%comments%%` and `#tags`
