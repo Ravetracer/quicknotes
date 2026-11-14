@@ -122,6 +122,27 @@ pub fn unique_name(folders: &[Folder], parent: Option<&str>, wanted: &str, excep
     (2..).map(|n| format!("{wanted} {n}")).find(|n| !taken.contains(&sort_key(n))).unwrap_or_default()
 }
 
+/// The folder at the path `names` below `parent`: existing folders are
+/// found by name (ignoring case), missing ones are created with `new_id`.
+pub fn ensure_path(folders: &mut Vec<Folder>, parent: Option<&str>, names: &[String], mut new_id: impl FnMut() -> String) -> Option<String> {
+    let mut current = parent.map(str::to_owned);
+    for name in names {
+        let name = name.trim();
+        let name = if name.is_empty() { "Folder" } else { name };
+        let found = children(folders, current.as_deref()).iter().find(|f| sort_key(&f.name) == sort_key(name)).map(|f| f.id.clone());
+        let id = match found {
+            Some(id) => id,
+            None => {
+                let id = new_id();
+                folders.push(Folder { id: id.clone(), name: name.to_owned(), parent: current.clone(), collapsed: true });
+                id
+            }
+        };
+        current = Some(id);
+    }
+    current
+}
+
 /// Whether `folder` is `ancestor` or lies inside it.
 pub fn is_inside(folders: &[Folder], folder: &str, ancestor: &str) -> bool {
     let parents: HashMap<&str, Option<&str>> = folders.iter().map(|f| (f.id.as_str(), f.parent.as_deref())).collect();
@@ -189,6 +210,27 @@ pub fn path(folders: &[Folder], id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ensure_path_finds_and_creates() {
+        let mut folders = vec![Folder { id: "v".into(), name: "Vault".into(), parent: None, collapsed: false }, Folder {
+            id: "w".into(),
+            name: "Work".into(),
+            parent: Some("v".into()),
+            collapsed: false,
+        }];
+        let mut n = 0;
+        let mut next = || {
+            n += 1;
+            format!("new{n}")
+        };
+        let names = ["work".to_owned(), "Deep".to_owned()];
+        assert_eq!(ensure_path(&mut folders, Some("v"), &names, &mut next).as_deref(), Some("new1"));
+        assert_eq!(ensure_path(&mut folders, Some("v"), &names, &mut next).as_deref(), Some("new1"));
+        assert_eq!(folders.len(), 3);
+        assert_eq!(folders[2].parent.as_deref(), Some("w"));
+        assert_eq!(ensure_path(&mut folders, Some("v"), &[], &mut next).as_deref(), Some("v"));
+    }
 
     fn folder(id: &str, name: &str, parent: Option<&str>) -> Folder {
         Folder { id: id.into(), name: name.into(), parent: parent.map(str::to_owned), collapsed: false }

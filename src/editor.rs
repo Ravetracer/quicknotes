@@ -189,6 +189,8 @@ pub struct EditorTab {
     pub webview_hook: RefCell<Option<WidgetHook>>,
     /// Shows a short message to the user (e.g. "Copied …").
     pub message_hook: RefCell<Option<MessageHook>>,
+    /// Opens the note of a wikilink (`[[Title]]`) clicked in the preview.
+    pub note_link_hook: RefCell<Option<MessageHook>>,
     calc: RefCell<Option<CalcColumn>>,
     calc_timer: RefCell<Option<glib::SourceId>>,
     /// This tab (for callbacks of methods that only get `&self`).
@@ -306,6 +308,7 @@ impl EditorTab {
             search: RefCell::new(None),
             webview_hook: RefCell::new(None),
             message_hook: RefCell::new(None),
+            note_link_hook: RefCell::new(None),
             calc: RefCell::new(None),
             calc_timer: RefCell::new(None),
             me: RefCell::new(std::rc::Weak::new()),
@@ -1770,7 +1773,16 @@ impl EditorTab {
             };
             if action.navigation_type() == webkit6::NavigationType::LinkClicked {
                 if let Some(uri) = action.request().and_then(|r| r.uri()) {
-                    gtk::UriLauncher::new(&uri).launch(None::<&gtk::Window>, None::<&gio::Cancellable>, |_| {});
+                    if let Some(title) = uri.strip_prefix(crate::obsidian::NOTE_SCHEME) {
+                        let title = urlencoding::decode(title).map(|t| t.into_owned()).unwrap_or_else(|_| title.to_owned());
+                        if let Some(t) = weak.upgrade() {
+                            if let Some(hook) = t.note_link_hook.borrow().as_ref() {
+                                hook(&title);
+                            }
+                        }
+                    } else if !uri.ends_with('#') {
+                        gtk::UriLauncher::new(&uri).launch(None::<&gtk::Window>, None::<&gio::Cancellable>, |_| {});
+                    }
                 }
                 decision.ignore();
                 return true;
@@ -1858,7 +1870,9 @@ impl EditorTab {
         p.libs.set(Libs::default());
         let bg = if shell != Shell::None { preview_bg(self.shared.theme.get()) } else { gdk::RGBA::WHITE };
         p.webview.set_background_color(&bg);
-        let base = if shell == Shell::Slides { self.slides_base_uri() } else { self.base_uri() };
+        // Notes without a file use the home folder, so absolute paths and
+        // attachments of imported vaults (file:// URLs) load.
+        let base = self.slides_base_uri();
         p.webview.load_html(page, base.as_deref());
     }
 

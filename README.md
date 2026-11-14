@@ -68,6 +68,9 @@ after a restart.
 - Font size via Ctrl+mouse wheel or Ctrl +/−/0 (the preview follows)
 - **Calculation sheets**: variables, operators, functions and live results per line;
   templates like `> N ab° cd.{e*3:3}` fill in calculated values (e.g. Geocaching coordinates)
+- **Obsidian vaults**: import a vault with its folders and attachments into the notes library;
+  the Markdown preview understands `[[wikilinks]]` (click opens the note), `![[embeds]]`,
+  callouts, `==highlights==`, `%%comments%%` and `#tags`
 - **Units and conversions** in calculation sheets: values with units (`120 km / 1.5 h`),
   conversions with `to` (`100 °F to °C`, `250 EUR in USD` with daily ECB rates), dates and
   durations (`2026-12-24 - today`), time zones (`14:00 Berlin to Tokyo`), other calendars

@@ -64,6 +64,20 @@ pub struct Settings {
     pub github_repo: String,
     /// GitHub sync: sync at start and when closing.
     pub github_sync: bool,
+    /// Imported Obsidian vaults (to import only new notes next time).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub obsidian_vaults: Vec<ObsidianVault>,
+}
+
+/// An imported Obsidian vault.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct ObsidianVault {
+    pub path: PathBuf,
+    /// Library folder of the vault.
+    pub folder: String,
+    /// Note path in the vault → note id.
+    pub notes: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for Settings {
@@ -92,6 +106,7 @@ impl Default for Settings {
             github_account: String::new(),
             github_repo: String::new(),
             github_sync: false,
+            obsidian_vaults: Vec::new(),
         }
     }
 }

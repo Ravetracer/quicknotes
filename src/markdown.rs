@@ -13,13 +13,22 @@ const OPTIONS: Options = Options::ENABLE_TABLES
 pub fn to_html(markdown: &str) -> String {
     let markdown = prepare(markdown);
     let mut out = String::with_capacity(markdown.len() * 3 / 2);
-    html::push_html(&mut out, Parser::new_ext(&markdown, OPTIONS));
+    let events: Vec<Event> = Parser::new_ext(&markdown, OPTIONS).collect();
+    html::push_html(&mut out, crate::obsidian::callouts(events).into_iter());
     out
 }
 
-/// The source as it is rendered: chart blocks resolved and the front matter
-/// hidden. Lines stay where they are.
+/// The source as it is rendered: chart blocks resolved, the front matter
+/// hidden and Obsidian syntax turned into HTML. Lines stay where they are.
 fn prepare(markdown: &str) -> Cow<'_, str> {
+    let base = prepare_base(markdown);
+    match crate::obsidian::preprocess(&base) {
+        Cow::Borrowed(_) => base,
+        Cow::Owned(s) => Cow::Owned(s),
+    }
+}
+
+fn prepare_base(markdown: &str) -> Cow<'_, str> {
     let markdown = crate::charts::expand(markdown);
     if !markdown.starts_with("---") {
         return markdown;
@@ -45,7 +54,7 @@ pub fn to_html_interactive(markdown: &str) -> String {
         e => e,
     });
     let mut out = String::with_capacity(markdown.len() * 3 / 2);
-    html::push_html(&mut out, events);
+    html::push_html(&mut out, crate::obsidian::callouts(events.collect()).into_iter());
     out
 }
 

@@ -71,6 +71,14 @@ bleibt in ihrem Ordner und öffnet sich mit einem Klick wieder. Geöffnete Notiz
 Ordner, geschlossene Notizen und der Papierkorb werden mit dem App-Passwort verschlüsselt und
 sind in Sicherungen enthalten.
 
+
+**Obsidian-Vault importieren**: *Hauptmenü → Obsidian-Vault importieren…* und den Ordner des
+Vaults wählen. Seine Notizen werden mit allen Unterordnern in einen neuen, gleichnamigen Ordner
+kopiert; der Vault selbst bleibt unverändert. Bilder und andere Dateien, die die Notizen
+verwenden, werden mitkopiert (nach `~/.local/share/quicknotes/attachments`). Ein erneuter
+Import desselben Vaults fügt nur Notizen hinzu, die noch nicht importiert wurden. Obsidians
+eigene Syntax versteht die Vorschau, siehe [Formatierung](#formatting).
+
 ## Checklisten {#checklists}
 
 Notizen, Markdown-Dokumente und Präsentationen verstehen Aufgabenlisten im üblichen
@@ -137,6 +145,18 @@ schreibt das Markdown für dich, die Syntax musst du dir nicht merken:
 - **∑ Formel** (im Text oder als Block) und **♫ Notenschrift** (eine ABC-Melodie), siehe unten.
 
 *Hauptmenü → Formatierungsleiste* blendet die Leiste aus; die Tastenkürzel funktionieren weiter.
+
+**Obsidian-Syntax** funktioniert in jeder Markdown-Vorschau:
+
+| Syntax | Ergebnis |
+|---|---|
+| `[[Notiz]]`, `[[Notiz\|Text]]`, `[[Notiz#Überschrift]]` | Verweis auf eine Notiz; ein Klick öffnet sie |
+| `![[bild.png]]`, `![[bild.png\|300]]` | eingebettetes Bild (optional 300 px breit) |
+| `![[Notiz]]`, `![[datei.pdf]]` | Verweis auf die Notiz oder Datei |
+| `==markiert==` | hervorgehobener Text |
+| `%%Kommentar%%` | in der Vorschau verborgen (auch über mehrere Zeilen) |
+| `#tag` | als Schlagwort dargestellt |
+| `> [!warning] Titel` | Hinweis-Box (note, tip, warning, danger, example, quote, …); `[!tip]-` startet zugeklappt |
 
 ## Formeln & Noten {#notation}
 

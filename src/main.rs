@@ -35,6 +35,7 @@ mod markdown;
 mod md_format;
 mod notation;
 mod notes_tree;
+mod obsidian;
 mod plantuml;
 mod prefs;
 mod rates;

@@ -1092,6 +1092,18 @@ const DE: &[(&str, &str)] = &[
     ("Hebrew calendar", "hebräischer Kalender"),
     ("Islamic calendar", "islamischer Kalender"),
     ("ISO 8601", "ISO 8601"),
+    // Obsidian import
+    ("No note named “{}”", "Keine Notiz namens „{}“"),
+    ("Import Obsidian Vault", "Obsidian-Vault importieren"),
+    ("Import Obsidian Vault…", "Obsidian-Vault importieren…"),
+    ("Importing “{}”…", "„{}“ wird importiert…"),
+    ("Import failed: {}", "Import fehlgeschlagen: {}"),
+    ("No Markdown notes found in “{}”", "Keine Markdown-Notizen in „{}“ gefunden"),
+    ("Imported {} notes from “{}”", "{} Notizen aus „{}“ importiert"),
+    (", {} attachments", ", {} Anhänge"),
+    (", 1 attachment", ", 1 Anhang"),
+    ("more than {} files – is this an Obsidian vault?", "mehr als {} Dateien – ist das ein Obsidian-Vault?"),
+    (" ({} were already imported)", " ({} waren schon importiert)"),
 ];
 
 #[cfg(test)]
@@ -1139,6 +1151,7 @@ mod tests {
             include_str!("rates.rs"),
             include_str!("calc_assist.rs"),
             include_str!("convert_dialog.rs"),
+            include_str!("obsidian.rs"),
         ];
         let mut keys = Vec::new();
         for src in sources {

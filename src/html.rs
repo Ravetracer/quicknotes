@@ -48,6 +48,23 @@ input.task:checked::after { content: ""; position: absolute; left: .3em; top: .0
 li:has(> input.task:checked), li:has(> p > input.task:checked) { opacity: .6; text-decoration: line-through; }
 li > p { margin: .2em 0; }
 
+/* Obsidian: highlights, tags, wikilinks, callouts */
+mark { background: #fce58a; color: inherit; border-radius: 3px; padding: 0 .15em; }
+html[data-theme="dark"] mark { background: #7a6412; }
+.tag { color: var(--link); background: var(--code-bg); border-radius: 1em; padding: .05em .55em; font-size: .9em; white-space: nowrap; }
+a.wikilink { text-decoration: none; border-bottom: 1px dashed var(--link); }
+a.wikilink.embed { display: inline-block; margin: .3em 0; }
+.callout {
+  --c: var(--note); border-left: 4px solid var(--c); background: var(--code-bg);
+  border-radius: 6px; padding: .4em 1em; margin: 1em 0;
+}
+.callout.tip { --c: var(--tip); } .callout.warn { --c: var(--warn); } .callout.error { --c: var(--error); }
+.callout.example { --c: #9141ac; } .callout.quote { --c: var(--quote); } .callout.abstract { --c: #1c9aa0; }
+.callout-title { font-weight: 700; color: var(--c); margin: .2em 0; }
+summary.callout-title { cursor: pointer; }
+.callout-content > :first-child { margin-top: .3em; }
+.callout-content > :last-child { margin-bottom: .3em; }
+
 /* reStructuredText (docutils) */
 dl.field-list { display: grid; grid-template-columns: max-content auto; gap: .2em 1em; }
 dl.field-list > dt { font-weight: 600; }

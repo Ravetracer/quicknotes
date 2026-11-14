@@ -65,6 +65,13 @@ its folder and opens again with a click. Open notes are shown in bold.
 Folders, closed notes and the trash are encrypted with the app password and included in
 backups.
 
+**Importing an Obsidian vault**: *Main menu → Import Obsidian Vault…* and pick the vault's
+folder. Its notes are copied into a new folder of the same name, with all sub-folders; the
+vault itself stays untouched. Images and other files the notes use are copied along (into
+`~/.local/share/quicknotes/attachments`). Importing the same vault again only adds notes that
+were not imported before. Obsidian's own syntax is understood by the preview, see
+[Formatting](#formatting).
+
 ## Checklists {#checklists}
 
 Notes, Markdown documents and presentations understand task lists in the common Markdown
@@ -130,6 +137,18 @@ the Markdown for you, so you don't need to remember the syntax:
 - **∑ Formula** (inline or as a block) and **♫ Music notation** (an ABC tune), see below.
 
 *Main menu → Formatting Toolbar* hides the toolbar; the shortcuts keep working.
+
+**Obsidian syntax** works in every Markdown preview:
+
+| Syntax | Result |
+|---|---|
+| `[[Note]]`, `[[Note\|text]]`, `[[Note#Heading]]` | link to a note; a click opens it |
+| `![[picture.png]]`, `![[picture.png\|300]]` | embedded image (optionally 300 px wide) |
+| `![[Note]]`, `![[file.pdf]]` | link to the note or file |
+| `==marked==` | highlighted text |
+| `%%comment%%` | hidden in the preview (also across lines) |
+| `#tag` | shown as a tag |
+| `> [!warning] Title` | callout box (note, tip, warning, danger, example, quote, …); `[!tip]-` starts folded |
 
 ## Math & music {#notation}
 

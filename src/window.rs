@@ -699,6 +699,7 @@ impl Window {
         });
         self.action("new-calculation", &["<Control><Shift>n"], |w| w.new_calculation());
         self.action("unit-converter", &[], |w| w.unit_converter());
+        self.action("import-obsidian", &[], |w| w.import_obsidian());
         self.action("new-presentation", &[], |w| {
             if features::on(Feature::Presentations) {
                 w.new_presentation();
@@ -1485,6 +1486,12 @@ impl Window {
             }
         }));
         let weak = self.weak();
+        *t.note_link_hook.borrow_mut() = Some(Box::new(move |title: &str| {
+            if let Some(this) = weak.upgrade() {
+                this.open_note_titled(title);
+            }
+        }));
+        let weak = self.weak();
         *t.webview_hook.borrow_mut() = Some(Box::new(move |webview: &gtk::Widget| {
             if let Some(this) = weak.upgrade() {
                 this.install_drop_target(webview, DropKind::Files, &DropSlot::default());
@@ -1648,6 +1655,125 @@ impl Window {
                 self.schedule_persist();
             }
         }
+    }
+
+    /// Opens the note a wikilink (`[[Title]]`) points to: an open tab or a
+    /// note of the library with that title.
+    fn open_note_titled(self: &Rc<Self>, title: &str) {
+        let wanted = title.trim();
+        let wanted = wanted.rsplit('/').next().unwrap_or(wanted);
+        let wanted = wanted.strip_suffix(".md").unwrap_or(wanted).to_lowercase();
+        let open = self.tabs.borrow().iter().find(|(_, e)| e.tab.title().to_lowercase() == wanted).map(|(id, _)| id.clone());
+        let stored = || {
+            self.library
+                .borrow()
+                .iter()
+                .filter(|m| !m.trashed)
+                .find(|m| m.title.as_deref().or(m.label.as_deref()).is_some_and(|t| t.to_lowercase() == wanted))
+                .map(|m| m.id.clone())
+        };
+        match open.or_else(stored) {
+            Some(id) => self.open_note(&id),
+            None => self.toast(&t!("No note named “{}”", title.trim())),
+        }
+    }
+
+    /// Imports an Obsidian vault into the notes library (see `obsidian.rs`).
+    fn import_obsidian(self: &Rc<Self>) {
+        if !features::on(Feature::Folders) {
+            return;
+        }
+        let dialog = gtk::FileDialog::builder().title(t!("Import Obsidian Vault")).modal(true).build();
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let Ok(dir) = dialog.select_folder_future(Some(&this.win)).await else { return };
+            let Some(root) = dir.path() else { return };
+            let root = root.canonicalize().unwrap_or(root);
+            let name = root.file_name().map_or_else(|| "Obsidian".to_owned(), |n| n.to_string_lossy().into_owned());
+            let dest = crate::obsidian::attachment_dir(&name);
+            this.toast(&t!("Importing “{}”…", name));
+            let source = root.clone();
+            let result = gio::spawn_blocking(move || {
+                let scan = crate::obsidian::scan(&source, &dest)?;
+                let copied = crate::obsidian::copy_attachments(&scan, &dest)?;
+                Ok::<_, String>((scan, copied))
+            })
+            .await
+            .unwrap_or_else(|_| Err("import failed".into()));
+            match result {
+                Ok((scan, copied)) => this.add_vault(&root, scan, copied),
+                Err(e) => this.toast(&t!("Import failed: {}", e)),
+            }
+        });
+    }
+
+    /// Puts the notes of a scanned vault into its library folder; notes of
+    /// an earlier import of the same vault are skipped.
+    fn add_vault(self: &Rc<Self>, root: &Path, scan: crate::obsidian::Scan, attachments: usize) {
+        if scan.notes.is_empty() {
+            self.toast(&t!("No Markdown notes found in “{}”", scan.name));
+            return;
+        }
+        let mut record = self
+            .settings
+            .borrow()
+            .obsidian_vaults
+            .iter()
+            .find(|v| v.path == root)
+            .cloned()
+            .unwrap_or_else(|| store::ObsidianVault { path: root.to_path_buf(), ..Default::default() });
+        let (mut added, mut skipped) = (0, 0);
+        {
+            let mut folders = self.folders.borrow_mut();
+            if !folders.iter().any(|f| f.id == record.folder) {
+                let name = library::unique_name(&folders, None, &scan.name, None);
+                record.folder = store::new_id();
+                folders.push(Folder { id: record.folder.clone(), name, parent: None, collapsed: false });
+            }
+            for note in scan.notes {
+                if record.notes.contains_key(&note.rel) {
+                    skipped += 1;
+                    continue;
+                }
+                let folder = library::ensure_path(&mut folders, Some(&record.folder), &note.dirs, store::new_id);
+                let id = store::new_id();
+                if let Err(e) = store::write_note(&id, &note.content) {
+                    self.toast(&t!("Cannot store note: {}", e));
+                    break;
+                }
+                self.library.borrow_mut().push(TabMeta {
+                    id: id.clone(),
+                    kind: TabKind::Text,
+                    title: Some(note.title.clone()),
+                    language: Some("markdown".into()),
+                    language_locked: true,
+                    wrap: true,
+                    preview: true,
+                    folder,
+                    label: Some(note.title),
+                    ..Default::default()
+                });
+                record.notes.insert(note.rel, id);
+                added += 1;
+            }
+        }
+        {
+            let mut settings = self.settings.borrow_mut();
+            settings.obsidian_vaults.retain(|v| v.path != record.path);
+            settings.obsidian_vaults.push(record);
+        }
+        self.refresh_tree();
+        self.schedule_persist();
+        let mut message = t!("Imported {} notes from “{}”", added, scan.name);
+        match attachments {
+            0 => {}
+            1 => message.push_str(t!(", 1 attachment")),
+            n => message.push_str(&t!(", {} attachments", n)),
+        }
+        if skipped > 0 {
+            message.push_str(&t!(" ({} were already imported)", skipped));
+        }
+        self.toast(&message);
     }
 
     /// Opens a note of the library (or switches to its tab).
@@ -5843,6 +5969,9 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
         file.push((t!("New Flash Cards"), "win.new-flashcards"));
     }
     file.push((t!("Open File…"), "win.open"));
+    if context.features.folders {
+        file.push((t!("Import Obsidian Vault…"), "win.import-obsidian"));
+    }
     if text {
         file.extend([(t!("Save"), "win.save"), (t!("Save As…"), "win.save-as")]);
     }
