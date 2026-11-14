@@ -17,6 +17,8 @@
     <style id="function" name="Function" map-to="def:function"/>
     <style id="constant" name="Constant" map-to="def:special-constant"/>
     <style id="operator" name="Operator" map-to="def:operator"/>
+    <style id="keyword" name="Keyword" map-to="def:keyword"/>
+    <style id="date" name="Date or time" map-to="def:special-constant"/>
   </styles>
 
   <definitions>
@@ -44,13 +46,25 @@
             <context sub-pattern="1" style-ref="variable"/>
           </include>
         </context>
+        <context id="unit-definition">
+          <match>^\s*(unit)\s+(?=[\p{L}_])</match>
+          <include>
+            <context sub-pattern="1" style-ref="keyword"/>
+          </include>
+        </context>
+        <context id="convert" style-ref="keyword">
+          <match>(?&lt;=\s)(to|in|as|nach)(?=\s)|-&gt;|→</match>
+        </context>
+        <context id="date" style-ref="date">
+          <match>(?&lt;![\p{L}\d_.])(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}\.\d{1,2}\.\d{4}|\d{1,2}:\d{2}(:\d{2})?)(?!\d)</match>
+        </context>
         <context id="number" style-ref="number">
           <match>(?&lt;![\p{L}_])\d+(\.\d+)?|\.\d+</match>
         </context>
         <context id="functions" style-ref="function">
           <keyword>sqrt</keyword><keyword>abs</keyword><keyword>round</keyword>
           <keyword>floor</keyword><keyword>ceil</keyword><keyword>trunc</keyword>
-          <keyword>int</keyword><keyword>min</keyword><keyword>max</keyword>
+          <keyword>int</keyword><keyword>max</keyword>
           <keyword>sum</keyword><keyword>avg</keyword><keyword>sin</keyword>
           <keyword>cos</keyword><keyword>tan</keyword><keyword>asin</keyword>
           <keyword>acos</keyword><keyword>atan</keyword><keyword>rad</keyword>
@@ -58,8 +72,13 @@
           <keyword>log2</keyword><keyword>exp</keyword><keyword>qs</keyword>
           <keyword>digitsum</keyword><keyword>iqs</keyword><keyword>digitroot</keyword>
         </context>
+        <context id="date-functions" style-ref="function">
+          <match>\b(min|date|weekday|week|dayofyear|year|month|day|unix|jd|julian|hebrew|hijri|islamic)(?=\()</match>
+        </context>
         <context id="constants" style-ref="constant">
           <keyword>pi</keyword>
+          <keyword>today</keyword><keyword>now</keyword><keyword>tomorrow</keyword><keyword>yesterday</keyword>
+          <keyword>heute</keyword><keyword>jetzt</keyword><keyword>morgen</keyword><keyword>gestern</keyword>
         </context>
         <context id="operator" style-ref="operator">
           <match>[-+*/%^!=×÷·−]</match>

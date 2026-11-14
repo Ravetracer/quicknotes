@@ -386,6 +386,75 @@ A number or closing bracket directly before a name or bracket multiplies:
 | `ln(x)`, `log(x)`, `log2(x)`, `exp(x)` | logarithms (e, 10, 2) and e^x |
 | `pi` | 3.14159… (a variable named `pi` takes precedence) |
 
+## Units and Conversions {#units}
+
+Numbers in a calculation sheet can carry **units**. The result keeps the unit of the first
+value; `to` (also `in`, `as`, `->`) converts it:
+
+```
+a = 3 m + 20 cm          # = 3.2 m
+a to ft                  # = 10.4987 ft
+speed = 120 km / 1.5 h   # = 80 km/h
+speed in m/s             # = 22.2222 m/s
+100 °F to °C             # = 37.7778 °C
+2 h 30 min to min        # = 150 min
+100 min to h min         # = 1 h 40 min
+6 L/100km to mpg         # = 39.2024 mpg
+250 EUR in USD           # = 270.50 USD (rate of the day)
+```
+
+- Units: length (`m`, `km`, `in`, `ft`, `mi`, `nmi`, …), area (`m²`, `ha`, `ac`), volume (`L`,
+  `mL`, `gal`, `cup`, `tbsp`, `EL`, …), mass (`g`, `kg`, `t`, `lb`, `oz`, `ct`), time (`s`,
+  `min`, `h`, `d`, `wk`, `month`, `yr`), speed (`km/h`, `mph`, `kn`), temperature (`°C`, `°F`,
+  `K`), pressure (`Pa`, `hPa`, `bar`, `psi`, `atm`), energy (`J`, `kWh`, `kcal`, `eV`), power
+  (`W`, `kW`, `hp`, `PS`), force (`N`, `kp`), angle (`°`, `rad`, `gon`), data (`bit`, `B`, `kB`,
+  `MB`, `GiB`, `Mbps`), frequency (`Hz`, `rpm`), electricity (`A`, `V`, `Ω`, `mAh`) and
+  currencies (`EUR`, `USD`, `GBP`, `CHF`, `JPY`, `€`, `$`, `£`, … ).
+- Common prefixes work (`km`, `mg`, `kWh`, `MiB`), as do long names (`meter`, `Stunden`), `m²`
+  or `m2` and combinations like `kg*m/s^2`. **While typing**, unit names and conversion targets
+  are suggested.
+- Several units at once: `5 ft 3 in to cm`, `to h min`, `to d h min`.
+- Values of different kinds cannot be added: `5 kg + 3 m` is an error. Plain numbers,
+  however, can be converted to `hex`, `bin`, `oct` and `roman` (`255 to hex` = 0xFF).
+- A number directly before a unit or name binds stronger than `/`: `120 km / 1.5 h` divides
+  by 1.5 hours. Variables take precedence over units of the same name.
+- Temperatures: `25 °C - 20 °C` is a difference (5 °C = 5 K), `20 °C + 5 K` = 25 °C.
+- Own units: `unit floor = 2.8 m`, then `5 floor to m`.
+- **Currencies** use the daily reference rates of the European Central Bank. They are only
+  downloaded when a sheet uses a currency other than the euro, and are kept for offline use.
+
+The **unit converter** (button in the header bar, or *Unit Converter…* in the context menu)
+lets you pick the kind, the units and a value, shows the result and inserts the line into
+the sheet.
+
+**Dates and times**
+
+```
+2026-12-24 - today             # days until Christmas
+today + 6 weeks                # a date
+24.12.2026 to weekday          # Thursday
+2026-01-31 + 1 month           # Sat 2026-02-28
+14:00 Berlin to Tokyo          # 22:00 JST
+now in New York                # current time there
+2026-12-24 18:00 - now         # e.g. 40 d 2 h 37 min
+1700000000 to date             # Unix timestamp → date
+```
+
+- Dates are written `2026-12-24` or `24.12.2026`, times `14:30` or `14:30:15`, both together
+  as `2026-12-24 18:00`. `today`, `now`, `tomorrow` and `yesterday` work, too (also `heute`,
+  `jetzt`, `morgen`, `gestern`). Note: `14:30` without spaces is a time; write `14 : 30` or
+  `14 / 30` to divide.
+- Whole days, weeks, months and years count in the calendar; hours and minutes give a time.
+- Time zones: city names (`Tokyo`, `New York`, `München`), IANA names (`Europe/Berlin`),
+  abbreviations (`CET`, `PST`), `UTC`, `UTC+2` or `local`. A zone after a time or date says
+  where it is meant; after `to` it converts.
+- Date targets: `weekday`, `week` (ISO week), `dayofyear`, `unix`, `jd` (Julian day number),
+  `julian`, `hebrew`, `hijri` (arithmetic Islamic calendar, can differ by a day from the
+  observed one), `iso`.
+- Functions: `date(y, m, d)`, `weekday(d)`, `week(d)`, `year(d)`, `month(d)`, `day(d)`,
+  `unix(seconds)`, `jd(n)`, and from other calendars `julian(y, m, d)`, `hebrew(y, m, d)`
+  (month 1 = Nisan, 7 = Tishrei) and `hijri(y, m, d)`.
+
 ## Templates {#templates}
 
 A line starting with `>` is a **template**. Its filled-in text appears as result and can be

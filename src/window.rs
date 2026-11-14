@@ -105,6 +105,8 @@ pub struct Window {
     /// Closing all tabs for a restore: no confirmations, no undo.
     bulk_close: Cell<bool>,
     present_btn: adw::SplitButton,
+    /// Header button of the unit converter (calculation sheets).
+    convert_btn: gtk::Button,
     /// Last choices of the image export (format, layout).
     image_export: Cell<(usize, usize)>,
     /// Header button with the developer tools.
@@ -396,6 +398,9 @@ impl Window {
         header.pack_end(&preview_btn);
         header.pack_end(&find_btn);
         header.pack_end(&present_btn);
+        let convert_btn = icon_button(&crate::icons::format_icon("convert"), t!("Unit Converter"), "win.unit-converter");
+        convert_btn.set_visible(false);
+        header.pack_end(&convert_btn);
 
         // ----- tabs ------------------------------------------------------
         let view = adw::TabView::new();
@@ -582,6 +587,7 @@ impl Window {
             menu_page: RefCell::new(None),
             bulk_close: Cell::new(false),
             present_btn,
+            convert_btn,
             image_export: Cell::new((0, 0)),
             tools_btn: tools_btn.clone(),
             presentation: RefCell::new(None),
@@ -692,6 +698,7 @@ impl Window {
             w.new_note();
         });
         self.action("new-calculation", &["<Control><Shift>n"], |w| w.new_calculation());
+        self.action("unit-converter", &[], |w| w.unit_converter());
         self.action("new-presentation", &[], |w| {
             if features::on(Feature::Presentations) {
                 w.new_presentation();
@@ -4724,6 +4731,7 @@ impl Window {
                 self.set_enabled("export-pdf", exportable);
                 let slides = t.preview_kind() == Some(PreviewKind::Slides);
                 self.set_presentable(slides);
+                self.set_calc_tools(t.is_calc());
                 let markdown = matches!(t.preview_kind(), Some(PreviewKind::Markdown | PreviewKind::Slides));
                 self.set_format_enabled(markdown);
                 let emmet = t.emmet_syntax();
@@ -4741,6 +4749,7 @@ impl Window {
                 self.set_enabled("emmet-wrap", false);
                 self.set_format_enabled(false);
                 self.set_presentable(false);
+                self.set_calc_tools(false);
             }
         }
         self.guard.set(false);
@@ -4919,6 +4928,22 @@ impl Window {
         });
         t.show_popover(&popover, gdk::Rectangle::new(x, y, 1, rect.height()));
         entry.grab_focus();
+    }
+
+    fn set_calc_tools(&self, on: bool) {
+        self.set_enabled("unit-converter", on);
+        self.convert_btn.set_visible(on);
+    }
+
+    /// Opens the unit converter; its line goes below the cursor line.
+    fn unit_converter(self: &Rc<Self>) {
+        let Some(t) = self.current_text().filter(|t| t.is_calc()) else { return };
+        let weak = Rc::downgrade(&t);
+        crate::convert_dialog::open(&self.win, move |line| {
+            let Some(t) = weak.upgrade() else { return };
+            t.insert_line(line);
+            t.view.grab_focus();
+        });
     }
 
     fn set_presentable(&self, on: bool) {
@@ -5916,6 +5941,9 @@ fn editor_context_menu(style: TabStyle, emmet: bool) -> gio::Menu {
     }
     if style == TabStyle::Slides {
         menu.append_section(None, &presentation_section());
+    }
+    if style == TabStyle::Calc {
+        menu.append_section(None, &menu_section(&[(t!("Unit Converter…"), "win.unit-converter")]));
     }
     if features::on(Feature::Geocaching) {
         menu.append_section(None, &geocaching_menu());

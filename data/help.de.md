@@ -402,6 +402,77 @@ Eine Zahl oder schließende Klammer direkt vor einem Namen oder einer Klammer mu
 | `ln(x)`, `log(x)`, `log2(x)`, `exp(x)` | Logarithmen (e, 10, 2) und e^x |
 | `pi` | 3.14159… (eine Variable namens `pi` hat Vorrang) |
 
+## Einheiten und Umrechnungen {#units}
+
+Zahlen in einer Berechnung können **Einheiten** haben. Das Ergebnis behält die Einheit des
+ersten Werts; `to` (auch `in`, `as`, `nach`, `->`) rechnet um:
+
+```
+a = 3 m + 20 cm          # = 3.2 m
+a to ft                  # = 10.4987 ft
+tempo = 120 km / 1.5 h   # = 80 km/h
+tempo in m/s             # = 22.2222 m/s
+100 °F to °C             # = 37.7778 °C
+2 h 30 min to min        # = 150 min
+100 min to h min         # = 1 h 40 min
+6 L/100km to mpg         # = 39.2024 mpg
+250 EUR in USD           # = 270.50 USD (Tageskurs)
+```
+
+- Einheiten: Länge (`m`, `km`, `in`, `ft`, `mi`, `nmi`, …), Fläche (`m²`, `ha`, `ac`), Volumen
+  (`L`, `mL`, `gal`, `cup`, `EL`, `TL`, …), Masse (`g`, `kg`, `t`, `lb`, `oz`, `ct`, `Pfund`),
+  Zeit (`s`, `min`, `h`, `d`, `wk`, `month`, `yr`), Geschwindigkeit (`km/h`, `mph`, `kn`),
+  Temperatur (`°C`, `°F`, `K`), Druck (`Pa`, `hPa`, `bar`, `psi`, `atm`), Energie (`J`, `kWh`,
+  `kcal`, `eV`), Leistung (`W`, `kW`, `PS`, `hp`), Kraft (`N`, `kp`), Winkel (`°`, `rad`,
+  `gon`), Daten (`bit`, `B`, `kB`, `MB`, `GiB`, `Mbps`), Frequenz (`Hz`, `rpm`), Elektrizität
+  (`A`, `V`, `Ω`, `mAh`) und Währungen (`EUR`, `USD`, `GBP`, `CHF`, `JPY`, `€`, `$`, `£`, …).
+- Übliche Vorsätze funktionieren (`km`, `mg`, `kWh`, `MiB`), ebenso ausgeschriebene Namen
+  (`Meter`, `Stunden`), `m²` oder `m2` und Kombinationen wie `kg*m/s^2`. **Beim Tippen** werden
+  Einheiten und Umrechnungsziele vorgeschlagen.
+- Mehrere Einheiten auf einmal: `5 ft 3 in to cm`, `to h min`, `to d h min`.
+- Werte verschiedener Art lassen sich nicht addieren: `5 kg + 3 m` ist ein Fehler. Reine
+  Zahlen lassen sich nach `hex`, `bin`, `oct` und `roman` umrechnen (`255 to hex` = 0xFF).
+- Eine Zahl direkt vor einer Einheit oder einem Namen bindet stärker als `/`:
+  `120 km / 1.5 h` teilt durch 1,5 Stunden. Variablen haben Vorrang vor gleichnamigen Einheiten.
+- Temperaturen: `25 °C - 20 °C` ist eine Differenz (5 °C = 5 K), `20 °C + 5 K` = 25 °C.
+- Eigene Einheiten: `unit etage = 2.8 m`, dann `5 etage to m`.
+- **Währungen** nutzen die täglichen Referenzkurse der Europäischen Zentralbank. Sie werden nur
+  geladen, wenn ein Rechenblatt eine andere Währung als den Euro verwendet, und für die
+  Offline-Nutzung gespeichert.
+
+Der **Einheitenumrechner** (Knopf in der Kopfleiste oder *Einheitenumrechner…* im Kontextmenü)
+lässt Art, Einheiten und Wert auswählen, zeigt das Ergebnis und fügt die Zeile ins
+Rechenblatt ein.
+
+**Datum und Uhrzeit**
+
+```
+2026-12-24 - heute             # Tage bis Weihnachten
+heute + 6 weeks                # ein Datum
+24.12.2026 to weekday          # Donnerstag
+2026-01-31 + 1 month           # Sa. 28.02.2026
+14:00 Berlin to Tokyo          # 22:00 JST
+jetzt in New York              # aktuelle Uhrzeit dort
+2026-12-24 18:00 - jetzt       # z. B. 40 d 2 h 37 min
+1700000000 to date             # Unix-Zeitstempel → Datum
+```
+
+- Datumsangaben als `2026-12-24` oder `24.12.2026`, Uhrzeiten als `14:30` oder `14:30:15`,
+  beides zusammen als `2026-12-24 18:00`. `heute`, `jetzt`, `morgen` und `gestern` gehen auch
+  (ebenso `today`, `now`, `tomorrow`, `yesterday`). Achtung: `14:30` ohne Leerzeichen ist eine
+  Uhrzeit; zum Teilen `14 : 30` oder `14 / 30` schreiben.
+- Ganze Tage, Wochen, Monate und Jahre zählen im Kalender; Stunden und Minuten ergeben eine
+  Uhrzeit.
+- Zeitzonen: Städtenamen (`Tokyo`, `New York`, `München`), IANA-Namen (`Europe/Berlin`),
+  Abkürzungen (`MEZ`, `CET`, `PST`), `UTC`, `UTC+2` oder `local`. Eine Zone nach einer Uhrzeit
+  oder einem Datum sagt, wo sie gilt; nach `to` wird umgerechnet.
+- Datumsziele: `weekday`, `week` (ISO-Kalenderwoche), `dayofyear`, `unix`, `jd` (Julianisches
+  Datum), `julian`, `hebrew`, `hijri` (arithmetischer islamischer Kalender, kann um einen Tag
+  vom beobachteten abweichen), `iso`.
+- Funktionen: `date(j, m, t)`, `weekday(d)`, `week(d)`, `year(d)`, `month(d)`, `day(d)`,
+  `unix(sekunden)`, `jd(n)` sowie aus anderen Kalendern `julian(j, m, t)`, `hebrew(j, m, t)`
+  (Monat 1 = Nisan, 7 = Tischri) und `hijri(j, m, t)`.
+
 ## Vorlagen {#templates}
 
 Eine Zeile, die mit `>` beginnt, ist eine **Vorlage**. Ihr ausgefüllter Text erscheint als

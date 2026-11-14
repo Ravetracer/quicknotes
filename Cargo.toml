@@ -39,6 +39,7 @@ jpeg-encoder = "0.7"
 zip = { version = "9.5", default-features = false, features = ["deflate"] }
 ureq = { version = "2.12", features = ["json"] }
 libsecret = "0.6"
+jiff = { version = "0.2", features = ["tzdb-bundle-always"] }
 
 [profile.release]
 opt-level = 3

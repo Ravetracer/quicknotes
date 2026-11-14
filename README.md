@@ -68,6 +68,10 @@ after a restart.
 - Font size via Ctrl+mouse wheel or Ctrl +/−/0 (the preview follows)
 - **Calculation sheets**: variables, operators, functions and live results per line;
   templates like `> N ab° cd.{e*3:3}` fill in calculated values (e.g. Geocaching coordinates)
+- **Units and conversions** in calculation sheets: values with units (`120 km / 1.5 h`),
+  conversions with `to` (`100 °F to °C`, `250 EUR in USD` with daily ECB rates), dates and
+  durations (`2026-12-24 - today`), time zones (`14:00 Berlin to Tokyo`), other calendars
+  (Julian, Hebrew, Islamic) and a unit converter dialog; unit names are suggested while typing
 - **Geocaching tools** in the editor's context menu: ROT13/5/18/47, Caesar, letter value
   (sums, checksums), letter frequency, Scrabble values, prime alphabet, hex, ASCII, binary,
   Roman numerals, Morse code, phone keypad — results are inserted below the selection

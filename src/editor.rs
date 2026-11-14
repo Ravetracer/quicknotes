@@ -191,6 +191,8 @@ pub struct EditorTab {
     pub message_hook: RefCell<Option<MessageHook>>,
     calc: RefCell<Option<CalcColumn>>,
     calc_timer: RefCell<Option<glib::SourceId>>,
+    /// This tab (for callbacks of methods that only get `&self`).
+    me: RefCell<std::rc::Weak<EditorTab>>,
     /// Presentations: source lines of the slides (as of the last render) and
     /// the slide shown in the preview.
     slide_lines: RefCell<Vec<(usize, usize)>>,
@@ -236,6 +238,7 @@ impl EditorTab {
         let completion = view.completion();
         completion.set_show_icons(false);
         completion.add_provider(&crate::completion::SlidesProvider::default());
+        completion.add_provider(&crate::completion::CalcProvider::default());
 
         let scrolled = gtk::ScrolledWindow::builder()
             .child(&view)
@@ -305,6 +308,7 @@ impl EditorTab {
             message_hook: RefCell::new(None),
             calc: RefCell::new(None),
             calc_timer: RefCell::new(None),
+            me: RefCell::new(std::rc::Weak::new()),
             slide_lines: RefCell::new(Vec::new()),
             shown_slide: Cell::new(0),
             snippet: RefCell::new(None),
@@ -330,6 +334,7 @@ impl EditorTab {
                 t.unlock();
             }
         });
+        *tab.me.borrow_mut() = Rc::downgrade(&tab);
         tab.buffer.create_tag(Some(TASK_DONE_TAG), &[("strikethrough", &true)]);
         tab.buffer.create_tag(Some(TASK_BOX_TAG), &[("weight", &700)]);
 
@@ -1070,6 +1075,32 @@ impl EditorTab {
         }
     }
 
+    /// Puts `text` on the cursor line if it is empty, otherwise on a new
+    /// line below it, and moves the cursor to its end.
+    pub fn insert_line(&self, text: &str) {
+        let cursor = self.buffer.iter_at_mark(&self.buffer.get_insert());
+        let empty = self.line_text(cursor.line()).is_none_or(|l| l.trim().is_empty());
+        let mut at = cursor;
+        if empty {
+            at.set_line_offset(0);
+        }
+        let mut end = at;
+        if !end.ends_line() {
+            end.forward_to_line_end();
+        }
+        self.buffer.begin_user_action();
+        if empty {
+            self.buffer.delete(&mut at, &mut end);
+            self.buffer.insert(&mut at, text);
+        } else {
+            self.buffer.insert(&mut end, &format!("\n{text}"));
+            at = end;
+        }
+        self.buffer.end_user_action();
+        self.buffer.place_cursor(&at);
+        self.view.scroll_mark_onscreen(&self.buffer.get_insert());
+    }
+
     /// Whether there is a Markdown table above the cursor.
     pub fn table_above_cursor(&self) -> bool {
         let cursor = self.buffer.iter_at_mark(&self.buffer.get_insert());
@@ -1514,6 +1545,15 @@ impl EditorTab {
         *column.results.borrow_mut() = calc::evaluate(&self.text());
         drop(calc);
         self.fit_calc_column();
+        // Currencies: fetch the exchange rates, then calculate again.
+        if crate::rates::take_requested() {
+            let weak = self.me.borrow().clone();
+            crate::rates::refresh(move || {
+                if let Some(t) = weak.upgrade() {
+                    t.recalc();
+                }
+            });
+        }
     }
 
     /// Sizes the result column to the widest result.
@@ -2119,6 +2159,7 @@ fn result_markup(result: &LineResult) -> String {
     match result {
         LineResult::Empty => String::new(),
         LineResult::Value(v) => format!("<span alpha=\"70%\">= {}</span>", esc(&calc::format_number(*v))),
+        LineResult::Shown(s) => format!("<span alpha=\"70%\">= {}</span>", esc(&truncate(s, 80))),
         LineResult::Text(t) => format!("<b>{}</b>", esc(&truncate(t, 80))),
         LineResult::Error(e) => format!("<span foreground=\"#e5534b\">⚠ {}</span>", esc(&truncate(e, 60))),
     }
