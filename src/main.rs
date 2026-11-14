@@ -10,6 +10,8 @@ mod checklist;
 mod completion;
 mod convert_dialog;
 mod crypto;
+mod data_assist;
+mod datadoc;
 mod editor;
 mod emmet;
 mod epub;
@@ -25,6 +27,8 @@ mod import;
 mod html;
 mod icons;
 mod images;
+mod json_lint;
+mod json_schema;
 mod image_tab;
 mod kanban;
 mod langs;
@@ -43,6 +47,7 @@ mod rates;
 mod remote;
 mod presenter;
 mod rst;
+mod schemas;
 mod slides;
 mod slides_assist;
 mod stats;
@@ -54,6 +59,9 @@ mod units;
 mod themes;
 mod window;
 mod xdnd;
+mod xml_lint;
+mod xsd;
+mod yaml_lint;
 
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -74,6 +82,10 @@ const APP_CSS: &str = r#"
     border-bottom: 1px solid alpha(currentColor, 0.12);
 }
 .calc-results { border-left: 1px solid alpha(currentColor, 0.12); }
+.problems-panel { border-top: 1px solid alpha(currentColor, 0.15); }
+.problems-head { padding: 2px 4px 2px 10px; }
+.problems-list { background: transparent; }
+.problems-list > row { min-height: 0; padding: 0; }
 .font-group-start { border-top: 1px solid alpha(currentColor, 0.15); padding-top: 8px; margin-top: 4px; }
 .image-canvas { background-color: alpha(currentColor, 0.04); }
 .image-controls { border-radius: 10px; }

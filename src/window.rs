@@ -91,6 +91,9 @@ pub struct Window {
     status_pos: gtk::Label,
     /// Words, characters and paragraphs of the document or selection.
     status_counts: gtk::Label,
+    status_problems: gtk::Button,
+    problem_errors: gtk::Label,
+    problem_warnings: gtk::Label,
     counts_pending: Cell<bool>,
     zoom_btn: gtk::Button,
     lang_drop: gtk::DropDown,
@@ -145,7 +148,7 @@ pub struct Window {
     main_menu: gio::Menu,
     menu_context: Cell<Option<MenuContext>>,
     /// Style each text tab's context menu was last built for.
-    tab_styles: RefCell<HashMap<String, (TabStyle, bool)>>,
+    tab_styles: RefCell<HashMap<String, (TabStyle, bool, bool)>>,
     /// The app password (wrapped data key); `None` when off.
     vault: RefCell<Option<crypto::Lock>>,
     /// The window closes for locking: nothing must be written any more.
@@ -367,7 +370,7 @@ impl Window {
         header.pack_start(&icon_button("document-save-symbolic", t!("Save to file (Ctrl+S)"), "win.save"));
 
         let main_menu = gio::Menu::new();
-        fill_main_menu(&main_menu, MenuContext { style: None, has_file: false, emmet: false, app_password: false, features: features::current(), lock: None });
+        fill_main_menu(&main_menu, MenuContext { style: None, has_file: false, emmet: false, app_password: false, features: features::current(), lock: None, data: false });
         let menu_btn = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
             .popover(&nested_menu(&main_menu))
@@ -431,6 +434,19 @@ impl Window {
             .build();
         let status_pos = gtk::Label::new(None);
         let status_counts = gtk::Label::builder().margin_start(12).margin_end(12).build();
+        // Problems of JSON, YAML and XML documents; toggles the problems list.
+        let problem_errors = gtk::Label::new(None);
+        let problem_warnings = gtk::Label::new(None);
+        let problems_content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        let error_icon = gtk::Image::from_icon_name("dialog-error-symbolic");
+        let warning_icon = gtk::Image::from_icon_name("dialog-warning-symbolic");
+        warning_icon.set_margin_start(6);
+        problems_content.append(&error_icon);
+        problems_content.append(&problem_errors);
+        problems_content.append(&warning_icon);
+        problems_content.append(&problem_warnings);
+        let status_problems = gtk::Button::builder().child(&problems_content).action_name("win.problems").visible(false).build();
+        status_problems.add_css_class("flat");
         let zoom_btn = gtk::Button::builder()
             .label("12 pt")
             .tooltip_text(t!("Font size – Ctrl+wheel or Ctrl+/−, click to reset"))
@@ -468,6 +484,7 @@ impl Window {
         enter_picks_first_match(&lang_drop);
 
         status.append(&status_info);
+        status.append(&status_problems);
         status.append(&status_counts);
         status.append(&status_pos);
         status.append(&zoom_box);
@@ -564,6 +581,8 @@ impl Window {
             plantuml_command: RefCell::new(settings.plantuml_command.clone()),
             format_bar: Cell::new(settings.format_bar),
             learning: RefCell::new(crate::learning::Store::load()),
+            problems_panel: Cell::new(settings.problems_panel),
+            yaml_rules: Cell::new(settings.yaml_rules),
         });
 
         let this = Rc::new(Self {
@@ -579,6 +598,9 @@ impl Window {
             status_info,
             status_pos,
             status_counts,
+            status_problems,
+            problem_errors,
+            problem_warnings,
             counts_pending: Cell::new(false),
             zoom_btn,
             lang_drop,
@@ -994,6 +1016,28 @@ impl Window {
             }
         });
         self.toggle_action("focus-mode", &["<Alt>Return"], |w, on| w.set_focus_mode(on));
+        self.toggle_action("problems", &["<Control><Shift>m"], |w, on| {
+            w.settings.borrow_mut().problems_panel = on;
+            w.shared.problems_panel.set(on);
+            for t in w.text_tabs() {
+                t.sync_problems_panel();
+            }
+            w.schedule_persist();
+        });
+        let problems = self.settings.borrow().problems_panel;
+        self.set_toggle("problems", true, problems);
+        self.action("assign-schema", &[], |w| w.assign_schema());
+        // Downloaded schemas: check the documents again.
+        let weak = self.weak();
+        crate::schemas::set_listener(move || {
+            if let Some(this) = weak.upgrade() {
+                for t in this.text_tabs() {
+                    if t.data_kind().is_some() {
+                        t.lint();
+                    }
+                }
+            }
+        });
         self.toggle_action("format-bar", &[], |w, on| {
             w.settings.borrow_mut().format_bar = on;
             w.set_format_bar(on);
@@ -1492,6 +1536,15 @@ impl Window {
                 this.install_drop_target(view.upcast_ref(), DropKind::Editor(tab.clone()), &slot);
             }
         });
+        let weak = self.weak();
+        let tab_id = id.clone();
+        *t.lint_hook.borrow_mut() = Some(Box::new(move || {
+            if let Some(this) = weak.upgrade() {
+                if this.is_current(&tab_id) {
+                    this.update_problems_status();
+                }
+            }
+        }));
         let weak = self.weak();
         *t.message_hook.borrow_mut() = Some(Box::new(move |text: &str| {
             if let Some(this) = weak.upgrade() {
@@ -3137,6 +3190,7 @@ impl Window {
         let t = EditorTab::new(meta.id.clone(), self.shared.clone());
         *t.path.borrow_mut() = meta.path.clone();
         *t.custom_title.borrow_mut() = meta.title.clone();
+        *t.schema.borrow_mut() = meta.schema.clone();
         t.language_locked.set(meta.language_locked);
         t.split.set(meta.split);
         t.set_wrap(meta.wrap);
@@ -4081,6 +4135,7 @@ impl Window {
             if let Err(e) = result {
                 this.toast(&t!("Cannot open {}: {}", path.display(), e));
             }
+            t.lint();
             this.refresh_title(&t.id);
             if this.is_current(&t.id) {
                 this.update_status();
@@ -4536,10 +4591,89 @@ impl Window {
                     this.toast(&t!("Saved {}", path.display()));
                     this.refresh_title(&t.id);
                     this.mark_dirty(&t.id);
+                    t.lint();
                     this.sync_ui();
                 }
                 Err(e) => this.toast(&t!("Save failed: {}", e)),
             }
+        });
+    }
+
+    /// Assigns a JSON Schema or XML Schema (URL or file) to the current note.
+    fn assign_schema(self: &Rc<Self>) {
+        let Some(t) = self.current_text().filter(|t| t.data_kind().is_some()) else { return };
+        let entry = gtk::Entry::builder()
+            .text(t.schema.borrow().clone().unwrap_or_default())
+            .placeholder_text(t!("URL or file"))
+            .activates_default(true)
+            .hexpand(true)
+            .build();
+        let choose = gtk::Button::builder().icon_name("document-open-symbolic").tooltip_text(t!("Choose File…")).build();
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        row.add_css_class("linked");
+        row.append(&entry);
+        row.append(&choose);
+        let current = gtk::Label::builder().wrap(true).xalign(0.0).build();
+        current.add_css_class("dim-label");
+        if let Some(label) = t.schema_label() {
+            current.set_text(&format!("{}\n{}", label, t.schema_url().unwrap_or_default()));
+        } else {
+            current.set_text(t!("No schema in use. Without one, only the syntax is checked."));
+        }
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        content.append(&row);
+        content.append(&current);
+        let dialog = adw::AlertDialog::new(
+            Some(t!("Assign Schema")),
+            Some(t!("A JSON Schema for JSON and YAML, an XML Schema (XSD) for XML. An assigned schema replaces the one named in the document or found by the file name.")),
+        );
+        dialog.set_extra_child(Some(&content));
+        let assigned = t.schema.borrow().is_some();
+        if assigned {
+            dialog.add_responses(&[("cancel", t!("_Cancel")), ("remove", t!("_Remove")), ("assign", t!("_Assign"))]);
+            dialog.set_response_appearance("remove", adw::ResponseAppearance::Destructive);
+        } else {
+            dialog.add_responses(&[("cancel", t!("_Cancel")), ("assign", t!("_Assign"))]);
+        }
+        dialog.set_response_appearance("assign", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("assign"));
+        dialog.set_close_response("cancel");
+        let win = self.win.clone();
+        let target = entry.clone();
+        choose.connect_clicked(move |_| {
+            let filters = gio::ListStore::new::<gtk::FileFilter>();
+            let filter = gtk::FileFilter::new();
+            filter.set_name(Some(t!("Schemas")));
+            for pattern in ["*.json", "*.xsd", "*.yaml", "*.yml"] {
+                filter.add_pattern(pattern);
+            }
+            filters.append(&filter);
+            let all = gtk::FileFilter::new();
+            all.set_name(Some(t!("All Files")));
+            all.add_pattern("*");
+            filters.append(&all);
+            let picker = gtk::FileDialog::builder().title(t!("Choose Schema")).modal(true).filters(&filters).default_filter(&filter).build();
+            let win = win.clone();
+            let target = target.clone();
+            glib::spawn_future_local(async move {
+                if let Ok(file) = picker.open_future(Some(&win)).await {
+                    if let Some(path) = file.path() {
+                        target.set_text(&path.to_string_lossy());
+                    }
+                }
+            });
+        });
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let schema = match dialog.choose_future(&this.win).await.as_str() {
+                "assign" => Some(entry.text().trim().to_owned()).filter(|s| !s.is_empty()),
+                "remove" => None,
+                _ => return,
+            };
+            *t.schema.borrow_mut() = schema;
+            t.lint();
+            this.mark_dirty(&t.id);
+            this.update_problems_status();
         });
     }
 
@@ -5200,6 +5334,7 @@ impl Window {
                 Some(Tab::Text(t)) if t.path.borrow().is_none() || t.lock().is_some() => Some(t.lock_state()),
                 _ => None,
             },
+            data: matches!(&current, Some(Tab::Text(t)) if t.data_kind().is_some()),
         };
         if self.menu_context.get() != Some(context) {
             self.menu_context.set(Some(context));
@@ -5211,9 +5346,9 @@ impl Window {
         styles.retain(|id, _| tabs.contains_key(id));
         for (id, entry) in tabs.iter() {
             let Tab::Text(t) = &entry.tab else { continue };
-            let key = (TabStyle::of(&entry.tab), t.emmet_syntax().is_some());
+            let key = (TabStyle::of(&entry.tab), t.emmet_syntax().is_some(), t.data_kind().is_some());
             if styles.get(id) != Some(&key) {
-                t.set_context_menus(editor_context_menu(key.0, key.1).upcast(), Some(table_menu().upcast()));
+                t.set_context_menus(editor_context_menu(key.0, key.1, key.2).upcast(), Some(table_menu().upcast()));
                 styles.insert(id.clone(), key);
             }
         }
@@ -5429,8 +5564,26 @@ impl Window {
         self.status_counts.set_text(&label);
     }
 
+    /// Errors and warnings of the current JSON, YAML or XML tab in the status bar.
+    fn update_problems_status(&self) {
+        let Some(t) = self.current_text().filter(|t| t.data_kind().is_some()) else {
+            self.status_problems.set_visible(false);
+            return;
+        };
+        let (errors, warnings) = t.problem_counts();
+        self.problem_errors.set_text(&errors.to_string());
+        self.problem_warnings.set_text(&warnings.to_string());
+        let mut tip = vec![t!("Problems list (Ctrl+Shift+M)").to_owned()];
+        if let Some(schema) = t.schema_label() {
+            tip.push(schema);
+        }
+        self.status_problems.set_tooltip_text(Some(&tip.join("\n")));
+        self.status_problems.set_visible(true);
+    }
+
     fn update_status(&self) {
         self.schedule_counts();
+        self.update_problems_status();
         match self.current() {
             Some(Tab::Text(t)) => {
                 let mut info = vec![match t.path.borrow().as_ref() {
@@ -6127,6 +6280,23 @@ impl prefs::Handler for PrefsBridge {
         });
     }
 
+    fn set_yaml_rule(&self, key: &str, on: bool) {
+        self.with(|w| {
+            let rules = {
+                let mut s = w.settings.borrow_mut();
+                s.yaml_rules.set(key, on);
+                s.yaml_rules
+            };
+            w.shared.yaml_rules.set(rules);
+            for t in w.text_tabs() {
+                if t.data_kind() == Some(crate::data_assist::Kind::Yaml) {
+                    t.lint();
+                }
+            }
+            w.schedule_persist();
+        });
+    }
+
     fn set_ligatures(&self, on: bool) {
         self.with(|w| {
             w.settings.borrow_mut().ligatures = on;
@@ -6218,6 +6388,8 @@ struct MenuContext {
     app_password: bool,
     /// Password state of the current tab, if it can have one.
     lock: Option<LockState>,
+    /// The current tab is JSON, YAML or XML (with the feature on).
+    data: bool,
 }
 
 /// Tab password commands: all of them (tab context menu, enabled per tab) or
@@ -6340,6 +6512,9 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
     if context.emmet {
         menu.append_section(None, &emmet_section());
     }
+    if context.data {
+        menu.append_section(None, &data_section());
+    }
 
     let mut view: Vec<(&str, &str)> = Vec::new();
     if text {
@@ -6364,6 +6539,11 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
     );
 }
 
+/// Schema commands for JSON, YAML and XML documents.
+fn data_section() -> gio::Menu {
+    menu_section(&[(t!("Assign Schema…"), "win.assign-schema"), (t!("Problems List"), "win.problems")])
+}
+
 fn emmet_section() -> gio::Menu {
     menu_section(&[
         (t!("Expand Emmet Abbreviation"), "win.emmet-expand"),
@@ -6372,10 +6552,13 @@ fn emmet_section() -> gio::Menu {
 }
 
 /// Extra entries for an editor's right-click menu.
-fn editor_context_menu(style: TabStyle, emmet: bool) -> gio::Menu {
+fn editor_context_menu(style: TabStyle, emmet: bool, data: bool) -> gio::Menu {
     let menu = gio::Menu::new();
     if emmet {
         menu.append_section(None, &emmet_section());
+    }
+    if data {
+        menu.append_section(None, &data_section());
     }
     if matches!(style, TabStyle::Note | TabStyle::Document | TabStyle::Slides | TabStyle::Cards) {
         menu.append_section(

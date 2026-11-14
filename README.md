@@ -93,6 +93,10 @@ after a restart.
   by another program (Dropbox, Syncthing, …) or S3-compatible storage: notes, folders and trash
   end-to-end encrypted with a sync password; at start, every five minutes and when closing;
   both-sides changes kept as conflict copies
+- **Data formats** (switchable): JSON, YAML and XML are checked while typing (syntax, duplicate keys,
+  yamllint-like style rules) with underlines and a problems list; validation and completion from
+  JSON Schema and XML Schema (XSD) – assigned to the note, named in the document or found by file
+  name in the SchemaStore catalog
 - Editor font selectable in the preferences (e.g. fonts with ligatures like Fira Code); ligatures can be switched off
 
 ## Keyboard shortcuts
@@ -112,6 +116,7 @@ after a restart.
 | F3 / Shift+F3 | Next / previous match |
 | Ctrl+Alt+B | Beautify (JSON/MongoDB/XML/YAML/SQL, auto-detected) |
 | Ctrl+Alt+M | Minify (JSON/MongoDB/XML) |
+| Ctrl+Shift+M | Problems list (JSON, YAML, XML) |
 | Ctrl+Shift+V | Toggle preview (Markdown, reStructuredText, PlantUML, HTML) |
 | Ctrl+Shift+E / Ctrl+Shift+P | Export as HTML / PDF (Markdown, reStructuredText, presentations) |
 | Ctrl+F5 / Shift+F5 | Start presentation from the beginning / from the current slide |
@@ -228,7 +233,18 @@ Tabs of files that don't exist on this computer are skipped.
 ├── icons/            # bundled application icon (for the window/About dialog)
 ├── backups/          # automatic backups taken before "Restore → Replace"
 └── github-sync.json  # what was synced last time (encrypted with the app password)
+
+~/.cache/quicknotes/schemas/   # downloaded JSON/XML schemas and the SchemaStore catalog
 ```
+
+## Data formats
+
+JSON is read by a strict parser of its own (`src/json_lint.rs`), YAML by `yaml-rust2` with
+positions (`src/yaml_lint.rs`); both produce a tree that `src/json_schema.rs` validates (drafts 4
+to 2020-12, `$ref` across files, `unevaluatedProperties`; `format` is not checked). XML
+well-formedness and XSD validation use libxml2 through FFI (`src/xml_lint.rs`), with an entity
+loader that serves downloaded schemas from the cache and no network access of its own;
+completion uses a simplified model of the XSD (`src/xsd.rs`).
 
 ## Sync
 

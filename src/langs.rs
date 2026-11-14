@@ -79,6 +79,11 @@ pub fn guess(path: Option<&Path>, content: &str) -> Option<Language> {
         if name.ends_with(".mongodb.js") {
             return by_id(crate::mongo::LANGUAGE);
         }
+        // JSON with a `$schema` has the content type application/schema+json,
+        // which GtkSourceView takes for JavaScript.
+        if name.ends_with(".json") {
+            return by_id("json");
+        }
         let head = &content.as_bytes()[..content.len().min(4096)];
         let (content_type, _) = gio::content_type_guess(Some(path), head);
         if let Some(l) = lm.guess_language(Some(path), Some(&content_type)) {

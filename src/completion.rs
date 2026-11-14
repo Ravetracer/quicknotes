@@ -18,6 +18,46 @@ glib::wrapper! {
     pub struct CalcProvider(ObjectSubclass<imp::CalcProvider>) @implements sourceview5::CompletionProvider;
 }
 
+glib::wrapper! {
+    pub struct DataProvider(ObjectSubclass<imp::DataProvider>) @implements sourceview5::CompletionProvider;
+}
+
+impl Default for DataProvider {
+    fn default() -> Self {
+        glib::Object::new()
+    }
+}
+
+/// Larger documents are not completed (each keystroke reads the whole text).
+const DATA_MAX_CHARS: i32 = 400_000;
+
+/// Schema-based proposals at `iter` in a JSON, YAML or XML buffer: the
+/// character range to replace and the proposals.
+fn data_at(iter: &gtk::TextIter) -> Option<(std::ops::Range<i32>, Vec<crate::datadoc::Proposal>)> {
+    let buffer = iter.buffer();
+    if !crate::features::on(crate::features::Feature::DataFormats) || buffer.char_count() > DATA_MAX_CHARS {
+        return None;
+    }
+    let language = buffer.downcast_ref::<sourceview5::Buffer>().and_then(|b| b.language()).map(|l| l.id().to_string());
+    let kind = crate::data_assist::Kind::of(language.as_deref())?;
+    let ctx = unsafe { buffer.data::<crate::data_assist::Context>(crate::editor::DATA_CONTEXT).map(|p| p.as_ref().clone()) }.unwrap_or_default();
+    let before = buffer.text(&buffer.start_iter(), iter, true);
+    let after = buffer.text(iter, &buffer.end_iter(), true);
+    let text = format!("{before}{after}");
+    let (range, items) = crate::data_assist::complete(kind, &text, before.len(), &ctx)?;
+    let chars = |b: usize| text[..b.min(text.len())].chars().count() as i32;
+    Some((chars(range.start)..chars(range.end), items))
+}
+
+fn data_proposals(context: &sourceview5::CompletionContext) -> Vec<Proposal> {
+    cursor(context)
+        .and_then(|i| data_at(&i))
+        .map(|(_, items)| {
+            items.into_iter().map(|p| Proposal::with_back(Item { label: p.label, insert: p.insert, info: p.info }, p.back)).collect()
+        })
+        .unwrap_or_default()
+}
+
 impl Default for CalcProvider {
     fn default() -> Self {
         glib::Object::new()
@@ -50,6 +90,13 @@ impl Proposal {
     fn new(item: Item) -> Self {
         let p: Self = glib::Object::new();
         *p.imp().item.borrow_mut() = Some(item);
+        p
+    }
+
+    /// A proposal after which the cursor moves back `back` characters.
+    fn with_back(item: Item, back: usize) -> Self {
+        let p = Self::new(item);
+        p.imp().back.set(back);
         p
     }
 
@@ -123,6 +170,7 @@ mod imp {
     #[derive(Default)]
     pub struct Proposal {
         pub item: RefCell<Option<Item>>,
+        pub back: std::cell::Cell<usize>,
     }
 
     #[glib::object_subclass]
@@ -336,6 +384,107 @@ mod imp {
             buffer.begin_user_action();
             buffer.delete(&mut start, &mut end);
             buffer.insert(&mut start, &item.insert);
+            buffer.end_user_action();
+        }
+    }
+
+    #[derive(Default)]
+    pub struct DataProvider;
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for DataProvider {
+        const NAME: &'static str = "QnDataProvider";
+        type Type = super::DataProvider;
+        type Interfaces = (sourceview5::CompletionProvider,);
+    }
+
+    impl ObjectImpl for DataProvider {}
+
+    // Every vfunc is overridden, see `SlidesProvider`.
+    impl CompletionProviderImpl for DataProvider {
+        fn title(&self) -> Option<glib::GString> {
+            Some(t!("Schema").into())
+        }
+
+        fn is_trigger(&self, iter: &gtk::TextIter, c: char) -> bool {
+            matches!(c, '"' | '<' | ':' | ' ' | '=' | '/' | '-') && data_at(iter).is_some()
+        }
+
+        fn priority(&self, _context: &sourceview5::CompletionContext) -> i32 {
+            0
+        }
+
+        fn key_activates(
+            &self,
+            _context: &sourceview5::CompletionContext,
+            _proposal: &sourceview5::CompletionProposal,
+            _keyval: gtk::gdk::Key,
+            _state: gtk::gdk::ModifierType,
+        ) -> bool {
+            false
+        }
+
+        fn list_alternates(
+            &self,
+            _context: &sourceview5::CompletionContext,
+            _proposal: &sourceview5::CompletionProposal,
+        ) -> Vec<sourceview5::CompletionProposal> {
+            Vec::new()
+        }
+
+        fn populate(&self, context: &sourceview5::CompletionContext) -> Result<gio::ListModel, glib::Error> {
+            let store = gio::ListStore::new::<super::Proposal>();
+            store.extend_from_slice(&data_proposals(context));
+            Ok(store.upcast())
+        }
+
+        fn populate_future(
+            &self,
+            context: &sourceview5::CompletionContext,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<gio::ListModel, glib::Error>>>> {
+            Box::pin(std::future::ready(self.populate(context)))
+        }
+
+        fn refilter(&self, context: &sourceview5::CompletionContext, model: &gio::ListModel) {
+            if let Some(store) = model.downcast_ref::<gio::ListStore>() {
+                store.splice(0, store.n_items(), &data_proposals(context));
+            }
+        }
+
+        fn display(
+            &self,
+            _context: &sourceview5::CompletionContext,
+            proposal: &sourceview5::CompletionProposal,
+            cell: &sourceview5::CompletionCell,
+        ) {
+            let Some(item) = proposal.downcast_ref::<super::Proposal>().and_then(super::Proposal::item) else {
+                return;
+            };
+            match cell.column() {
+                sourceview5::CompletionColumn::TypedText => cell.set_text(Some(&item.label)),
+                sourceview5::CompletionColumn::Comment | sourceview5::CompletionColumn::Details => {
+                    cell.set_text(Some(&item.info))
+                }
+                _ => cell.set_text(None),
+            }
+        }
+
+        fn activate(&self, context: &sourceview5::CompletionContext, proposal: &sourceview5::CompletionProposal) {
+            let Some(p) = proposal.downcast_ref::<super::Proposal>() else { return };
+            let Some(item) = p.item() else { return };
+            let back = p.imp().back.get() as i32;
+            let (Some(buffer), Some(iter)) = (context.buffer(), cursor(context)) else { return };
+            let Some((range, _)) = data_at(&iter) else { return };
+            let mut start = buffer.iter_at_offset(range.start);
+            let mut end = buffer.iter_at_offset(range.end);
+            buffer.begin_user_action();
+            buffer.delete(&mut start, &mut end);
+            buffer.insert(&mut start, &item.insert);
+            if back > 0 {
+                let mut at = start;
+                at.backward_chars(back);
+                buffer.place_cursor(&at);
+            }
             buffer.end_user_action();
         }
     }

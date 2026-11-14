@@ -20,6 +20,8 @@ pub trait Handler {
     fn set_font_size(&self, size: f64);
     fn set_ligatures(&self, on: bool);
     fn set_emmet_tab(&self, on: bool);
+    /// Switches a style rule of the YAML check (see `yaml_lint::RULES`).
+    fn set_yaml_rule(&self, key: &str, on: bool);
     fn set_feature(&self, feature: crate::features::Feature, on: bool);
     fn set_language(&self, language: &str);
     /// `None` restores the default colour.
@@ -149,6 +151,25 @@ fn general_page(parent: &impl IsA<gtk::Widget>, settings: &Settings, handler: &R
     tab.connect_active_notify(move |row| h.set_emmet_tab(row.is_active()));
     emmet.add(&tab);
     page.add(&emmet);
+
+    // ----- YAML style rules ---------------------------------------------
+    if crate::features::on(crate::features::Feature::DataFormats) {
+        let yaml = adw::PreferencesGroup::builder()
+            .title(t!("YAML Checks"))
+            .description(t!("Style rules for YAML files. Syntax errors, duplicate keys and schema problems are always shown."))
+            .build();
+        for (key, label, description) in crate::yaml_lint::RULES {
+            let row = adw::SwitchRow::builder()
+                .title(crate::i18n::tr(label))
+                .subtitle(crate::i18n::tr(description))
+                .active(settings.yaml_rules.get(key))
+                .build();
+            let h = handler.clone();
+            row.connect_active_notify(move |row| h.set_yaml_rule(key, row.is_active()));
+            yaml.add(&row);
+        }
+        page.add(&yaml);
+    }
 
     // ----- language ------------------------------------------------------
     let language = adw::PreferencesGroup::builder().title(t!("Language")).build();

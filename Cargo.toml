@@ -43,6 +43,8 @@ jiff = { version = "0.2", features = ["tzdb-bundle-always"] }
 lopdf = { version = "0.36", default-features = false }
 sha2 = "0.10"
 hmac = "0.12"
+yaml-rust2 = "0.10"
+regex = "1"
 
 [profile.release]
 opt-level = 3

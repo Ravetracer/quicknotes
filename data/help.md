@@ -1,7 +1,7 @@
 # QuickNotes Help {#top}
 
 **Contents:** [Notes & tabs](#notes) · [Folders](#folders) · [Checklists](#checklists) · [Tables](#tables) · [Formatting](#formatting) · [Math & music](#notation) · [Charts](#charts) · [Kanban](#kanban) · [Mind maps](#mindmaps) · [Flash cards](#flashcards) · [Calculations](#calc) · [Templates](#templates) ·
-[Previews & export](#previews) · [Presentations](#slides) · [Developer tools](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
+[Previews & export](#previews) · [Presentations](#slides) · [Data formats](#dataformats) · [Developer tools](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Security](#security) · [Backup](#backup) · [Sync](#sync) ·
 [Shortcuts](#shortcuts)
 
@@ -758,6 +758,22 @@ switches between slides and presenter view.
 animations, `F` for fullscreen). *Export as PDF* creates one page per slide with all steps
 shown, *Export as Image* one image per slide (SVG, PNG or JPG).
 
+## Data formats {#dataformats}
+
+JSON, YAML and XML documents are checked while you type. Problems are underlined (red: error, yellow: warning); hover over them for the message. The **problems list** below the editor shows all of them with line and column, a click jumps there. Ctrl+Shift+M or the counter in the status bar shows and hides the list.
+
+- **JSON:** syntax errors with their position, trailing commas, comments, single quotes, unquoted property names, invalid numbers and duplicate properties.
+- **YAML:** syntax errors, duplicate keys and style rules like trailing spaces, inconsistent indentation, truthy values (`yes`, `on` …), a missing space after `#` and too many blank lines. The rules can be switched on and off in *Preferences → General → YAML Checks*.
+- **XML:** well-formedness and validation against an XML Schema (XSD).
+
+**Schemas.** With a schema, documents are also checked for their content (required and unknown properties, types, allowed values, …) and completion offers property names, element and attribute names and allowed values. The schema is found in this order:
+
+1. **Assigned** to the note: *Assign Schema…* in the main menu, the right-click menu or the problems list. Enter a URL or choose a file.
+2. **Named in the document:** `"$schema": "…"` in JSON, `# yaml-language-server: $schema=…` (or a `$schema` key) in YAML, `xsi:schemaLocation` or `xsi:noNamespaceSchemaLocation` in XML. Relative paths are resolved against the file's folder.
+3. **By file name** from the [SchemaStore](https://www.schemastore.org) catalog, e.g. for `package.json`, `docker-compose.yml`, `tsconfig.json` or GitHub workflows. Notes without a file use their tab name.
+
+Schemas from the web are downloaded once and kept in the cache folder; after a week they are refreshed in the background. Without a schema, XML completion still offers the element and attribute names used in the document and closing tags.
+
 ## Developer tools {#devtools}
 
 The **developer tools** (button in the header bar, and the *Developer Tools* submenu of the
@@ -973,6 +989,9 @@ another target ends the previous one (your notes stay).
 | Ctrl+F, Ctrl+H, F3, Shift+F3 | Find, replace, next, previous |
 <!-- if devtools -->
 | Ctrl+Alt+B, Ctrl+Alt+M | Beautify, minify |
+<!-- end -->
+<!-- if dataformats -->
+| Ctrl+Shift+M | Problems list (JSON, YAML, XML) |
 <!-- end -->
 | Ctrl+Shift+V | Toggle preview |
 | Ctrl+Shift+E, Ctrl+Shift+P | Export as HTML, PDF |

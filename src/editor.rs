@@ -1,6 +1,8 @@
 //! A text tab: GtkSourceView editor plus an optional live preview
 //! (Markdown, reStructuredText, PlantUML, HTML, presentations) in a split pane.
 
+use crate::data_assist::{self, Kind, Origin};
+use crate::datadoc::{Diagnostic, Severity};
 use crate::store::{TabKind, TabMeta};
 use crate::calc::{self, LineResult};
 use crate::themes::Theme;
@@ -30,6 +32,29 @@ pub struct Shared {
     pub format_bar: Cell<bool>,
     /// Learning progress of flash cards.
     pub learning: RefCell<crate::learning::Store>,
+    /// The problems list below JSON, YAML and XML editors.
+    pub problems_panel: Cell<bool>,
+    pub yaml_rules: Cell<crate::yaml_lint::Rules>,
+}
+
+/// A problem found in a JSON, YAML or XML document.
+#[derive(Clone, Debug)]
+pub struct Problem {
+    /// Character offsets in the buffer (as of the check).
+    pub start: i32,
+    pub end: i32,
+    /// Line and column for display (1-based).
+    pub line: i32,
+    pub col: i32,
+    pub severity: Severity,
+    pub message: String,
+}
+
+/// The schema the last check used.
+#[derive(Clone, Debug, Default)]
+pub struct LintInfo {
+    pub schema: Option<(String, Origin)>,
+    pub loading: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -134,6 +159,12 @@ struct CalcColumn {
 }
 
 const CALC_LANGUAGE: &str = "calc";
+const DIAG_TAGS: [&str; 2] = ["qn-diag-error", "qn-diag-warning"];
+/// Pause after typing before a document is checked.
+const LINT_DELAY_MS: u64 = 350;
+const MAX_PROBLEMS: usize = 500;
+/// Key of the check context on the buffer (read by the completion).
+pub const DATA_CONTEXT: &str = "qn-data-context";
 const TASK_DONE_TAG: &str = "qn-task-done";
 const TASK_BOX_TAG: &str = "qn-task-box";
 const CALC_PAD: i32 = 14;
@@ -220,6 +251,18 @@ pub struct EditorTab {
     /// Extra right-click menu entries: in general and with the cursor in a table.
     context_menu: RefCell<Option<gio::MenuModel>>,
     table_menu: RefCell<Option<gio::MenuModel>>,
+    /// Data formats (JSON, YAML, XML): pending check, the problems found,
+    /// the problems list below the editor and the schema assigned to the note.
+    lint_timer: RefCell<Option<glib::SourceId>>,
+    problems: RefCell<Vec<Problem>>,
+    lint_info: RefCell<LintInfo>,
+    problems_panel: gtk::Revealer,
+    problems_list: gtk::ListBox,
+    problems_title: gtk::Label,
+    problems_schema: gtk::Label,
+    pub schema: RefCell<Option<String>>,
+    /// Called after each check (the window shows the number of problems).
+    pub lint_hook: RefCell<Option<Box<dyn Fn()>>>,
 }
 
 impl EditorTab {
@@ -248,6 +291,7 @@ impl EditorTab {
         completion.set_show_icons(false);
         completion.add_provider(&crate::completion::SlidesProvider::default());
         completion.add_provider(&crate::completion::CalcProvider::default());
+        completion.add_provider(&crate::completion::DataProvider::default());
 
         let scrolled = gtk::ScrolledWindow::builder()
             .child(&view)
@@ -259,6 +303,49 @@ impl EditorTab {
         let source = gtk::Box::new(gtk::Orientation::Vertical, 0);
         source.append(&format_bar);
         source.append(&scrolled);
+
+        // Problems list of JSON, YAML and XML documents.
+        let problems_list = gtk::ListBox::new();
+        problems_list.add_css_class("problems-list");
+        problems_list.set_activate_on_single_click(true);
+        let problems_scroll = gtk::ScrolledWindow::builder()
+            .child(&problems_list)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .max_content_height(150)
+            .build();
+        let problems_title = gtk::Label::builder().xalign(0.0).build();
+        problems_title.add_css_class("heading");
+        let problems_schema = gtk::Label::builder().xalign(1.0).hexpand(true).ellipsize(gtk::pango::EllipsizeMode::Middle).build();
+        problems_schema.add_css_class("dim-label");
+        let schema_btn = gtk::Button::builder()
+            .icon_name("document-properties-symbolic")
+            .tooltip_text(t!("Assign Schema…"))
+            .action_name("win.assign-schema")
+            .build();
+        schema_btn.add_css_class("flat");
+        let hide_btn = gtk::Button::builder()
+            .icon_name("window-close-symbolic")
+            .tooltip_text(t!("Hide Problems (Ctrl+Shift+M)"))
+            .action_name("win.problems")
+            .build();
+        hide_btn.add_css_class("flat");
+        let problems_head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        problems_head.add_css_class("problems-head");
+        problems_head.append(&problems_title);
+        problems_head.append(&problems_schema);
+        problems_head.append(&schema_btn);
+        problems_head.append(&hide_btn);
+        let problems_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        problems_box.add_css_class("problems-panel");
+        problems_box.append(&problems_head);
+        problems_box.append(&problems_scroll);
+        let problems_panel = gtk::Revealer::builder()
+            .transition_type(gtk::RevealerTransitionType::SlideUp)
+            .child(&problems_box)
+            .reveal_child(false)
+            .build();
+        source.append(&problems_panel);
 
         let root = gtk::Paned::new(gtk::Orientation::Horizontal);
         root.set_start_child(Some(&source));
@@ -331,6 +418,15 @@ impl EditorTab {
             completion_open: Cell::new(false),
             context_menu: RefCell::new(None),
             table_menu: RefCell::new(None),
+            lint_timer: RefCell::new(None),
+            problems: RefCell::new(Vec::new()),
+            lint_info: RefCell::new(LintInfo::default()),
+            problems_panel,
+            problems_list,
+            problems_title,
+            problems_schema,
+            schema: RefCell::new(None),
+            lint_hook: RefCell::new(None),
         });
         let weak = Rc::downgrade(&tab);
         lock_entry.connect_activate(move |_| {
@@ -347,6 +443,38 @@ impl EditorTab {
         *tab.me.borrow_mut() = Rc::downgrade(&tab);
         tab.buffer.create_tag(Some(TASK_DONE_TAG), &[("strikethrough", &true)]);
         tab.buffer.create_tag(Some(TASK_BOX_TAG), &[("weight", &700)]);
+        for (name, color) in DIAG_TAGS.iter().zip(["#e01b24", "#e5a50a"]) {
+            let rgba = gdk::RGBA::parse(color).unwrap_or(gdk::RGBA::RED);
+            tab.buffer.create_tag(Some(name), &[("underline", &gtk::pango::Underline::Error), ("underline-rgba", &rgba)]);
+        }
+        let weak = Rc::downgrade(&tab);
+        tab.problems_list.connect_row_activated(move |_, row| {
+            if let Some(t) = weak.upgrade() {
+                t.goto_problem(row.index());
+            }
+        });
+        // Problems under the pointer (or at the cursor) as tooltips.
+        tab.view.set_has_tooltip(true);
+        let weak = Rc::downgrade(&tab);
+        tab.view.connect_query_tooltip(move |view, x, y, keyboard, tooltip| {
+            let Some(t) = weak.upgrade() else { return false };
+            let offset = if keyboard {
+                t.buffer.iter_at_mark(&t.buffer.get_insert()).offset()
+            } else {
+                let (bx, by) = view.window_to_buffer_coords(gtk::TextWindowType::Widget, x, y);
+                match view.iter_at_location(bx, by) {
+                    Some(i) => i.offset(),
+                    None => return false,
+                }
+            };
+            let problems = t.problems.borrow();
+            let hits: Vec<&str> = problems.iter().filter(|p| p.start <= offset && offset < p.end.max(p.start + 1)).map(|p| p.message.as_str()).collect();
+            if hits.is_empty() {
+                return false;
+            }
+            tooltip.set_text(Some(&hits.join("\n")));
+            true
+        });
 
         let weak = Rc::downgrade(&tab);
         tab.buffer.connect_changed(move |_| {
@@ -357,6 +485,9 @@ impl EditorTab {
                     }
                     if t.is_calc() {
                         t.schedule_calc();
+                    }
+                    if t.data_kind().is_some() {
+                        t.schedule_lint();
                     }
                     t.schedule_tasks();
                 }
@@ -1278,6 +1409,7 @@ impl EditorTab {
         self.view.set_top_margin(if on { FOCUS_TOP_MARGIN } else { TOP_MARGIN });
         self.sync_preview();
         self.update_focus_margins();
+        self.sync_problems_panel();
     }
 
     /// Side margins: centred column in distraction-free mode, defaults otherwise.
@@ -1313,6 +1445,7 @@ impl EditorTab {
         self.loading.set(was_loading);
         self.recalc();
         self.update_tasks();
+        self.schedule_lint();
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1465,6 +1598,7 @@ impl EditorTab {
         self.sync_preview();
         self.sync_calc();
         self.update_tasks();
+        self.lint();
     }
 
     // ----- calculations --------------------------------------------------
@@ -1688,6 +1822,7 @@ impl EditorTab {
     /// type, its toolbar and its preview may change.
     pub fn features_changed(self: &Rc<Self>) {
         self.sync_preview();
+        self.lint();
     }
 
     fn sync_preview(self: &Rc<Self>) {
@@ -2224,6 +2359,173 @@ impl EditorTab {
         });
     }
 
+    // ----- data formats --------------------------------------------------
+
+    /// JSON, YAML or XML (when the feature is on and the file is not too large).
+    pub fn data_kind(&self) -> Option<Kind> {
+        if !features::on(Feature::DataFormats) || self.large.get() {
+            return None;
+        }
+        Kind::of(self.language_id().as_deref())
+    }
+
+    pub fn data_context(&self) -> data_assist::Context {
+        data_assist::Context {
+            assigned: self.schema.borrow().clone(),
+            path: self.path.borrow().clone(),
+            title: self.custom_title.borrow().clone(),
+            rules: self.shared.yaml_rules.get(),
+        }
+    }
+
+    /// Checks the document after a short pause.
+    pub fn schedule_lint(&self) {
+        if let Some(id) = self.lint_timer.borrow_mut().take() {
+            id.remove();
+        }
+        if self.data_kind().is_none() && self.problems.borrow().is_empty() {
+            return;
+        }
+        let weak = self.me.borrow().clone();
+        let id = glib::timeout_add_local_once(Duration::from_millis(LINT_DELAY_MS), move || {
+            if let Some(t) = weak.upgrade() {
+                t.lint_timer.borrow_mut().take();
+                t.lint();
+            }
+        });
+        *self.lint_timer.borrow_mut() = Some(id);
+    }
+
+    /// Checks the document now; clears the problems of other documents.
+    pub fn lint(&self) {
+        let ctx = self.data_context();
+        // The completion reads the context from the buffer.
+        unsafe {
+            self.buffer.set_data(DATA_CONTEXT, ctx.clone());
+        }
+        let Some(kind) = self.data_kind() else {
+            if !self.problems.borrow().is_empty() || self.lint_info.borrow().schema.is_some() {
+                self.set_problems(&[], LintInfo::default(), "");
+            }
+            self.sync_problems_panel();
+            return;
+        };
+        let text = self.text();
+        let report = data_assist::check(kind, &text, &ctx);
+        self.set_problems(&report.diagnostics, LintInfo { schema: report.schema, loading: report.loading }, &text);
+    }
+
+    fn set_problems(&self, diags: &[Diagnostic], info: LintInfo, text: &str) {
+        let (start, end) = self.buffer.bounds();
+        for tag in DIAG_TAGS {
+            self.buffer.remove_tag_by_name(tag, &start, &end);
+        }
+        let starts = crate::datadoc::line_starts(text);
+        let position = |offset: usize| {
+            let line = starts.partition_point(|&s| s <= offset).saturating_sub(1);
+            (line, offset - starts[line])
+        };
+        let mut problems = Vec::new();
+        for d in diags.iter().take(MAX_PROBLEMS) {
+            let range = crate::datadoc::visible(text, d.range.start.min(text.len())..d.range.end.min(text.len()));
+            let ((l1, b1), (l2, b2)) = (position(range.start), position(range.end));
+            let (Some(s), Some(e)) = (self.buffer.iter_at_line_index(l1 as i32, b1 as i32), self.buffer.iter_at_line_index(l2 as i32, b2 as i32)) else {
+                continue;
+            };
+            let tag = match d.severity {
+                Severity::Error => DIAG_TAGS[0],
+                Severity::Warning => DIAG_TAGS[1],
+            };
+            self.buffer.apply_tag_by_name(tag, &s, &e);
+            let col = text[starts[l1]..range.start].chars().count() as i32 + 1;
+            problems.push(Problem { start: s.offset(), end: e.offset(), line: l1 as i32 + 1, col, severity: d.severity, message: d.message.clone() });
+        }
+
+        self.problems_list.remove_all();
+        for p in &problems {
+            let icon = match p.severity {
+                Severity::Error => "dialog-error-symbolic",
+                Severity::Warning => "dialog-warning-symbolic",
+            };
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            row.set_margin_start(8);
+            row.set_margin_end(8);
+            row.set_margin_top(2);
+            row.set_margin_bottom(2);
+            let image = gtk::Image::from_icon_name(icon);
+            image.add_css_class(match p.severity {
+                Severity::Error => "error",
+                Severity::Warning => "warning",
+            });
+            row.append(&image);
+            let at = gtk::Label::new(Some(&t!("Ln {}, Col {}", p.line, p.col)));
+            at.add_css_class("dim-label");
+            at.add_css_class("numeric");
+            row.append(&at);
+            let message = gtk::Label::builder().label(&p.message).xalign(0.0).hexpand(true).ellipsize(gtk::pango::EllipsizeMode::End).tooltip_text(&p.message).build();
+            row.append(&message);
+            self.problems_list.append(&row);
+        }
+        if problems.is_empty() {
+            let label = gtk::Label::builder().label(t!("No problems found")).xalign(0.0).margin_start(8).margin_top(4).margin_bottom(4).build();
+            label.add_css_class("dim-label");
+            self.problems_list.append(&label);
+            if let Some(row) = self.problems_list.row_at_index(0) {
+                row.set_activatable(false);
+            }
+        }
+        let (errors, warnings) = count(&problems);
+        self.problems_title.set_text(&if errors + warnings == 0 { t!("Problems").to_owned() } else { t!("Problems ({})", errors + warnings) });
+        *self.problems.borrow_mut() = problems;
+        *self.lint_info.borrow_mut() = info;
+        self.problems_schema.set_text(&self.schema_label().unwrap_or_default());
+        self.sync_problems_panel();
+        if let Some(hook) = self.lint_hook.borrow().as_ref() {
+            hook();
+        }
+    }
+
+    /// Shows the problems list when it is switched on and the document is JSON, YAML or XML.
+    pub fn sync_problems_panel(&self) {
+        let show = self.shared.problems_panel.get() && self.data_kind().is_some() && !self.focus.get();
+        if self.problems_panel.reveals_child() != show {
+            self.problems_panel.set_reveal_child(show);
+        }
+    }
+
+    fn goto_problem(&self, index: i32) {
+        let Some(p) = self.problems.borrow().get(index.max(0) as usize).cloned() else { return };
+        let iter = self.buffer.iter_at_offset(p.start);
+        self.buffer.place_cursor(&iter);
+        self.view.scroll_to_mark(&self.buffer.get_insert(), 0.15, false, 0.0, 0.0);
+        self.view.grab_focus();
+    }
+
+    /// Errors and warnings found by the last check.
+    pub fn problem_counts(&self) -> (usize, usize) {
+        count(&self.problems.borrow())
+    }
+
+    /// The schema in use and where it comes from, for display.
+    pub fn schema_label(&self) -> Option<String> {
+        let info = self.lint_info.borrow();
+        let (url, origin) = info.schema.as_ref()?;
+        let name = url.split(", ").map(|u| {
+            let u = u.split(['?', '#']).next().unwrap_or(u).trim_end_matches('/');
+            u.rsplit('/').next().unwrap_or(u).to_owned()
+        }).collect::<Vec<_>>().join(", ");
+        let from = match origin {
+            Origin::Assigned => t!("assigned"),
+            Origin::Document => t!("from the document"),
+            Origin::Catalog => t!("from SchemaStore"),
+        };
+        Some(if info.loading { t!("Schema {} ({}), loading…", name, from) } else { t!("Schema {} ({})", name, from) })
+    }
+
+    pub fn schema_url(&self) -> Option<String> {
+        self.lint_info.borrow().schema.as_ref().map(|(u, _)| u.clone())
+    }
+
     // ----- persistence ---------------------------------------------------
 
     pub fn meta(&self) -> TabMeta {
@@ -2241,9 +2543,15 @@ impl EditorTab {
             cursor: self.buffer.cursor_position(),
             split: self.split.get(),
             lock: self.lock(),
+            schema: self.schema.borrow().clone(),
             ..Default::default()
         }
     }
+}
+
+fn count(problems: &[Problem]) -> (usize, usize) {
+    let errors = problems.iter().filter(|p| p.severity == Severity::Error).count();
+    (errors, problems.len() - errors)
 }
 
 fn result_markup(result: &LineResult) -> String {

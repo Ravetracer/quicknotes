@@ -1,7 +1,7 @@
 # QuickNotes-Hilfe {#top}
 
 **Inhalt:** [Notizen & Tabs](#notes) · [Ordner](#folders) · [Checklisten](#checklists) · [Tabellen](#tables) · [Formatierung](#formatting) · [Formeln & Noten](#notation) · [Diagramme](#charts) · [Kanban](#kanban) · [Mindmaps](#mindmaps) · [Lernkarten](#flashcards) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
-[Vorschau & Export](#previews) · [Präsentationen](#slides) · [Entwicklerwerkzeuge](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
+[Vorschau & Export](#previews) · [Präsentationen](#slides) · [Datenformate](#dataformats) · [Entwicklerwerkzeuge](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
 [Sicherheit](#security) · [Sicherung](#backup) · [Sync](#sync) ·
 [Tastenkürzel](#shortcuts)
 
@@ -786,6 +786,22 @@ und die Uhrzeit. Mit einem Bildschirm wechselt `P` zwischen Folien und Referente
 abspielt (Tastatur, Animationen, `F` für Vollbild). *Als PDF exportieren* erzeugt eine Seite
 pro Folie mit allen Schritten, *Als Bild exportieren* ein Bild pro Folie (SVG, PNG oder JPG).
 
+## Datenformate {#dataformats}
+
+JSON-, YAML- und XML-Dokumente werden beim Tippen geprüft. Probleme sind unterstrichen (rot: Fehler, gelb: Warnung); die Meldung erscheint, wenn der Mauszeiger darauf zeigt. Die **Problemliste** unter dem Editor zeigt alle mit Zeile und Spalte, ein Klick springt hin. Strg+Umschalt+M oder der Zähler in der Statusleiste blendet die Liste ein und aus.
+
+- **JSON:** Syntaxfehler mit Position, überzählige Kommas, Kommentare, einfache Anführungszeichen, Eigenschaftsnamen ohne Anführungszeichen, ungültige Zahlen und doppelte Eigenschaften.
+- **YAML:** Syntaxfehler, doppelte Schlüssel und Stilregeln wie Leerzeichen am Zeilenende, uneinheitliche Einrückung, Wahrheitswerte (`yes`, `on` …), fehlendes Leerzeichen nach `#` und zu viele Leerzeilen. Die Regeln lassen sich unter *Einstellungen → Allgemein → YAML-Prüfung* ein- und ausschalten.
+- **XML:** Wohlgeformtheit und Prüfung gegen ein XML Schema (XSD).
+
+**Schemas.** Mit einem Schema wird auch der Inhalt geprüft (Pflicht- und unbekannte Eigenschaften, Typen, erlaubte Werte, …), und die Vervollständigung bietet Eigenschaftsnamen, Element- und Attributnamen und erlaubte Werte an. Das Schema wird in dieser Reihenfolge gesucht:
+
+1. **Der Notiz zugewiesen:** *Schema zuweisen …* im Hauptmenü, im Kontextmenü oder in der Problemliste. Eine URL eingeben oder eine Datei wählen.
+2. **Im Dokument genannt:** `"$schema": "…"` in JSON, `# yaml-language-server: $schema=…` (oder ein Schlüssel `$schema`) in YAML, `xsi:schemaLocation` oder `xsi:noNamespaceSchemaLocation` in XML. Relative Pfade gelten ab dem Ordner der Datei.
+3. **Über den Dateinamen** aus dem Katalog von [SchemaStore](https://www.schemastore.org), z. B. für `package.json`, `docker-compose.yml`, `tsconfig.json` oder GitHub-Workflows. Notizen ohne Datei verwenden ihren Tab-Namen.
+
+Schemas aus dem Netz werden einmal heruntergeladen und im Cache-Ordner aufbewahrt; nach einer Woche werden sie im Hintergrund aktualisiert. Ohne Schema bietet die XML-Vervollständigung die im Dokument verwendeten Element- und Attributnamen und schließende Tags an.
+
 ## Entwicklerwerkzeuge {#devtools}
 
 Die **Entwicklerwerkzeuge** (Knopf in der Kopfleiste und das Untermenü *Entwicklerwerkzeuge*
@@ -1017,6 +1033,9 @@ anderes Ziel verbunden, endet das bisherige (deine Notizen bleiben).
 | Strg+F, Strg+H, F3, Umschalt+F3 | Suchen, Ersetzen, Nächstes, Vorheriges |
 <!-- if devtools -->
 | Strg+Alt+B, Strg+Alt+M | Formatieren, Minimieren |
+<!-- end -->
+<!-- if dataformats -->
+| Strg+Umschalt+M | Problemliste (JSON, YAML, XML) |
 <!-- end -->
 | Strg+Umschalt+V | Vorschau ein/aus |
 | Strg+Umschalt+E, Strg+Umschalt+P | Als HTML, PDF exportieren |

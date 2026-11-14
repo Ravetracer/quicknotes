@@ -73,6 +73,10 @@ pub struct Settings {
     /// Imported Obsidian vaults (to import only new notes next time).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub obsidian_vaults: Vec<ObsidianVault>,
+    /// The problems list below JSON, YAML and XML editors.
+    pub problems_panel: bool,
+    /// Style rules of the YAML check.
+    pub yaml_rules: crate::yaml_lint::Rules,
 }
 
 /// An imported Obsidian vault.
@@ -115,6 +119,8 @@ impl Default for Settings {
             obsidian_vaults: Vec::new(),
             sync_kind: String::new(),
             sync_target: None,
+            problems_panel: true,
+            yaml_rules: Default::default(),
         }
     }
 }
@@ -158,6 +164,9 @@ pub struct TabMeta {
     /// Title shown in the library while the note is closed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Schema assigned to a JSON, YAML or XML note (URL or path).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
 }
 
 /// A folder of the notes library.

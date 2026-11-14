@@ -121,6 +121,7 @@ pub fn topic(doc: Doc<'_>, cursor: Cursor<'_>, emmet: bool) -> &'static str {
         Doc::Markdown => "formatting",
         Doc::Preview => "previews",
         Doc::Code(crate::mongo::LANGUAGE) | Doc::Code("json5") => "mongodb",
+        Doc::Code("json" | "yaml" | "xml" | "xslt") if crate::features::on(crate::features::Feature::DataFormats) => "dataformats",
         Doc::Code(_) if emmet => "emmet",
         Doc::Code(_) => "devtools",
         Doc::Note | Doc::Image => "notes",
@@ -220,7 +221,8 @@ mod tests {
         assert_eq!(topic(Doc::Note, Cursor { on_task: true, ..none }, false), "checklists");
         assert_eq!(topic(Doc::Flashcards, Cursor { on_task: true, ..none }, false), "flashcards");
         assert_eq!(topic(Doc::Code("html"), Cursor { fence: Some("chart"), ..none }, true), "emmet");
-        assert_eq!(topic(Doc::Code("json"), none, false), "devtools");
+        assert_eq!(topic(Doc::Code("json"), none, false), "dataformats");
+        assert_eq!(topic(Doc::Code("sql"), none, false), "devtools");
         assert_eq!(topic(Doc::Code(crate::mongo::LANGUAGE), none, false), "mongodb");
         assert_eq!(topic(Doc::Image, none, false), "notes");
     }
@@ -257,7 +259,7 @@ mod tests {
             assert_eq!(ifs, help.matches("<!-- end -->").count(), "unbalanced markers");
             let keys: Vec<&str> = crate::features::LIST.iter().map(|(f, ..)| f.key()).collect();
             let minimal = filter(help, |k| !keys.contains(&k));
-            for key in ["charts", "slides", "kanban", "geocaching", "devtools", "flashcards", "folders", "sync", "mindmaps"] {
+            for key in ["charts", "slides", "kanban", "geocaching", "devtools", "flashcards", "folders", "sync", "mindmaps", "dataformats"] {
                 assert!(!minimal.contains(&format!("{{#{key}}}")), "{key}");
                 assert!(!minimal.contains(&format!("](#{key})")), "{key}");
                 assert!(filter(help, |_| true).contains(&format!("{{#{key}}}")), "{key}");

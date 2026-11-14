@@ -24,6 +24,7 @@ pub enum Feature {
     Folders,
     Sync,
     Mindmaps,
+    DataFormats,
 }
 
 /// The features with their preference labels and descriptions.
@@ -42,6 +43,11 @@ pub const LIST: &[(Feature, &str, &str)] = &[
     (Feature::Folders, "Note Folders", "A notes sidebar with folders; closed notes stay in it"),
     (Feature::Sync, "Sync", "Encrypted sync with GitHub, Nextcloud, WebDAV, S3 or a synced folder"),
     (Feature::Mindmaps, "Mind Maps", "Mind maps from Markdown outlines, with SVG and PDF export"),
+    (
+        Feature::DataFormats,
+        "Data Formats",
+        "Checks and completion for JSON, YAML and XML, with JSON Schema and XML Schema support",
+    ),
 ];
 
 impl Feature {
@@ -57,6 +63,7 @@ impl Feature {
             Self::Folders => 128,
             Self::Sync => 256,
             Self::Mindmaps => 512,
+            Self::DataFormats => 1024,
         }
     }
 
@@ -74,6 +81,7 @@ impl Feature {
             Self::Folders => "folders",
             Self::Sync => "sync",
             Self::Mindmaps => "mindmaps",
+            Self::DataFormats => "dataformats",
         }
     }
 }
@@ -98,6 +106,8 @@ pub struct Features {
     pub sync: bool,
     #[serde(default = "yes")]
     pub mindmaps: bool,
+    #[serde(default = "yes")]
+    pub dataformats: bool,
 }
 
 fn yes() -> bool {
@@ -107,7 +117,7 @@ fn yes() -> bool {
 impl Features {
     /// All features on (settings from before the switches existed).
     pub fn all() -> Self {
-        Self { charts: true, presentations: true, kanban: true, geocaching: true, plantuml: true, devtools: true, flashcards: true, folders: true, sync: true, mindmaps: true }
+        Self { charts: true, presentations: true, kanban: true, geocaching: true, plantuml: true, devtools: true, flashcards: true, folders: true, sync: true, mindmaps: true, dataformats: true }
     }
 
     pub fn get(&self, f: Feature) -> bool {
@@ -122,6 +132,7 @@ impl Features {
             Feature::Folders => self.folders,
             Feature::Sync => self.sync,
             Feature::Mindmaps => self.mindmaps,
+            Feature::DataFormats => self.dataformats,
         }
     }
 
@@ -137,6 +148,7 @@ impl Features {
             Feature::Folders => self.folders = on,
             Feature::Sync => self.sync = on,
             Feature::Mindmaps => self.mindmaps = on,
+            Feature::DataFormats => self.dataformats = on,
         }
     }
 
