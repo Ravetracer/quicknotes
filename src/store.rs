@@ -77,6 +77,10 @@ pub struct Settings {
     pub problems_panel: bool,
     /// Style rules of the YAML check.
     pub yaml_rules: crate::yaml_lint::Rules,
+    /// The version that ran last (to show what's new after an update).
+    pub last_version: String,
+    /// Look for a newer release on GitHub at start.
+    pub update_check: bool,
 }
 
 /// An imported Obsidian vault.
@@ -121,6 +125,8 @@ impl Default for Settings {
             sync_target: None,
             problems_panel: true,
             yaml_rules: Default::default(),
+            last_version: String::new(),
+            update_check: true,
         }
     }
 }
@@ -167,6 +173,9 @@ pub struct TabMeta {
     /// Schema assigned to a JSON, YAML or XML note (URL or path).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schema: Option<String>,
+    /// The template the note was created from (changes to it are merged in).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template: Option<crate::templates::Link>,
 }
 
 /// A folder of the notes library.

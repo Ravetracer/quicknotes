@@ -167,6 +167,8 @@ pub struct Window {
     sync_cancel: RefCell<Option<Arc<AtomicBool>>>,
     /// Notes deleted elsewhere whose tab closes without keeping them.
     sync_discard: RefCell<HashSet<String>>,
+    /// Pending update of notes created from templates.
+    template_timer: RefCell<Option<glib::SourceId>>,
 }
 
 thread_local! {
@@ -205,11 +207,15 @@ fn open_main(app: &adw::Application, session: Session, files: Vec<PathBuf>) {
     let w = Window::new(app, session.settings.clone());
     WINDOW.with(|c| *c.borrow_mut() = Some(w.clone()));
     *w.vault.borrow_mut() = session.vault.clone();
+    // Notes from before: an update rather than a new installation.
+    let existing = !session.tabs.is_empty() || !session.library.is_empty() || session.sealed.is_some();
     w.restore(session);
     for path in files {
         w.open_path(path);
     }
     w.win.present();
+    w.show_whats_new(existing);
+    w.check_for_updates();
     w.github_startup();
     w.sync_timer();
 }
@@ -370,7 +376,7 @@ impl Window {
         header.pack_start(&icon_button("document-save-symbolic", t!("Save to file (Ctrl+S)"), "win.save"));
 
         let main_menu = gio::Menu::new();
-        fill_main_menu(&main_menu, MenuContext { style: None, has_file: false, emmet: false, app_password: false, features: features::current(), lock: None, data: false });
+        fill_main_menu(&main_menu, MenuContext { style: None, has_file: false, emmet: false, app_password: false, features: features::current(), lock: None, data: false, linked: false });
         let menu_btn = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
             .popover(&nested_menu(&main_menu))
@@ -647,6 +653,7 @@ impl Window {
             sync_closing: Cell::new(false),
             sync_cancel: RefCell::new(None),
             sync_discard: RefCell::new(HashSet::new()),
+            template_timer: RefCell::new(None),
         });
 
         *menu_target.borrow_mut() = Some(this.weak());
@@ -903,6 +910,21 @@ impl Window {
                 w.new_mindmap();
             }
         });
+        self.action("new-adventure", &[], |w| {
+            if features::on(Feature::GmTools) {
+                w.new_adventure();
+            }
+        });
+        let character = gio::SimpleAction::new("insert-character", Some(glib::VariantTy::STRING));
+        let weak = self.weak();
+        character.connect_activate(move |_, param| {
+            let (Some(this), Some(id)) = (weak.upgrade(), param.and_then(|p| p.str())) else { return };
+            let Some(t) = this.current_text() else { return };
+            if let Some((_, _, sheet)) = crate::adventure::presets().into_iter().find(|(p, _, _)| *p == id) {
+                t.insert_block(sheet, 1);
+            }
+        });
+        self.win.add_action(&character);
         self.action("preferences", &["<Control>comma"], |w| w.show_preferences());
         self.action("emmet-expand", &["<Control>e"], |w| {
             if let Some(t) = w.current_text() {
@@ -966,6 +988,8 @@ impl Window {
                 .application_name("QuickNotes")
                 .application_icon(APP_ID)
                 .version(env!("CARGO_PKG_VERSION"))
+                .release_notes_version(env!("CARGO_PKG_VERSION"))
+                .release_notes(crate::changelog::release_notes())
                 .comments(t!("A small tabbed notepad for text and code snippets.\nNotes are stored in ~/.local/share/quicknotes."))
                 .license_type(gtk::License::MitX11)
                 .build();
@@ -1027,6 +1051,28 @@ impl Window {
         let problems = self.settings.borrow().problems_panel;
         self.set_toggle("problems", true, problems);
         self.action("assign-schema", &[], |w| w.assign_schema());
+        self.action("new-from-template", &["<Control><Alt>n"], |w| w.pick_template(TemplateUse::New));
+        self.action("insert-template", &["<Control><Alt>i"], |w| {
+            if w.current_text().is_some() {
+                w.pick_template(TemplateUse::Insert);
+            }
+        });
+        self.action("edit-templates", &[], |w| w.pick_template(TemplateUse::Edit));
+        self.action("detach-template", &[], |w| {
+            if let Some(t) = w.current_text() {
+                if let Some(link) = t.template.borrow_mut().take() {
+                    w.toast(&t!("No longer updated from template “{}”", link.name));
+                }
+                w.mark_dirty(&t.id);
+                w.sync_ui();
+            }
+        });
+        self.action("new-template", &[], |w| w.new_template(None));
+        self.action("save-as-template", &[], |w| {
+            if let Some(t) = w.current_text() {
+                w.new_template(Some(t));
+            }
+        });
         // Downloaded schemas: check the documents again.
         let weak = self.weak();
         crate::schemas::set_listener(move || {
@@ -1479,6 +1525,9 @@ impl Window {
             if this.is_current(&t.id) {
                 this.update_status();
             }
+            if this.tab_folders.borrow().get(&t.id).is_some_and(|f| f == TEMPLATES_FOLDER) {
+                this.schedule_template_refresh();
+            }
         });
 
         let weak = self.weak();
@@ -1644,6 +1693,17 @@ impl Window {
         self.sync_ui();
     }
 
+    fn new_adventure(self: &Rc<Self>) {
+        let t = self.new_note();
+        t.language_locked.set(true);
+        t.set_text_irreversible(&crate::adventure::template());
+        t.set_language_id(Some(crate::adventure::LANGUAGE));
+        t.set_preview(true);
+        self.mark_dirty(&t.id);
+        self.refresh_title(&t.id);
+        self.sync_ui();
+    }
+
     fn new_flashcards(self: &Rc<Self>) {
         let t = self.new_note();
         t.language_locked.set(true);
@@ -1667,6 +1727,7 @@ impl Window {
             .tabs
             .borrow()
             .iter()
+            .filter(|(_, e)| !matches!(&e.tab, Tab::Text(t) if t.transient.get()))
             .map(|(id, e)| {
                 let id = id.clone();
                 let style = TabStyle::of(&e.tab);
@@ -2087,12 +2148,16 @@ impl Window {
             Tab::Text(t) => t,
             _ => return Some(crate::help::topic(Doc::Image, Cursor::default(), false)),
         };
+        if self.tab_folders.borrow().get(&t.id).is_some_and(|f| f == TEMPLATES_FOLDER) {
+            return Some("note-templates");
+        }
         let language = t.language_id();
         let doc = match t.preview_kind() {
             Some(PreviewKind::Flashcards) => Doc::Flashcards,
             Some(PreviewKind::Slides) => Doc::Slides,
             Some(PreviewKind::Kanban) => Doc::Kanban,
             Some(PreviewKind::Mindmap) => Doc::Mindmap,
+            Some(PreviewKind::Adventure) => Doc::Adventure,
             Some(PreviewKind::Markdown) => Doc::Markdown,
             Some(PreviewKind::Rst | PreviewKind::Html | PreviewKind::PlantUml) => Doc::Preview,
             None if t.is_calc() => Doc::Calc,
@@ -2349,7 +2414,7 @@ impl Window {
         let mut notes = Vec::new();
         let mut skip = HashSet::new();
         for t in self.text_tabs() {
-            if t.path.borrow().is_some() {
+            if t.path.borrow().is_some() || t.transient.get() {
                 continue;
             }
             // A fresh empty note is not worth sending (it disappears when closed).
@@ -3045,6 +3110,11 @@ impl Window {
     /// Removes a tab from bookkeeping and remembers it for t!("Reopen Closed Tab").
     fn forget(self: &Rc<Self>, tab: &Tab) {
         let id = tab.meta().id;
+        if matches!(tab, Tab::Text(t) if t.transient.get()) {
+            self.tabs.borrow_mut().remove(&id);
+            self.dirty.borrow_mut().remove(&id);
+            return;
+        }
         if self.sync_discard.borrow_mut().remove(&id) {
             // Deleted elsewhere.
             self.tabs.borrow_mut().remove(&id);
@@ -3055,7 +3125,9 @@ impl Window {
             self.schedule_persist();
             return;
         }
-        if features::on(Feature::Folders) {
+        // Templates are kept even without the notes sidebar.
+        let template = self.tab_folders.borrow().get(&id).is_some_and(|f| f == TEMPLATES_FOLDER);
+        if features::on(Feature::Folders) || template {
             self.forget_into_library(tab);
             return;
         }
@@ -3191,6 +3263,8 @@ impl Window {
         *t.path.borrow_mut() = meta.path.clone();
         *t.custom_title.borrow_mut() = meta.title.clone();
         *t.schema.borrow_mut() = meta.schema.clone();
+        let linked = meta.template.is_some();
+        *t.template.borrow_mut() = meta.template.clone();
         t.language_locked.set(meta.language_locked);
         t.split.set(meta.split);
         t.set_wrap(meta.wrap);
@@ -3224,6 +3298,9 @@ impl Window {
             (None, None) => {}
         }
         t.set_preview(meta.preview);
+        if linked {
+            self.schedule_template_refresh();
+        }
         Some(page)
     }
 
@@ -3257,7 +3334,7 @@ impl Window {
             let Some(Tab::Text(t)) = self.tabs.borrow().get(&id).map(|e| e.tab.clone()) else {
                 continue;
             };
-            if t.loading.get() {
+            if t.loading.get() || t.transient.get() {
                 continue;
             }
             if let Some(sealed) = t.sealed_content() {
@@ -3303,6 +3380,9 @@ impl Window {
         let mut tabs = Vec::new();
         for i in 0..self.view.n_pages() {
             if let Some(e) = self.entry_for_page(&self.view.nth_page(i)) {
+                if matches!(&e.tab, Tab::Text(t) if t.transient.get()) {
+                    continue;
+                }
                 tabs.push(e.tab.meta());
             }
         }
@@ -4677,6 +4757,390 @@ impl Window {
         });
     }
 
+    // ===== templates ======================================================
+
+    /// The folder holding the templates (created when needed).
+    fn ensure_templates_folder(self: &Rc<Self>) {
+        let missing = !self.folders.borrow().iter().any(|f| f.id == TEMPLATES_FOLDER);
+        if missing {
+            self.folders.borrow_mut().push(Folder { id: TEMPLATES_FOLDER.into(), name: t!("Templates").into(), parent: None, collapsed: false });
+            self.refresh_tree();
+            self.schedule_persist();
+        }
+    }
+
+    /// All templates: open ones and those in the library, by name.
+    fn template_list(&self) -> Vec<TemplateNote> {
+        let mut out = Vec::new();
+        let folders = self.tab_folders.borrow();
+        for (id, entry) in self.tabs.borrow().iter() {
+            let Tab::Text(t) = &entry.tab else { continue };
+            if folders.get(id).is_some_and(|f| f == TEMPLATES_FOLDER) && t.lock_state() == LockState::Open {
+                out.push(TemplateNote { id: id.clone(), name: t.title(), language: t.language_id(), text: t.text() });
+            }
+        }
+        for m in self.library.borrow().iter() {
+            if m.folder.as_deref() == Some(TEMPLATES_FOLDER) && !m.trashed && m.lock.is_none() && m.path.is_none() {
+                if let Some(text) = store::read_note(&m.id) {
+                    out.push(TemplateNote { id: m.id.clone(), name: library_title(m), language: m.language.clone(), text });
+                }
+            }
+        }
+        out.sort_by_key(|t| t.name.to_lowercase());
+        out
+    }
+
+    /// A new template (empty, or with the text and syntax of `from`).
+    fn new_template(self: &Rc<Self>, from: Option<Rc<EditorTab>>) {
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let heading = if from.is_some() { t!("Save as Template") } else { t!("New Template") };
+            let initial = from.as_ref().map(|t| t.title()).unwrap_or_default();
+            let Some(name) = this.ask_folder_name(heading, &initial).await else { return };
+            this.ensure_templates_folder();
+            let t = this.new_note();
+            *t.custom_title.borrow_mut() = Some(name);
+            match &from {
+                Some(src) => {
+                    t.set_text_irreversible(&src.text());
+                    t.set_language_id(src.language_id().as_deref());
+                    t.language_locked.set(src.language_locked.get());
+                }
+                None => t.set_text_irreversible(&format!("{}\n", t!("{# Fields: {{ date }}, {{ time }}, {{ title }}, {{ ask \"Question\" }}, {{ cursor }} – building blocks: {% include \"Name\" %} – see Help (F1) #}"))),
+            }
+            t.place_cursor(CursorTarget::End);
+            this.tab_folders.borrow_mut().insert(t.id.clone(), TEMPLATES_FOLDER.into());
+            this.refresh_title(&t.id);
+            this.refresh_tree();
+            this.mark_dirty(&t.id);
+            this.sync_ui();
+            if from.is_some() {
+                this.toast(t!("Saved as template"));
+            }
+        });
+    }
+
+    /// Lets the user pick a template to create a note from, insert or edit.
+    fn pick_template(self: &Rc<Self>, usage: TemplateUse) {
+        let list = self.template_list();
+        let (heading, action) = match usage {
+            TemplateUse::New => (t!("New from Template"), t!("_Create")),
+            TemplateUse::Insert => (t!("Insert Template"), t!("_Insert")),
+            TemplateUse::Edit => (t!("Edit Templates"), t!("_Open")),
+        };
+        let dialog = adw::AlertDialog::new(Some(heading), None);
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        let search = gtk::SearchEntry::builder().placeholder_text(t!("Search templates")).build();
+        let rows = gtk::ListBox::builder().selection_mode(gtk::SelectionMode::Browse).build();
+        rows.add_css_class("boxed-list");
+        for tpl in &list {
+            let row = adw::ActionRow::builder().title(glib::markup_escape_text(&tpl.name).as_str()).activatable(true).build();
+            let what = tpl.language.as_deref().and_then(langs::by_id).map(|l| l.name().to_string()).unwrap_or_else(|| t!("Plain Text").into());
+            row.set_subtitle(&what);
+            rows.append(&row);
+        }
+        if let Some(first) = rows.row_at_index(0) {
+            rows.select_row(Some(&first));
+        }
+        let names: Vec<String> = list.iter().map(|t| t.name.to_lowercase()).collect();
+        {
+            let rows2 = rows.clone();
+            let names = names.clone();
+            search.connect_search_changed(move |s| {
+                let q = s.text().to_lowercase();
+                let names = names.clone();
+                rows2.set_filter_func(move |row| names.get(row.index() as usize).is_some_and(|n| n.contains(&q)));
+                // Keep a visible row selected.
+                let mut i = 0;
+                while let Some(r) = rows2.row_at_index(i) {
+                    if r.is_child_visible() {
+                        rows2.select_row(Some(&r));
+                        break;
+                    }
+                    i += 1;
+                }
+            });
+        }
+        let scroll = gtk::ScrolledWindow::builder()
+            .child(&rows)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .min_content_height(220)
+            .max_content_height(360)
+            .propagate_natural_height(true)
+            .build();
+        if list.is_empty() {
+            let empty = gtk::Label::builder()
+                .label(t!("No templates yet. Create one with “New Template” or save a note with “Save as Template…”."))
+                .wrap(true)
+                .build();
+            empty.add_css_class("dim-label");
+            content.append(&empty);
+        } else {
+            content.append(&search);
+            content.append(&scroll);
+        }
+        let new_btn = gtk::Button::builder().label(t!("New Template…")).halign(gtk::Align::Start).build();
+        new_btn.add_css_class("flat");
+        content.append(&new_btn);
+        dialog.set_extra_child(Some(&content));
+        let mut responses = vec![("cancel", t!("_Cancel"))];
+        if usage == TemplateUse::Edit && !list.is_empty() {
+            responses.push(("remove", t!("Remove from Templates")));
+        } else if !list.is_empty() {
+            responses.push(("edit", t!("_Edit")));
+        }
+        if !list.is_empty() {
+            responses.push(("use", action));
+        }
+        dialog.add_responses(&responses);
+        if responses.iter().any(|(r, _)| *r == "use") {
+            dialog.set_response_appearance("use", adw::ResponseAppearance::Suggested);
+            dialog.set_default_response(Some("use"));
+        }
+        dialog.set_close_response("cancel");
+        let d = dialog.clone();
+        let (rows3, names3) = (rows.clone(), names.clone());
+        search.connect_activate(move |s| {
+            // The filter follows the search text with a delay; pick the
+            // first match of what was typed.
+            let q = s.text().to_lowercase();
+            if let Some(i) = names3.iter().position(|n| n.contains(&q)) {
+                if let Some(r) = rows3.row_at_index(i as i32) {
+                    rows3.select_row(Some(&r));
+                }
+            }
+            d.emit_by_name::<()>("response", &[&"use"]);
+            d.close();
+        });
+        let d = dialog.clone();
+        rows.connect_row_activated(move |_, _| {
+            d.emit_by_name::<()>("response", &[&"use"]);
+            d.close();
+        });
+        let d = dialog.clone();
+        let this = self.clone();
+        new_btn.connect_clicked(move |_| {
+            d.close();
+            this.new_template(None);
+        });
+        // Typing goes to the search field (focus is only possible once shown).
+        search.connect_map(|s| {
+            s.grab_focus();
+        });
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let response = dialog.choose_future(&this.win).await;
+            let Some(tpl) = rows.selected_row().and_then(|r| list.get(r.index() as usize).cloned()) else { return };
+            match (response.as_str(), usage) {
+                ("edit", _) | ("use", TemplateUse::Edit) => this.open_note(&tpl.id),
+                ("remove", _) => {
+                    this.set_note_folder(&tpl.id, None);
+                    this.refresh_tree();
+                    this.schedule_persist();
+                    this.toast(&t!("“{}” is no longer a template", tpl.name));
+                }
+                ("use", _) => this.apply_template(tpl, usage).await,
+                _ => {}
+            }
+        });
+    }
+
+    /// Fills in a template (asking for its questions) and creates a note
+    /// from it or inserts it at the cursor.
+    async fn apply_template(self: &Rc<Self>, tpl: TemplateNote, usage: TemplateUse) {
+        let target = self.current_text();
+        let lib = TemplateLib(self.template_list());
+        let clipboard = self.win.clipboard().read_text_future().await.ok().flatten().map(|s| s.to_string()).unwrap_or_default();
+        let selection = match (&target, usage) {
+            (Some(t), TemplateUse::Insert) => t.buffer.selection_bounds().map(|(s, e)| t.buffer.text(&s, &e, true).to_string()).unwrap_or_default(),
+            _ => String::new(),
+        };
+        let folder_id = target.as_ref().and_then(|t| self.tab_folders.borrow().get(&t.id).cloned()).filter(|f| f != TEMPLATES_FOLDER);
+        let folder = folder_id.as_ref().and_then(|id| self.folders.borrow().iter().find(|f| &f.id == id).map(|f| f.name.clone())).unwrap_or_default();
+        let title = match (&target, usage) {
+            (Some(t), TemplateUse::Insert) => t.title(),
+            _ => tpl.name.clone(),
+        };
+        let user = {
+            let real = glib::real_name().to_string_lossy().into_owned();
+            if real.is_empty() || real == "Unknown" { glib::user_name().to_string_lossy().into_owned() } else { real }
+        };
+        let mut fields = crate::templates::Fields {
+            now: None,
+            title,
+            folder,
+            user,
+            clipboard,
+            selection,
+            answers: Default::default(),
+            german: crate::i18n::lang() == crate::i18n::Lang::De,
+            date_format: crate::templates::locale_date_format(),
+        };
+        let questions = match crate::templates::questions(&tpl.text, &lib, &fields) {
+            Ok(q) => q,
+            Err(e) => {
+                self.toast(&t!("Template “{}”: {}", tpl.name, e));
+                return;
+            }
+        };
+        if !questions.is_empty() {
+            let dialog = adw::AlertDialog::new(Some(&tpl.name), None);
+            let list = gtk::ListBox::builder().selection_mode(gtk::SelectionMode::None).build();
+            list.add_css_class("boxed-list");
+            let mut entries = Vec::new();
+            for q in &questions {
+                let row = adw::EntryRow::builder().title(glib::markup_escape_text(&q.label).as_str()).text(&q.default).activates_default(true).build();
+                list.append(&row);
+                entries.push(row);
+            }
+            dialog.set_extra_child(Some(&list));
+            dialog.add_responses(&[("cancel", t!("_Cancel")), ("ok", t!("_OK"))]);
+            dialog.set_response_appearance("ok", adw::ResponseAppearance::Suggested);
+            dialog.set_default_response(Some("ok"));
+            dialog.set_close_response("cancel");
+            if let Some(first) = entries.first() {
+                first.connect_map(|e| {
+                    e.grab_focus();
+                });
+            }
+            if dialog.choose_future(&self.win).await != "ok" {
+                return;
+            }
+            for (q, e) in questions.iter().zip(&entries) {
+                fields.answers.insert(q.label.clone(), e.text().to_string());
+            }
+        }
+        let out = match crate::templates::render(&tpl.text, &lib, &fields) {
+            Ok(o) => o,
+            Err(e) => {
+                self.toast(&t!("Template “{}”: {}", tpl.name, e));
+                return;
+            }
+        };
+        let cursor_chars = out.cursor.map(|b| out.text[..b].chars().count() as i32);
+        match usage {
+            TemplateUse::Insert => {
+                let Some(t) = target else { return };
+                let buf = &t.buffer;
+                buf.begin_user_action();
+                if let Some((mut s, mut e)) = buf.selection_bounds() {
+                    buf.delete(&mut s, &mut e);
+                }
+                let mut at = buf.iter_at_mark(&buf.get_insert());
+                let start = at.offset();
+                buf.insert(&mut at, &out.text);
+                if let Some(c) = cursor_chars {
+                    buf.place_cursor(&buf.iter_at_offset(start + c));
+                }
+                buf.end_user_action();
+                t.view.grab_focus();
+            }
+            _ => {
+                let t = self.new_note();
+                *t.template.borrow_mut() = Some(crate::templates::Link::new(&tpl.id, &tpl.name, &fields, &out.text));
+                t.set_text_irreversible(&out.text);
+                if tpl.language.is_some() {
+                    t.set_language_id(tpl.language.as_deref());
+                }
+                t.place_cursor(cursor_chars.map_or(CursorTarget::End, CursorTarget::Offset));
+                if let Some(f) = folder_id.filter(|_| features::on(Feature::Folders)) {
+                    self.tab_folders.borrow_mut().insert(t.id.clone(), f);
+                }
+                self.refresh_title(&t.id);
+                self.refresh_tree();
+                self.mark_dirty(&t.id);
+                self.sync_ui();
+            }
+        }
+    }
+
+    /// Merges template changes into the open notes created from templates,
+    /// after a pause (templates are usually edited in several steps).
+    fn schedule_template_refresh(self: &Rc<Self>) {
+        if let Some(id) = self.template_timer.borrow_mut().take() {
+            id.remove();
+        }
+        let weak = self.weak();
+        let id = glib::timeout_add_local_once(Duration::from_millis(1200), move || {
+            if let Some(this) = weak.upgrade() {
+                this.template_timer.borrow_mut().take();
+                this.refresh_template_notes();
+            }
+        });
+        *self.template_timer.borrow_mut() = Some(id);
+    }
+
+    /// Fills in each linked note's template again (with the note's own field
+    /// values) and merges what changed in the template into the note, except
+    /// where the note was edited.
+    fn refresh_template_notes(self: &Rc<Self>) {
+        let templates = self.template_list();
+        let lib = TemplateLib(templates.clone());
+        for t in self.text_tabs() {
+            let Some(mut link) = t.template.borrow().clone() else { continue };
+            if t.lock_state() != LockState::Open {
+                continue;
+            }
+            let src = templates.iter().find(|x| x.id == link.id).or_else(|| templates.iter().find(|x| x.name.eq_ignore_ascii_case(&link.name)));
+            let Some(src) = src else { continue };
+            let Ok(out) = crate::templates::render(&src.text, &lib, &link.fields()) else { continue };
+            if out.text == link.base {
+                continue;
+            }
+            let text = t.text();
+            let Some(merged) = crate::templates::merge(&link.base, &out.text, &text) else { continue };
+            link.base = out.text;
+            link.name = src.name.clone();
+            *t.template.borrow_mut() = Some(link);
+            if merged != text {
+                t.replace_changed(&text, &merged);
+                self.toast(&t!("“{}” updated from template “{}”", t.title(), src.name));
+            }
+            self.mark_dirty(&t.id);
+        }
+    }
+
+    /// After an update: a read-only tab with the changes since the version
+    /// that ran before.
+    fn show_whats_new(self: &Rc<Self>, existing: bool) {
+        let last = self.settings.borrow().last_version.clone();
+        if last == crate::changelog::VERSION {
+            return;
+        }
+        self.settings.borrow_mut().last_version = crate::changelog::VERSION.to_owned();
+        self.schedule_persist();
+        if last.is_empty() && !existing {
+            return;
+        }
+        let Some(doc) = crate::changelog::whats_new(&last) else { return };
+        let t = EditorTab::new("qn-whats-new".into(), self.shared.clone());
+        self.add_tab(Tab::Text(t.clone()), true);
+        t.show_document(t!("What's New"), &doc);
+        self.refresh_title(&t.id);
+        self.sync_ui();
+    }
+
+    /// Looks for a newer release on GitHub (in the background) and tells the
+    /// user about it.
+    fn check_for_updates(self: &Rc<Self>) {
+        if !self.settings.borrow().update_check {
+            return;
+        }
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let Ok(Ok(Some((version, url)))) = gio::spawn_blocking(crate::changelog::newer_release).await else { return };
+            let toast = adw::Toast::builder()
+                .title(t!("QuickNotes {} is available", version))
+                .button_label(t!("Download"))
+                .timeout(0)
+                .build();
+            toast.connect_button_clicked(move |_| {
+                gtk::UriLauncher::new(&url).launch(None::<&gtk::Window>, None::<&gio::Cancellable>, |_| {});
+            });
+            this.toasts.add_toast(toast);
+        });
+    }
+
     fn reload(self: &Rc<Self>) {
         let Some(t) = self.current_text() else { return };
         let Some(path) = t.path.borrow().clone() else {
@@ -5272,7 +5736,7 @@ impl Window {
                 let idx = self.lang_ids.iter().position(|l| *l == lang).unwrap_or(0);
                 self.lang_drop.set_selected(idx as u32);
                 self.lang_drop.set_visible(true);
-                self.set_toggle("preview", t.preview_kind().is_some(), t.preview_toggle_state());
+                self.set_toggle("preview", t.preview_kind().is_some() && !t.transient.get(), t.preview_toggle_state());
                 self.set_toggle("wrap", true, t.wrap());
                 let exportable = t.preview_kind().is_some_and(PreviewKind::is_document);
                 let mindmap = t.preview_kind() == Some(PreviewKind::Mindmap);
@@ -5282,7 +5746,7 @@ impl Window {
                 let slides = t.preview_kind() == Some(PreviewKind::Slides);
                 self.set_presentable(slides);
                 self.set_calc_tools(t.is_calc());
-                let markdown = matches!(t.preview_kind(), Some(PreviewKind::Markdown | PreviewKind::Slides | PreviewKind::Mindmap));
+                let markdown = matches!(t.preview_kind(), Some(PreviewKind::Markdown | PreviewKind::Slides | PreviewKind::Mindmap | PreviewKind::Adventure));
                 self.set_format_enabled(markdown);
                 let emmet = t.emmet_syntax();
                 self.set_enabled("emmet-expand", emmet.is_some());
@@ -5335,6 +5799,7 @@ impl Window {
                 _ => None,
             },
             data: matches!(&current, Some(Tab::Text(t)) if t.data_kind().is_some()),
+            linked: matches!(&current, Some(Tab::Text(t)) if t.template.borrow().is_some()),
         };
         if self.menu_context.get() != Some(context) {
             self.menu_context.set(Some(context));
@@ -6019,12 +6484,13 @@ enum TabStyle {
     Kanban,
     Cards,
     Mindmap,
+    Adventure,
     Image,
 }
 
 impl TabStyle {
-    const ALL: [Self; 9] =
-        [Self::Note, Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Kanban, Self::Cards, Self::Mindmap, Self::Image];
+    const ALL: [Self; 10] =
+        [Self::Note, Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Kanban, Self::Cards, Self::Mindmap, Self::Adventure, Self::Image];
 
     fn of(tab: &Tab) -> Self {
         let Tab::Text(t) = tab else { return Self::Image };
@@ -6033,6 +6499,7 @@ impl TabStyle {
             Some(PreviewKind::Kanban) => Self::Kanban,
             Some(PreviewKind::Flashcards) => Self::Cards,
             Some(PreviewKind::Mindmap) => Self::Mindmap,
+            Some(PreviewKind::Adventure) => Self::Adventure,
             Some(kind) if kind.is_document() => Self::Document,
             _ if t.is_calc() => Self::Calc,
             _ if t.language_id().is_none() => Self::Note,
@@ -6051,10 +6518,11 @@ impl TabStyle {
             Some(kanban::LANGUAGE) if features::on(Feature::Kanban) => Self::Kanban,
             Some(crate::flashcards::LANGUAGE) if features::on(Feature::Flashcards) => Self::Cards,
             Some(crate::mindmap::LANGUAGE) if features::on(Feature::Mindmaps) => Self::Mindmap,
+            Some(crate::adventure::LANGUAGE) if features::on(Feature::GmTools) => Self::Adventure,
             Some("calc") => Self::Calc,
             Some(
                 "markdown" | "rst" | "html" | "plantuml" | slides::LANGUAGE | kanban::LANGUAGE | crate::flashcards::LANGUAGE
-                | crate::mindmap::LANGUAGE,
+                | crate::mindmap::LANGUAGE | crate::adventure::LANGUAGE,
             ) => {
                 Self::Document
             }
@@ -6072,13 +6540,14 @@ impl TabStyle {
             Self::Kanban => "view-grid-symbolic",
             Self::Cards => "starred-symbolic",
             Self::Mindmap => "qn-format-mindmap-symbolic",
+            Self::Adventure => "qn-format-dice-symbolic",
             Self::Image => "image-x-generic-symbolic",
         }
     }
 
     /// Types with their own colour (plain notes keep the default look).
-    const COLORED: [Self; 8] =
-        [Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Kanban, Self::Cards, Self::Mindmap, Self::Image];
+    const COLORED: [Self; 9] =
+        [Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Kanban, Self::Cards, Self::Mindmap, Self::Adventure, Self::Image];
 
     /// Whether tabs of this type exist with the current features.
     fn available(&self) -> bool {
@@ -6087,6 +6556,7 @@ impl TabStyle {
             Self::Kanban => features::on(Feature::Kanban),
             Self::Cards => features::on(Feature::Flashcards),
             Self::Mindmap => features::on(Feature::Mindmaps),
+            Self::Adventure => features::on(Feature::GmTools),
             _ => true,
         }
     }
@@ -6102,6 +6572,7 @@ impl TabStyle {
             Self::Kanban => "kanban",
             Self::Cards => "flashcards",
             Self::Mindmap => "mindmap",
+            Self::Adventure => "adventure",
             Self::Image => "image",
         }
     }
@@ -6116,6 +6587,7 @@ impl TabStyle {
             Self::Kanban => t!("Kanban boards"),
             Self::Cards => t!("Flash cards"),
             Self::Mindmap => t!("Mind maps"),
+            Self::Adventure => t!("Adventures"),
             Self::Image => t!("Images"),
         }
     }
@@ -6130,6 +6602,7 @@ impl TabStyle {
             Self::Kanban => "#e5a50a",
             Self::Cards => "#c061cb",
             Self::Mindmap => "#e01b24",
+            Self::Adventure => "#986a44",
             Self::Image => "#ff7800",
         }
     }
@@ -6144,6 +6617,7 @@ impl TabStyle {
             Self::Kanban => "tab-kanban",
             Self::Cards => "tab-flashcards",
             Self::Mindmap => "tab-mindmap",
+            Self::Adventure => "tab-adventure",
             Self::Image => "tab-image",
         }
     }
@@ -6162,6 +6636,34 @@ fn b64() -> base64::engine::GeneralPurpose {
 }
 
 /// The title of a closed tab of the notes library.
+/// Id of the library folder holding the templates.
+pub const TEMPLATES_FOLDER: &str = "qn-templates";
+
+/// What a picked template is used for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TemplateUse {
+    New,
+    Insert,
+    Edit,
+}
+
+#[derive(Clone, Debug)]
+struct TemplateNote {
+    id: String,
+    name: String,
+    language: Option<String>,
+    text: String,
+}
+
+struct TemplateLib(Vec<TemplateNote>);
+
+impl crate::templates::Lookup for TemplateLib {
+    fn template(&self, name: &str) -> Option<String> {
+        let name = name.trim().to_lowercase();
+        self.0.iter().find(|t| t.name.trim().to_lowercase() == name).map(|t| t.text.clone())
+    }
+}
+
 fn library_title(meta: &TabMeta) -> String {
     meta.label
         .clone()
@@ -6280,6 +6782,13 @@ impl prefs::Handler for PrefsBridge {
         });
     }
 
+    fn set_update_check(&self, on: bool) {
+        self.with(|w| {
+            w.settings.borrow_mut().update_check = on;
+            w.schedule_persist();
+        });
+    }
+
     fn set_yaml_rule(&self, key: &str, on: bool) {
         self.with(|w| {
             let rules = {
@@ -6390,6 +6899,8 @@ struct MenuContext {
     lock: Option<LockState>,
     /// The current tab is JSON, YAML or XML (with the feature on).
     data: bool,
+    /// The current tab was created from a template.
+    linked: bool,
 }
 
 /// Tab password commands: all of them (tab context menu, enabled per tab) or
@@ -6470,6 +6981,10 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
     if context.features.mindmaps {
         file.push((t!("New Mind Map"), "win.new-mindmap"));
     }
+    if context.features.gmtools {
+        file.push((t!("New Adventure"), "win.new-adventure"));
+    }
+    file.push((t!("New from Template…"), "win.new-from-template"));
     file.push((t!("Open File…"), "win.open"));
     if context.features.folders {
         file.push((t!("Import Obsidian Vault…"), "win.import-obsidian"));
@@ -6498,6 +7013,9 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
         if style == TabStyle::Slides {
             menu.append_section(None, &presentation_section());
         }
+        if style == TabStyle::Adventure {
+            menu.append_section(None, &character_section());
+        }
     }
 
     let mut edit: Vec<(&str, &str)> = Vec::new();
@@ -6507,6 +7025,13 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
     if context.style.is_some() {
         edit.push((t!("Rename Tab…"), "win.rename"));
     }
+    if text {
+        edit.extend([(t!("Insert Template…"), "win.insert-template"), (t!("Save as Template…"), "win.save-as-template")]);
+    }
+    if context.linked {
+        edit.push((t!("Detach from Template"), "win.detach-template"));
+    }
+    edit.push((t!("Edit Templates…"), "win.edit-templates"));
     edit.push((t!("Reopen Closed Tab"), "win.reopen-closed"));
     menu.append_section(None, &menu_section(&edit));
     if context.emmet {
@@ -6539,6 +7064,17 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
     );
 }
 
+/// *Insert Character* with the sheet presets of the GM tools.
+fn character_section() -> gio::Menu {
+    let sub = gio::Menu::new();
+    for (id, label, _) in crate::adventure::presets() {
+        sub.append(Some(crate::i18n::tr(label)), Some(&format!("win.insert-character::{id}")));
+    }
+    let section = gio::Menu::new();
+    section.append_submenu(Some(t!("Insert Character")), &sub);
+    section
+}
+
 /// Schema commands for JSON, YAML and XML documents.
 fn data_section() -> gio::Menu {
     menu_section(&[(t!("Assign Schema…"), "win.assign-schema"), (t!("Problems List"), "win.problems")])
@@ -6559,6 +7095,9 @@ fn editor_context_menu(style: TabStyle, emmet: bool, data: bool) -> gio::Menu {
     }
     if data {
         menu.append_section(None, &data_section());
+    }
+    if style.is_text() {
+        menu.append_section(None, &menu_section(&[(t!("Insert Template…"), "win.insert-template")]));
     }
     if matches!(style, TabStyle::Note | TabStyle::Document | TabStyle::Slides | TabStyle::Cards) {
         menu.append_section(
@@ -6586,6 +7125,9 @@ fn editor_context_menu(style: TabStyle, emmet: bool, data: bool) -> gio::Menu {
     }
     if style == TabStyle::Calc {
         menu.append_section(None, &menu_section(&[(t!("Unit Converter…"), "win.unit-converter")]));
+    }
+    if style == TabStyle::Adventure {
+        menu.append_section(None, &character_section());
     }
     if features::on(Feature::Geocaching) {
         menu.append_section(None, &geocaching_menu());

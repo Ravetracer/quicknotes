@@ -70,6 +70,8 @@ pub enum PreviewKind {
     Flashcards,
     /// Mind map drawn from the outline.
     Mindmap,
+    /// The GM screen of an adventure.
+    Adventure,
 }
 
 impl PreviewKind {
@@ -87,6 +89,8 @@ impl PreviewKind {
             Some(crate::flashcards::LANGUAGE) => Some(Self::Flashcards),
             Some(crate::mindmap::LANGUAGE) if !features::on(Feature::Mindmaps) => Some(Self::Markdown),
             Some(crate::mindmap::LANGUAGE) => Some(Self::Mindmap),
+            Some(crate::adventure::LANGUAGE) if !features::on(Feature::GmTools) => Some(Self::Markdown),
+            Some(crate::adventure::LANGUAGE) => Some(Self::Adventure),
             Some(slides::LANGUAGE) => Some(Self::Slides),
             Some(kanban::LANGUAGE) => Some(Self::Kanban),
             _ => None,
@@ -110,7 +114,7 @@ impl PreviewKind {
             Self::Html => 400,
             Self::Markdown | Self::Rst | Self::Slides | Self::Flashcards => 250,
             Self::Kanban => 60,
-            Self::Mindmap => 150,
+            Self::Mindmap | Self::Adventure => 150,
         }
     }
 }
@@ -136,6 +140,8 @@ enum Shell {
     Kanban,
     /// The mind map.
     Mindmap,
+    /// The GM screen.
+    Adventure,
 }
 
 struct Preview {
@@ -261,6 +267,11 @@ pub struct EditorTab {
     problems_title: gtk::Label,
     problems_schema: gtk::Label,
     pub schema: RefCell<Option<String>>,
+    /// The template this note was created from.
+    pub template: RefCell<Option<crate::templates::Link>>,
+    /// A generated, read-only document (e.g. what's new): only the preview
+    /// is shown, and it is never stored.
+    pub transient: Cell<bool>,
     /// Called after each check (the window shows the number of problems).
     pub lint_hook: RefCell<Option<Box<dyn Fn()>>>,
 }
@@ -426,6 +437,8 @@ impl EditorTab {
             problems_title,
             problems_schema,
             schema: RefCell::new(None),
+            template: RefCell::new(None),
+            transient: Cell::new(false),
             lint_hook: RefCell::new(None),
         });
         let weak = Rc::downgrade(&tab);
@@ -904,7 +917,11 @@ impl EditorTab {
         !self.large.get()
             && matches!(
                 self.language_id().as_deref(),
-                None | Some("markdown") | Some(slides::LANGUAGE) | Some(crate::flashcards::LANGUAGE) | Some(crate::mindmap::LANGUAGE)
+                None | Some("markdown")
+                    | Some(slides::LANGUAGE)
+                    | Some(crate::flashcards::LANGUAGE)
+                    | Some(crate::mindmap::LANGUAGE)
+                    | Some(crate::adventure::LANGUAGE)
             )
     }
 
@@ -1548,6 +1565,11 @@ impl EditorTab {
                 return truncate(&title, 32);
             }
         }
+        if self.language_id().as_deref() == Some(crate::adventure::LANGUAGE) {
+            if let Some(title) = crate::adventure::title(&self.text()) {
+                return truncate(&title, 32);
+            }
+        }
         let mut iter = self.buffer.start_iter();
         for _ in 0..50 {
             let mut end = iter;
@@ -1813,6 +1835,7 @@ impl EditorTab {
     /// distraction-free mode).
     pub fn sync_format_bar(&self) {
         // Not for mind maps: the toolbar's width would squeeze the map.
+        // Not for adventures either: the GM screen needs the room.
         let markdown = matches!(self.preview_kind(), Some(PreviewKind::Markdown | PreviewKind::Slides | PreviewKind::Flashcards));
         self.format_bar.set_visible(markdown && self.shared.format_bar.get() && !self.focus.get());
         format_bar::sync_features(&self.format_bar);
@@ -1829,7 +1852,7 @@ impl EditorTab {
         self.sync_format_bar();
         let kanban = self.is_kanban();
         if let Some(source) = self.root.start_child() {
-            source.set_visible(!kanban || (self.preview_on.get() && !self.focus.get()));
+            source.set_visible(!self.transient.get() && (!kanban || (self.preview_on.get() && !self.focus.get())));
         }
         if self.preview_visible() && (!self.focus.get() || kanban) {
             let webview = self.ensure_webview();
@@ -1854,7 +1877,9 @@ impl EditorTab {
         }
         if max != self.split_max.get() {
             self.split_max.set(max);
-            let position = (max as f64 * self.split.get().unwrap_or(0.5)).round() as i32;
+            // The GM screen needs more room than the text.
+            let default = if self.preview_kind() == Some(PreviewKind::Adventure) { 0.4 } else { 0.5 };
+            let position = (max as f64 * self.split.get().unwrap_or(default)).round() as i32;
             self.root.set_position(position);
         } else {
             self.split.set(Some((self.root.position() as f64 / max as f64).clamp(0.0, 1.0)));
@@ -1985,6 +2010,7 @@ impl EditorTab {
                         let target = format!("{mode}\t{deck}").to_variant();
                         let _ = t.view.activate_action("win.cards-learn", Some(&target));
                     }
+                    Some("gm") => t.gm_action(&msg),
                     Some("task") => {
                         if let Some(line) = msg.get("line").and_then(|v| v.as_i64()) {
                             t.toggle_task(line as i32);
@@ -2044,7 +2070,8 @@ impl EditorTab {
             | PreviewKind::Slides
             | PreviewKind::Kanban
             | PreviewKind::Flashcards
-            | PreviewKind::Mindmap => None,
+            | PreviewKind::Mindmap
+            | PreviewKind::Adventure => None,
         }
     }
 
@@ -2075,7 +2102,21 @@ impl EditorTab {
 
     /// Shows the slide at the cursor in the preview.
     fn follow_cursor(&self) {
-        if self.loading.get() || !self.preview_visible() || self.preview_kind() != Some(PreviewKind::Slides) {
+        if self.loading.get() || !self.preview_visible() {
+            return;
+        }
+        // The GM screen shows the chapter at the cursor.
+        if self.preview_kind() == Some(PreviewKind::Adventure) {
+            let line = self.buffer.iter_at_mark(&self.buffer.get_insert()).line().max(0) as usize;
+            let index = slides::slide_at(&self.slide_lines.borrow(), line);
+            if index != self.shown_slide.get() {
+                if let Some(t) = self.me.borrow().upgrade() {
+                    t.schedule_render(60);
+                }
+            }
+            return;
+        }
+        if self.preview_kind() != Some(PreviewKind::Slides) {
             return;
         }
         let line = self.buffer.iter_at_mark(&self.buffer.get_insert()).line().max(0) as usize;
@@ -2144,6 +2185,79 @@ impl EditorTab {
         } else {
             *p.pending.borrow_mut() = Some(js);
         }
+    }
+
+    /// The adventure of this tab.
+    fn adventure(&self) -> crate::adventure::Doc {
+        let fallback = self.path.borrow().as_ref().and_then(|p| p.file_name()).map(|n| {
+            n.to_string_lossy().trim_end_matches(".md").trim_end_matches(".adventure").to_owned()
+        });
+        crate::adventure::parse(&self.text(), &fallback.unwrap_or_else(|| self.title()))
+    }
+
+    fn render_adventure(&self) {
+        let doc = self.adventure();
+        let line = self.buffer.iter_at_mark(&self.buffer.get_insert()).line().max(0) as usize;
+        let lines: Vec<(usize, usize)> = doc.chapters.iter().map(|c| (c.line, c.line)).collect();
+        self.shown_slide.set(slides::slide_at(&lines, line));
+        *self.slide_lines.borrow_mut() = lines;
+        let js = format!("GM.update({})", crate::adventure::model(&doc, line));
+        let preview = self.preview.borrow();
+        let Some(p) = preview.as_ref() else { return };
+        if p.shell.get() != Shell::Adventure {
+            let theme = self.shared.theme.get();
+            self.load_page(p, &crate::adventure::page(theme.dark, &theme.preview_vars()), Shell::Adventure);
+            *p.pending.borrow_mut() = Some(js);
+        } else if p.loaded.get() {
+            p.webview.evaluate_javascript(&js, None, None, None::<&gio::Cancellable>, |_| {});
+        } else {
+            *p.pending.borrow_mut() = Some(js);
+        }
+    }
+
+    /// An action of the GM screen (rolls, hit points, time, initiative, log).
+    fn gm_action(&self, msg: &serde_json::Value) {
+        use crate::adventure::Action;
+        let s = |k: &str| msg.get(k).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+        let n = |k: &str| msg.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
+        let action = match msg.get("action").and_then(|v| v.as_str()) {
+            Some("roll") => Action::Roll { notation: s("notation"), who: s("who"), label: s("label") },
+            Some("hp") => Action::Hp { name: s("name"), delta: n("delta") },
+            Some("time") => Action::Time { minutes: n("minutes") },
+            Some("settime") => Action::SetTime(s("time")),
+            Some("played") => Action::Played(n("seconds")),
+            Some("initiative") => Action::Initiative { chapter: n("chapter").max(0) as usize },
+            Some("next") => Action::Next,
+            Some("previous") => Action::Previous,
+            Some("endcombat") => Action::EndCombat,
+            Some("remove") => Action::Remove(s("name")),
+            Some("note") => Action::Note(s("text")),
+            _ => return,
+        };
+        let text = self.text();
+        let doc = self.adventure();
+        match crate::adventure::apply(&text, &doc, &action, &mut crate::dice::SystemRng, &jiff::Zoned::now()) {
+            Ok(new) if new != text => self.replace_changed(&text, &new),
+            Ok(_) => {}
+            Err(e) => self.message(&e),
+        }
+    }
+
+    /// Replaces only the part of the text that differs (keeps the cursor and
+    /// the scroll position elsewhere).
+    pub fn replace_changed(&self, old: &str, new: &str) {
+        let prefix = old.chars().zip(new.chars()).take_while(|(a, b)| a == b).count();
+        let old_rest: Vec<char> = old.chars().skip(prefix).collect();
+        let new_rest: Vec<char> = new.chars().skip(prefix).collect();
+        let suffix = old_rest.iter().rev().zip(new_rest.iter().rev()).take_while(|(a, b)| a == b).count();
+        let old_end = prefix + old_rest.len() - suffix;
+        let insert: String = new_rest[..new_rest.len() - suffix].iter().collect();
+        self.buffer.begin_user_action();
+        let mut start = self.buffer.iter_at_offset(prefix as i32);
+        let mut end = self.buffer.iter_at_offset(old_end as i32);
+        self.buffer.delete(&mut start, &mut end);
+        self.buffer.insert(&mut start, &insert);
+        self.buffer.end_user_action();
     }
 
     /// Adds a branch below the node on `line` (from the "+" of the preview).
@@ -2321,6 +2435,7 @@ impl EditorTab {
             Some(PreviewKind::Kanban) => self.render_kanban(),
             Some(PreviewKind::Flashcards) => self.render_flashcards(),
             Some(PreviewKind::Mindmap) => self.render_mindmap(),
+            Some(PreviewKind::Adventure) => self.render_adventure(),
             None => {}
         }
     }
@@ -2357,6 +2472,17 @@ impl EditorTab {
                 t.schedule_render(0);
             }
         });
+    }
+
+    /// Shows `markdown` as a read-only document (only the preview).
+    pub fn show_document(self: &Rc<Self>, title: &str, markdown: &str) {
+        self.transient.set(true);
+        *self.custom_title.borrow_mut() = Some(title.to_owned());
+        self.set_text_irreversible(markdown);
+        self.view.set_editable(false);
+        self.language_locked.set(true);
+        self.set_language_id(Some("markdown"));
+        self.set_preview(true);
     }
 
     // ----- data formats --------------------------------------------------
@@ -2544,6 +2670,7 @@ impl EditorTab {
             split: self.split.get(),
             lock: self.lock(),
             schema: self.schema.borrow().clone(),
+            template: self.template.borrow().clone(),
             ..Default::default()
         }
     }

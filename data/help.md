@@ -1,7 +1,7 @@
 # QuickNotes Help {#top}
 
-**Contents:** [Notes & tabs](#notes) · [Folders](#folders) · [Checklists](#checklists) · [Tables](#tables) · [Formatting](#formatting) · [Math & music](#notation) · [Charts](#charts) · [Kanban](#kanban) · [Mind maps](#mindmaps) · [Flash cards](#flashcards) · [Calculations](#calc) · [Templates](#templates) ·
-[Previews & export](#previews) · [Presentations](#slides) · [Data formats](#dataformats) · [Developer tools](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
+**Contents:** [Notes & tabs](#notes) · [Folders](#folders) · [Note templates](#note-templates) · [Checklists](#checklists) · [Tables](#tables) · [Formatting](#formatting) · [Math & music](#notation) · [Charts](#charts) · [Kanban](#kanban) · [Mind maps](#mindmaps) · [Flash cards](#flashcards) · [Calculations](#calc) · [Templates](#templates) ·
+[Previews & export](#previews) · [Presentations](#slides) · [Data formats](#dataformats) · [Developer tools](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) · [GM tools](#gmtools) ·
 [Security](#security) · [Backup](#backup) · [Sync](#sync) ·
 [Shortcuts](#shortcuts)
 
@@ -71,6 +71,61 @@ vault itself stays untouched. Images and other files the notes use are copied al
 `~/.local/share/quicknotes/attachments`). Importing the same vault again only adds notes that
 were not imported before. Obsidian's own syntax is understood by the preview, see
 [Formatting](#formatting).
+
+## Note templates {#note-templates}
+
+Templates are notes in the **Templates** folder that serve as a starting point for new notes or
+as **building blocks** inserted into other notes. *New Template* (in *Edit Templates…*) creates
+one, *Save as Template…* turns a copy of the current note into one; the template's name is its
+tab name.
+
+- **New from Template…** (Ctrl+Alt+N, main menu) creates a note from a template, in its syntax.
+- **Insert Template…** (Ctrl+Alt+I, main menu or right-click) inserts one at the cursor.
+- **Edit Templates…** opens a template for editing or removes it from the templates.
+
+**Notes stay linked to their template.** When the template (or a building block it includes or
+extends) changes later, the change is merged into the notes created from it – into open notes
+right away, into others when they are opened. Parts of a note you changed yourself are kept; the
+fields keep the values from when the note was created (date, answers, …). *Detach from Template*
+ends the link.
+
+Templates use a Twig-like syntax:
+
+| Syntax | Inserts |
+|---|---|
+| `{{ date }}`, `{{ time }}`, `{{ datetime }}` | today's date, the time (date in the format of your locale) |
+| `{{ date("tomorrow") }}`, `{{ date("+3 days") }}`, `{{ date("next monday") }}` | another day (`yesterday`, `-1 week`, `+2 months`, `last friday`, `monday`, …) |
+| `{{ date\|format("%A, %d %B %Y") }}` | a date in your own format (strftime: `%d` day, `%m` month, `%Y` year, `%A` weekday, `%B` month name, `%V` week) |
+| `{{ weekday }}`, `{{ week }}`, `{{ year }}`, `{{ month }}`, `{{ day }}` | parts of today's date |
+| `{{ title }}`, `{{ folder }}`, `{{ user }}` | the note's title (the template's name for new notes), its folder, your name |
+| `{{ clipboard }}`, `{{ selection }}` | the clipboard's text, the selected text (which the template replaces) |
+| `{{ cursor }}` | where the cursor goes afterwards |
+| `{{ ask "Customer" }}`, `{{ ask "Status" "open" }}` | asked for before inserting (with a default value) |
+| `{% include "Signature" %}` | another template (a building block) |
+
+Filters: `upper`, `lower`, `capitalize`, `trim`, `default("…")`, e.g. `{{ selection|default("TODO") }}`.
+
+**Inheritance:** a template can build on another one. The base template defines blocks,
+the derived one replaces them; `{{ parent() }}` keeps the base's content:
+
+```
+{# Template "Base" #}
+# {{ ask "Topic" }} – {{ date }}
+{% block body %}{% endblock %}
+{% include "Signature" %}
+
+{# Template "Meeting" #}
+{% extends "Base" %}
+{% block body %}
+## Attendees
+- {{ cursor }}
+{% endblock %}
+```
+
+Also: `{% if selection %}…{% else %}…{% endif %}`, comments `{# … #}` (not inserted) and
+`{% raw %}…{% endraw %}` for text with braces. A line holding only a `{% … %}` or `{# … #}` tag
+leaves no empty line. Templates are kept, synced and backed up like other notes, also with the
+notes sidebar switched off.
 
 ## Checklists {#checklists}
 
@@ -879,6 +934,69 @@ selected with the mouse. The options are remembered for the next time.
 - Roman numerals from 4000 on: a thousand-fold value is written with an overline (`X̄L̄` =
   40000) or in brackets (`(XL)` = 40000). Both forms are read.
 
+## GM tools {#gmtools}
+
+For game masters of pen-and-paper role-playing games. *New Adventure* (main menu) creates an
+adventure with examples; the **GM screen** next to the text shows the chapter at the cursor, the
+party, a dice tray, play and world time, initiative and the session log. Everything is saved in
+the note.
+
+**Chapters** are the `#` headings. The GM screen follows the cursor; ◀ ▶ and the chapter list jump
+between chapters. Dice notation in inline code (`` `1d20+2` ``) can be clicked to roll.
+
+**Character sheets** for players, NPCs and monsters are ```` ```character ```` blocks (YAML).
+*Insert Character* (main menu or right-click) adds a preset (generic, D&D 5e, Pathfinder 2e,
+DSA 5):
+
+````
+```character
+name: Aria
+type: player          # player, npc or monster
+hp: 24/31
+ac: 15
+init: +3
+stats: {STR: 10, DEX: 16, CON: 12}
+skills: {Stealth: +5}
+weapons:
+  - Shortsword +5, 1d6+3
+conditions: [poisoned]
+```
+````
+
+Any other fields are shown as well. Values become dice buttons: stats roll d20 with the
+modifier (DSA: d20 against the value), `+5` rolls `1d20+5`, `1d6+3` rolls damage, `AT 14`
+rolls d20 ≤ 14, DSA skills like `Klettern: MU/GE/KK 6` roll a three-attribute check. `count: 3`
+creates three copies in initiative. Players appear in the party panel; the others where they
+are written. *system:* in the front matter (or a sheet) is `dnd5e`, `pf2e`, `dsa5` or `generic`.
+
+**Dice:** buttons for d4 to d20, d% and Fate dice (with a count), advantage and disadvantage,
+and any notation:
+
+| Notation | Meaning |
+|---|---|
+| `2d6+3`, `d20-1`, `3W6` | sums |
+| `2d20kh1`, `2d20kl1`, `4d6dl1` | keep highest/lowest, drop lowest |
+| `3d6!` | exploding dice |
+| `2d6r2` | reroll 1s and 2s once |
+| `6d10>=8` | count successes |
+| `4dF`, `d%` | Fate dice, d100 from two d10 |
+| `check 12/14/13 6 -1` | three-attribute check (DSA) with skill points and modifier |
+| `2d{Omen}` | custom dice |
+
+Custom dice are defined in a ```` ```dice ```` block, one per line: `Omen: Doom, Hope, Hope, -, -, -`.
+
+**Time:** the play-time clock (▶/⏸) adds up over sessions. World time moves with +10′, +1h,
+rest (+8h) and +1 day; click it to set a date (`1492-3-15 14:30`). A calendar of your own goes
+into the front matter: `calendar: Hammer 30, Alturiak 30, …`.
+
+**Initiative** rolls for the party and the NPCs and monsters of the current chapter, sorted;
+*Next turn* moves through the order and counts rounds. Hit points change with − and + (by the
+*Amount* in the party panel) on cards and in the order.
+
+**Log:** rolls, hit points, time and initiative are logged with the time of day; notes can be
+added. State and log are kept in ```` ```session ```` and ```` ```log ```` blocks at the end of
+the note.
+
 ## Security {#security}
 
 ### App password
@@ -982,6 +1100,7 @@ another target ends the previous one (your notes stay).
 <!-- if kanban -->
 | Ctrl+Shift+K | New Kanban board |
 <!-- end -->
+| Ctrl+Alt+N, Ctrl+Alt+I | New note from template, insert template |
 | Ctrl+O, Ctrl+S, Ctrl+Shift+S | Open, save, save as |
 | Ctrl+W, Ctrl+Shift+T | Close tab, reopen closed tab |
 | F2 | Rename tab |

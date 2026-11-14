@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- QuickNotes adventures (GM tools): Markdown with front matter
+     (`adventure: 1`); `#` headings are chapters, ```character, ```dice,
+     ```session and ```log blocks hold sheets and game state (see
+     src/adventure.rs). -->
+<language id="adventure" name="Adventure" version="2.0" section="Markup">
+  <metadata>
+    <property name="globs">*.adventure.md</property>
+    <property name="block-comment-start">&lt;!--</property>
+    <property name="block-comment-end">--&gt;</property>
+    <property name="suggested-suffix">.adventure.md</property>
+  </metadata>
+
+  <styles>
+    <style id="front-matter" name="Front matter" map-to="def:comment"/>
+    <style id="key" name="Setting" map-to="def:type"/>
+    <style id="fence" name="Block" map-to="def:preprocessor"/>
+    <style id="field" name="Sheet field" map-to="def:keyword"/>
+  </styles>
+
+  <definitions>
+    <context id="front-matter" style-ref="front-matter" first-line-only="true" class="no-spell-check">
+      <start>^---\s*$</start>
+      <end>^(---|\.\.\.)\s*$</end>
+      <include>
+        <context id="key" style-ref="key">
+          <match>^\s*-?\s*[A-Za-z_-]+(?=:)</match>
+        </context>
+      </include>
+    </context>
+
+    <context id="sheet" class="no-spell-check">
+      <start>^```(character|charakter|npc|monster|dice|würfel|session|log)\s*$</start>
+      <end>^```\s*$</end>
+      <include>
+        <context sub-pattern="0" where="start" style-ref="fence"/>
+        <context sub-pattern="0" where="end" style-ref="fence"/>
+        <context id="field" style-ref="field">
+          <match>^\s*-?\s*[^\s:#][^:#]*(?=:(\s|$))</match>
+        </context>
+      </include>
+    </context>
+
+    <context id="adventure">
+      <include>
+        <context ref="front-matter"/>
+        <context ref="sheet"/>
+        <context ref="markdown:markdown"/>
+      </include>
+    </context>
+  </definitions>
+</language>

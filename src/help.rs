@@ -79,6 +79,7 @@ pub enum Doc<'a> {
     Slides,
     Kanban,
     Mindmap,
+    Adventure,
     Calc,
     /// reStructuredText, HTML or PlantUML with a preview.
     Preview,
@@ -117,6 +118,7 @@ pub fn topic(doc: Doc<'_>, cursor: Cursor<'_>, emmet: bool) -> &'static str {
         Doc::Slides => "slides",
         Doc::Kanban => "kanban",
         Doc::Mindmap => "mindmaps",
+        Doc::Adventure => "gmtools",
         Doc::Calc => "calc",
         Doc::Markdown => "formatting",
         Doc::Preview => "previews",
@@ -259,7 +261,7 @@ mod tests {
             assert_eq!(ifs, help.matches("<!-- end -->").count(), "unbalanced markers");
             let keys: Vec<&str> = crate::features::LIST.iter().map(|(f, ..)| f.key()).collect();
             let minimal = filter(help, |k| !keys.contains(&k));
-            for key in ["charts", "slides", "kanban", "geocaching", "devtools", "flashcards", "folders", "sync", "mindmaps", "dataformats"] {
+            for key in ["charts", "slides", "kanban", "geocaching", "devtools", "flashcards", "folders", "sync", "mindmaps", "dataformats", "gmtools"] {
                 assert!(!minimal.contains(&format!("{{#{key}}}")), "{key}");
                 assert!(!minimal.contains(&format!("](#{key})")), "{key}");
                 assert!(filter(help, |_| true).contains(&format!("{{#{key}}}")), "{key}");

@@ -25,6 +25,7 @@ pub enum Feature {
     Sync,
     Mindmaps,
     DataFormats,
+    GmTools,
 }
 
 /// The features with their preference labels and descriptions.
@@ -48,6 +49,11 @@ pub const LIST: &[(Feature, &str, &str)] = &[
         "Data Formats",
         "Checks and completion for JSON, YAML and XML, with JSON Schema and XML Schema support",
     ),
+    (
+        Feature::GmTools,
+        "GM Tools",
+        "Adventures for game masters: chapters, character sheets, dice, initiative, play and world time",
+    ),
 ];
 
 impl Feature {
@@ -64,6 +70,7 @@ impl Feature {
             Self::Sync => 256,
             Self::Mindmaps => 512,
             Self::DataFormats => 1024,
+            Self::GmTools => 2048,
         }
     }
 
@@ -82,6 +89,7 @@ impl Feature {
             Self::Sync => "sync",
             Self::Mindmaps => "mindmaps",
             Self::DataFormats => "dataformats",
+            Self::GmTools => "gmtools",
         }
     }
 }
@@ -108,6 +116,8 @@ pub struct Features {
     pub mindmaps: bool,
     #[serde(default = "yes")]
     pub dataformats: bool,
+    #[serde(default = "yes")]
+    pub gmtools: bool,
 }
 
 fn yes() -> bool {
@@ -117,7 +127,7 @@ fn yes() -> bool {
 impl Features {
     /// All features on (settings from before the switches existed).
     pub fn all() -> Self {
-        Self { charts: true, presentations: true, kanban: true, geocaching: true, plantuml: true, devtools: true, flashcards: true, folders: true, sync: true, mindmaps: true, dataformats: true }
+        Self { charts: true, presentations: true, kanban: true, geocaching: true, plantuml: true, devtools: true, flashcards: true, folders: true, sync: true, mindmaps: true, dataformats: true, gmtools: true }
     }
 
     pub fn get(&self, f: Feature) -> bool {
@@ -133,6 +143,7 @@ impl Features {
             Feature::Sync => self.sync,
             Feature::Mindmaps => self.mindmaps,
             Feature::DataFormats => self.dataformats,
+            Feature::GmTools => self.gmtools,
         }
     }
 
@@ -149,6 +160,7 @@ impl Features {
             Feature::Sync => self.sync = on,
             Feature::Mindmaps => self.mindmaps = on,
             Feature::DataFormats => self.dataformats = on,
+            Feature::GmTools => self.gmtools = on,
         }
     }
 

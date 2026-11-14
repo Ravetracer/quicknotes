@@ -93,10 +93,22 @@ after a restart.
   by another program (Dropbox, Syncthing, …) or S3-compatible storage: notes, folders and trash
   end-to-end encrypted with a sync password; at start, every five minutes and when closing;
   both-sides changes kept as conflict copies
+- **GM tools** (switchable): adventures for pen-and-paper game masters – chapters (`#` headings)
+  shown one at a time in a GM screen, character sheets for players, NPCs and monsters (presets for
+  D&D 5e, Pathfinder 2e, DSA 5), clickable rolls, a dice tray (keep/drop, exploding, success
+  pools, Fate, d%, DSA checks, custom dice), initiative with rounds and hit points, play time,
+  world time with custom calendars and a session log, all saved in the note
+- **Note templates**: notes in a *Templates* folder with a Twig-like syntax – date/time fields in
+  the locale format (with offsets like `date("next monday")`), questions asked on insert, cursor,
+  selection, clipboard, title, folder and user fields, building blocks via `{% include %}` and
+  inheritance via `{% extends %}` / `{% block %}`; new notes from templates (Ctrl+Alt+N) or
+  insertion at the cursor (Ctrl+Alt+I)
 - **Data formats** (switchable): JSON, YAML and XML are checked while typing (syntax, duplicate keys,
   yamllint-like style rules) with underlines and a problems list; validation and completion from
   JSON Schema and XML Schema (XSD) – assigned to the note, named in the document or found by file
   name in the SchemaStore catalog
+- **What's new** after an update (a read-only tab), the full changelog in *About QuickNotes* and a
+  check for a newer release on GitHub at start (one request to the GitHub API, can be switched off)
 - Editor font selectable in the preferences (e.g. fonts with ligatures like Fira Code); ligatures can be switched off
 
 ## Keyboard shortcuts
@@ -106,6 +118,7 @@ after a restart.
 | Ctrl+N / Ctrl+T | New note |
 | Ctrl+Shift+N | New calculation sheet |
 | Ctrl+Shift+K | New Kanban board |
+| Ctrl+Alt+N / Ctrl+Alt+I | New note from template / insert template |
 | Ctrl+O | Open file(s) — or drop files onto the window |
 | Ctrl+S / Ctrl+Shift+S | Save to file / Save as |
 | Ctrl+W | Close tab (notes can be restored via the *Undo* toast) |

@@ -65,12 +65,15 @@ struct Raw {
     message: String,
 }
 
+/// libxml2's own entity loader (the loader setting is process-wide, so the
+/// fallback must be too).
+static DEFAULT_LOADER: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
 thread_local! {
     /// Problems collected by the error handler during a call.
     static COLLECTED: RefCell<Vec<Raw>> = const { RefCell::new(Vec::new()) };
     /// Downloaded schema files by URL, for the entity loader.
     static LOCAL: RefCell<HashMap<String, PathBuf>> = RefCell::new(HashMap::new());
-    static DEFAULT_LOADER: RefCell<Option<EntityLoader>> = const { RefCell::new(None) };
     /// Parsed schemas by the set of locations they were made from.
     static PARSED: RefCell<HashMap<String, Result<usize, Vec<String>>>> = RefCell::new(HashMap::new());
 }
@@ -94,8 +97,11 @@ unsafe extern "C" fn load_entity(url: *const c_char, id: *const c_char, ctxt: *m
             return std::ptr::null_mut();
         }
     }
-    match DEFAULT_LOADER.with(|d| *d.borrow()) {
-        Some(f) => f(url, id, ctxt),
+    match DEFAULT_LOADER.get() {
+        Some(&f) => {
+            let f: EntityLoader = std::mem::transmute(f);
+            f(url, id, ctxt)
+        }
         None => std::ptr::null_mut(),
     }
 }
@@ -105,7 +111,9 @@ fn with_handlers<T>(f: impl FnOnce() -> T) -> (T, Vec<Raw>) {
     unsafe {
         xmlInitParser();
         let previous = xmlGetExternalEntityLoader();
-        DEFAULT_LOADER.with(|d| *d.borrow_mut() = previous);
+        if let Some(p) = previous.filter(|p| *p as usize != load_entity as EntityLoader as usize) {
+            DEFAULT_LOADER.get_or_init(|| p as usize);
+        }
         xmlSetExternalEntityLoader(Some(load_entity));
         xmlSetStructuredErrorFunc(std::ptr::null_mut(), Some(collect));
         COLLECTED.with(|c| c.borrow_mut().clear());

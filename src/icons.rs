@@ -33,6 +33,7 @@ const FORMAT_ICONS: &[(&str, &[u8])] = &[
     ("italic", include_bytes!("../data/icons/format/qn-format-italic-symbolic.svg")),
     ("math", include_bytes!("../data/icons/format/qn-format-math-symbolic.svg")),
     ("mindmap", include_bytes!("../data/icons/format/qn-format-mindmap-symbolic.svg")),
+    ("dice", include_bytes!("../data/icons/format/qn-format-dice-symbolic.svg")),
     ("music", include_bytes!("../data/icons/format/qn-format-music-symbolic.svg")),
     ("link", include_bytes!("../data/icons/format/qn-format-link-symbolic.svg")),
     ("numbered-list", include_bytes!("../data/icons/format/qn-format-numbered-list-symbolic.svg")),

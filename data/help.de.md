@@ -1,7 +1,7 @@
 # QuickNotes-Hilfe {#top}
 
-**Inhalt:** [Notizen & Tabs](#notes) · [Ordner](#folders) · [Checklisten](#checklists) · [Tabellen](#tables) · [Formatierung](#formatting) · [Formeln & Noten](#notation) · [Diagramme](#charts) · [Kanban](#kanban) · [Mindmaps](#mindmaps) · [Lernkarten](#flashcards) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
-[Vorschau & Export](#previews) · [Präsentationen](#slides) · [Datenformate](#dataformats) · [Entwicklerwerkzeuge](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
+**Inhalt:** [Notizen & Tabs](#notes) · [Ordner](#folders) · [Notizvorlagen](#note-templates) · [Checklisten](#checklists) · [Tabellen](#tables) · [Formatierung](#formatting) · [Formeln & Noten](#notation) · [Diagramme](#charts) · [Kanban](#kanban) · [Mindmaps](#mindmaps) · [Lernkarten](#flashcards) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
+[Vorschau & Export](#previews) · [Präsentationen](#slides) · [Datenformate](#dataformats) · [Entwicklerwerkzeuge](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) · [Spielleitung](#gmtools) ·
 [Sicherheit](#security) · [Sicherung](#backup) · [Sync](#sync) ·
 [Tastenkürzel](#shortcuts)
 
@@ -78,6 +78,61 @@ kopiert; der Vault selbst bleibt unverändert. Bilder und andere Dateien, die di
 verwenden, werden mitkopiert (nach `~/.local/share/quicknotes/attachments`). Ein erneuter
 Import desselben Vaults fügt nur Notizen hinzu, die noch nicht importiert wurden. Obsidians
 eigene Syntax versteht die Vorschau, siehe [Formatierung](#formatting).
+
+## Notizvorlagen {#note-templates}
+
+Vorlagen sind Notizen im Ordner **Vorlagen**. Sie dienen als Ausgangspunkt für neue Notizen oder
+als **Bausteine**, die in andere Notizen eingefügt werden. *Neue Vorlage* (unter *Vorlagen
+bearbeiten …*) legt eine an, *Als Vorlage speichern …* macht eine Kopie der aktuellen Notiz zur
+Vorlage; der Name der Vorlage ist ihr Tab-Name.
+
+- **Neu aus Vorlage …** (Strg+Alt+N, Hauptmenü) legt eine Notiz aus einer Vorlage an, in deren Syntax.
+- **Vorlage einfügen …** (Strg+Alt+I, Hauptmenü oder Rechtsklick) fügt eine an der Schreibmarke ein.
+- **Vorlagen bearbeiten …** öffnet eine Vorlage zum Bearbeiten oder nimmt sie aus den Vorlagen.
+
+**Notizen bleiben mit ihrer Vorlage verbunden.** Ändert sich die Vorlage (oder ein Baustein, den
+sie einbindet oder erweitert) später, wird die Änderung in die daraus angelegten Notizen
+übernommen – in offene sofort, in andere beim Öffnen. Stellen, die du in der Notiz selbst geändert
+hast, bleiben erhalten; die Felder behalten ihre Werte vom Anlegen (Datum, Antworten, …).
+*Von Vorlage lösen* hebt die Verbindung auf.
+
+Vorlagen verwenden eine Twig-ähnliche Syntax:
+
+| Syntax | Fügt ein |
+|---|---|
+| `{{ date }}`, `{{ time }}`, `{{ datetime }}` | das heutige Datum, die Uhrzeit (Datum im Format der Systemsprache) |
+| `{{ date("tomorrow") }}`, `{{ date("+3 days") }}`, `{{ date("next monday") }}` | einen anderen Tag (`yesterday`, `-1 week`, `+2 months`, `last friday`, `monday`, …) |
+| `{{ date\|format("%A, %d. %B %Y") }}` | ein Datum im eigenen Format (strftime: `%d` Tag, `%m` Monat, `%Y` Jahr, `%A` Wochentag, `%B` Monatsname, `%V` Kalenderwoche) |
+| `{{ weekday }}`, `{{ week }}`, `{{ year }}`, `{{ month }}`, `{{ day }}` | Teile des heutigen Datums |
+| `{{ title }}`, `{{ folder }}`, `{{ user }}` | den Titel der Notiz (bei neuen Notizen den Vorlagennamen), ihren Ordner, deinen Namen |
+| `{{ clipboard }}`, `{{ selection }}` | den Text der Zwischenablage, den markierten Text (den die Vorlage ersetzt) |
+| `{{ cursor }}` | wo die Schreibmarke danach steht |
+| `{{ ask "Kunde" }}`, `{{ ask "Status" "offen" }}` | wird vor dem Einfügen abgefragt (mit Vorgabewert) |
+| `{% include "Signatur" %}` | eine andere Vorlage (einen Baustein) |
+
+Filter: `upper`, `lower`, `capitalize`, `trim`, `default("…")`, z. B. `{{ selection|default("TODO") }}`.
+
+**Vererbung:** Eine Vorlage kann auf einer anderen aufbauen. Die Basisvorlage definiert Blöcke,
+die abgeleitete ersetzt sie; `{{ parent() }}` übernimmt den Inhalt der Basis:
+
+```
+{# Vorlage „Basis“ #}
+# {{ ask "Thema" }} – {{ date }}
+{% block body %}{% endblock %}
+{% include "Signatur" %}
+
+{# Vorlage „Besprechung“ #}
+{% extends "Basis" %}
+{% block body %}
+## Teilnehmende
+- {{ cursor }}
+{% endblock %}
+```
+
+Außerdem: `{% if selection %}…{% else %}…{% endif %}`, Kommentare `{# … #}` (werden nicht
+eingefügt) und `{% raw %}…{% endraw %}` für Text mit geschweiften Klammern. Eine Zeile, die nur ein
+`{% … %}`- oder `{# … #}`-Tag enthält, hinterlässt keine Leerzeile. Vorlagen werden wie andere
+Notizen aufbewahrt, synchronisiert und gesichert, auch bei ausgeschalteter Notiz-Seitenleiste.
 
 ## Checklisten {#checklists}
 
@@ -912,6 +967,71 @@ Auswahl ein. Die Optionen werden für das nächste Mal gespeichert.
 - Römische Zahlen ab 4000: Ein tausendfacher Wert wird mit Überstrich (`X̄L̄` = 40000) oder in
   Klammern (`(XL)` = 40000) geschrieben. Beide Schreibweisen werden gelesen.
 
+## Spielleitung {#gmtools}
+
+Für Spielleitungen von Pen-and-Paper-Rollenspielen. *Neues Abenteuer* (Hauptmenü) legt ein
+Abenteuer mit Beispielen an; der **Spielleiterschirm** neben dem Text zeigt das Kapitel an der
+Schreibmarke, die Gruppe, Würfel, Spiel- und Weltzeit, Initiative und das Spielprotokoll. Alles
+wird in der Notiz gespeichert.
+
+**Kapitel** sind die `#`-Überschriften. Der Schirm folgt der Schreibmarke; ◀ ▶ und die
+Kapitelliste springen zwischen Kapiteln. Würfelangaben in Inline-Code (`` `1d20+2` ``) lassen
+sich anklicken.
+
+**Charakterbögen** für Spielende, NSC und Monster sind ```` ```character ````-Blöcke (YAML).
+*Charakter einfügen* (Hauptmenü oder Rechtsklick) fügt eine Vorlage ein (allgemein, D&D 5e,
+Pathfinder 2e, DSA 5):
+
+````
+```character
+name: Alrike
+type: player          # player, npc oder monster
+system: dsa5
+lep: 30/30
+ini: 13
+stats: {MU: 13, KL: 12, IN: 14, CH: 11, GE: 14, KK: 11}
+skills: {Sinnesschärfe: KL/IN/IN 7}
+weapons:
+  - Säbel AT 13 PA 7, 1d6+3
+conditions: [Schmerz I]
+```
+````
+
+Weitere Felder werden ebenfalls angezeigt. Werte werden zu Würfelknöpfen: Eigenschaften würfeln
+W20 mit Modifikator (DSA: W20 gegen den Wert), `+5` würfelt `1d20+5`, `1d6+3` Schaden, `AT 14`
+W20 ≤ 14, DSA-Talente wie `Klettern: MU/GE/KK 6` eine Probe auf drei Eigenschaften. `count: 3`
+legt drei Exemplare für die Initiative an. Spielende erscheinen in der Gruppe, die anderen dort,
+wo sie stehen. *system:* in den Kopfdaten (oder im Bogen) ist `dnd5e`, `pf2e`, `dsa5` oder
+`generic`.
+
+**Würfel:** Knöpfe für W4 bis W20, W% und Fate-Würfel (mit Anzahl), Vorteil und Nachteil sowie
+beliebige Angaben:
+
+| Angabe | Bedeutung |
+|---|---|
+| `2d6+3`, `d20-1`, `3W6` | Summen |
+| `2d20kh1`, `2d20kl1`, `4d6dl1` | höchsten/niedrigsten behalten, niedrigsten streichen |
+| `3d6!` | explodierende Würfel |
+| `2d6r2` | 1 und 2 einmal neu würfeln |
+| `6d10>=8` | Erfolge zählen |
+| `4dF`, `d%` | Fate-Würfel, W100 aus zwei W10 |
+| `check 12/14/13 6 -1` | Probe auf drei Eigenschaften (DSA) mit Fertigkeitspunkten und Modifikator |
+| `2d{Omen}` | eigene Würfel |
+
+Eigene Würfel stehen in einem ```` ```dice ````-Block, einer pro Zeile: `Omen: Unheil, Hoffnung, Hoffnung, -, -, -`.
+
+**Zeit:** Die Spielzeituhr (▶/⏸) zählt über alle Sitzungen. Die Weltzeit läuft mit +10′, +1h,
+Rast (+8h) und +1 Tag; ein Klick darauf setzt ein Datum (`1027-3-15 14:30`). Ein eigener
+Kalender steht in den Kopfdaten: `calendar: Praios 30, Rondra 30, …`.
+
+**Initiative** würfelt für die Gruppe und die NSC und Monster des aktuellen Kapitels und sortiert;
+*Nächster Zug* geht die Reihenfolge durch und zählt Runden. Lebenspunkte ändern sich mit − und +
+(um die *Menge* oben in der Gruppe) auf den Bögen und in der Reihenfolge.
+
+**Protokoll:** Würfe, Lebenspunkte, Zeit und Initiative werden mit Uhrzeit protokolliert; eigene
+Notizen lassen sich ergänzen. Zustand und Protokoll stehen in ```` ```session ```` und
+```` ```log ````-Blöcken am Ende der Notiz.
+
 ## Sicherheit {#security}
 
 ### App-Passwort
@@ -1026,6 +1146,7 @@ anderes Ziel verbunden, endet das bisherige (deine Notizen bleiben).
 <!-- if kanban -->
 | Strg+Umschalt+K | Neues Kanban-Board |
 <!-- end -->
+| Strg+Alt+N, Strg+Alt+I | Neue Notiz aus Vorlage, Vorlage einfügen |
 | Strg+O, Strg+S, Strg+Umschalt+S | Öffnen, Speichern, Speichern unter |
 | Strg+W, Strg+Umschalt+T | Tab schließen, geschlossenen Tab wiederherstellen |
 | F2 | Tab umbenennen |

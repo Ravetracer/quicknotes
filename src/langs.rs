@@ -14,6 +14,7 @@ const BUNDLED: &[(&str, &str)] = &[
     ("kanban.lang", include_str!("../data/kanban.lang")),
     ("flashcards.lang", include_str!("../data/flashcards.lang")),
     ("mindmap.lang", include_str!("../data/mindmap.lang")),
+    ("adventure.lang", include_str!("../data/adventure.lang")),
 ];
 
 /// Registers bundled language definitions. Must run before any language is used.
@@ -73,6 +74,9 @@ pub fn guess(path: Option<&Path>, content: &str) -> Option<Language> {
         if name.ends_with(".mindmap.md") {
             return by_id(crate::mindmap::LANGUAGE);
         }
+        if name.ends_with(".adventure.md") {
+            return by_id(crate::adventure::LANGUAGE);
+        }
         if name.ends_with(".slides.md") {
             return by_id(crate::slides::LANGUAGE);
         }
@@ -95,6 +99,9 @@ pub fn guess(path: Option<&Path>, content: &str) -> Option<Language> {
             }
             if l.id() == "markdown" && crate::mindmap::is_mindmap(content) {
                 return by_id(crate::mindmap::LANGUAGE);
+            }
+            if l.id() == "markdown" && crate::adventure::is_adventure(content) {
+                return by_id(crate::adventure::LANGUAGE);
             }
             if l.id() == "markdown" && crate::slides::is_presentation(content) {
                 return by_id(crate::slides::LANGUAGE);
@@ -138,7 +145,7 @@ pub fn sniff(content: &str) -> Option<&'static str> {
     if t.starts_with("<?xml") {
         return Some("xml");
     }
-    let lower = t[..t.len().min(64)].to_ascii_lowercase();
+    let lower: String = t.chars().take(64).collect::<String>().to_ascii_lowercase();
     if lower.starts_with("<!doctype html") || lower.starts_with("<html") {
         return Some("html");
     }
@@ -167,6 +174,9 @@ pub fn sniff(content: &str) -> Option<&'static str> {
             }
             if crate::mindmap::is_mindmap(t) {
                 return Some(crate::mindmap::LANGUAGE);
+            }
+            if crate::adventure::is_adventure(t) {
+                return Some(crate::adventure::LANGUAGE);
             }
             if crate::slides::is_presentation(t) {
                 return Some(crate::slides::LANGUAGE);
@@ -205,6 +215,8 @@ mod tests {
         assert_eq!(sniff("just a note"), None);
         assert_eq!(sniff("---\npresentation: true\n---\n# Hi"), Some("slides"));
         assert_eq!(sniff("---\nkey: value\n"), Some("yaml"));
+        // Multi-byte characters around byte 64 (crashed once).
+        assert_eq!(sniff("# Lal – 14.11.2026 (Samstag)\n## Teilnehmende für die Besprechung\n"), Some("markdown"));
         assert_eq!(sniff("---\nkanban: 1\n---\n## To do\n"), Some("kanban"));
         assert_eq!(sniff("---\nflashcards: true\n---\nQ::A\n"), Some("flashcards"));
     }
@@ -219,7 +231,9 @@ mod lang_file_check {
     /// sample. Uses the FFI constructors: the safe ones need a display.
     #[test]
     fn mongodb_lang_compiles() {
-        gtk::glib::log_set_always_fatal(gtk::glib::LogLevels::LEVEL_WARNING | gtk::glib::LogLevels::LEVEL_CRITICAL);
+        // Only GtkSourceView's warnings: a process-wide fatal mask would also
+        // abort other tests running in parallel.
+        gtk::glib::log_set_fatal_mask(Some("GtkSourceView"), gtk::glib::LogLevels::LEVEL_WARNING | gtk::glib::LogLevels::LEVEL_CRITICAL);
         let lm: sourceview5::LanguageManager = unsafe { from_glib_full(sourceview5::ffi::gtk_source_language_manager_new()) };
         let mut paths: Vec<String> = lm.search_path().iter().map(|s| s.to_string()).collect();
         paths.insert(0, concat!(env!("CARGO_MANIFEST_DIR"), "/data").into());
@@ -228,6 +242,12 @@ mod lang_file_check {
         let buf: sourceview5::Buffer =
             unsafe { from_glib_full(sourceview5::ffi::gtk_source_buffer_new_with_language(lang.to_glib_none().0)) };
         buf.set_text("// c\ndb.o.aggregate([{ $match: { 'a': /x\\/y/i, b: \"$f\", n: -1.5e3, id: ObjectId(\"x\") } }]) /* b */");
+        let (s, e) = buf.bounds();
+        buf.ensure_highlight(&s, &e);
+        let lang = lm.language("adventure").expect("language loads");
+        let buf: sourceview5::Buffer =
+            unsafe { from_glib_full(sourceview5::ffi::gtk_source_buffer_new_with_language(lang.to_glib_none().0)) };
+        buf.set_text(&crate::adventure::template());
         let (s, e) = buf.bounds();
         buf.ensure_highlight(&s, &e);
     }

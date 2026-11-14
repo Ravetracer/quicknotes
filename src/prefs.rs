@@ -20,6 +20,7 @@ pub trait Handler {
     fn set_font_size(&self, size: f64);
     fn set_ligatures(&self, on: bool);
     fn set_emmet_tab(&self, on: bool);
+    fn set_update_check(&self, on: bool);
     /// Switches a style rule of the YAML check (see `yaml_lint::RULES`).
     fn set_yaml_rule(&self, key: &str, on: bool);
     fn set_feature(&self, feature: crate::features::Feature, on: bool);
@@ -170,6 +171,18 @@ fn general_page(parent: &impl IsA<gtk::Widget>, settings: &Settings, handler: &R
         }
         page.add(&yaml);
     }
+
+    // ----- updates ---------------------------------------------------------
+    let updates = adw::PreferencesGroup::builder().title(t!("Updates")).build();
+    let check = adw::SwitchRow::builder()
+        .title(t!("Check for New Versions"))
+        .subtitle(t!("At start, asks GitHub for the latest release of QuickNotes"))
+        .active(settings.update_check)
+        .build();
+    let h = handler.clone();
+    check.connect_active_notify(move |row| h.set_update_check(row.is_active()));
+    updates.add(&check);
+    page.add(&updates);
 
     // ----- language ------------------------------------------------------
     let language = adw::PreferencesGroup::builder().title(t!("Language")).build();
