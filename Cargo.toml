@@ -41,6 +41,8 @@ ureq = { version = "2.12", features = ["json"] }
 libsecret = "0.6"
 jiff = { version = "0.2", features = ["tzdb-bundle-always"] }
 lopdf = { version = "0.36", default-features = false }
+sha2 = "0.10"
+hmac = "0.12"
 
 [profile.release]
 opt-level = 3

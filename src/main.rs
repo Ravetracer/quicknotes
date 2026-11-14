@@ -40,6 +40,7 @@ mod obsidian;
 mod plantuml;
 mod prefs;
 mod rates;
+mod remote;
 mod presenter;
 mod rst;
 mod slides;

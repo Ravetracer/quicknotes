@@ -89,9 +89,10 @@ after a restart.
 - **Tab passwords**: single notes encrypted with their own password, open/closed lock on the tab
 - Backup of all notes into a single file and restore (add to or replace the current tabs), optionally
   encrypted with a password (Argon2id + XChaCha20-Poly1305)
-- **GitHub sync**: notes, folders and trash kept in a GitHub repository, end-to-end encrypted with a
-  sync password (also in public repositories); sign-in with a device code or a personal access
-  token, both-sides changes kept as conflict copies
+- **Sync** (switchable) with GitHub, Nextcloud (browser sign-in), any WebDAV server, a folder synced
+  by another program (Dropbox, Syncthing, …) or S3-compatible storage: notes, folders and trash
+  end-to-end encrypted with a sync password; at start, every five minutes and when closing;
+  both-sides changes kept as conflict copies
 - Editor font selectable in the preferences (e.g. fonts with ligatures like Fira Code); ligatures can be switched off
 
 ## Keyboard shortcuts
@@ -229,13 +230,23 @@ Tabs of files that don't exist on this computer are skipped.
 └── github-sync.json  # what was synced last time (encrypted with the app password)
 ```
 
-## GitHub sync
+## Sync
 
-*Preferences → Sync* keeps the notes library in a GitHub repository (folder `quicknotes/`):
-`vault.json` holds a random key wrapped with the sync password (Argon2id), `index.enc` the
-folders and the notes' metadata, `notes/<id>.enc` each note – all sealed with
-XChaCha20-Poly1305. Every sync is one commit via the Git data API; changes are merged three-way
-against the last synced state. The GitHub token and the key are kept in the Secret Service.
+*Preferences → Sync* keeps the notes library at one target (folder `quicknotes/`): `vault.json`
+holds a random key wrapped with the sync password (Argon2id), `index.enc` the folders and the
+notes' metadata, `notes/…enc` each note – all sealed with XChaCha20-Poly1305. Changes are merged
+three-way against the last synced state (`src/github.rs`).
+
+- **GitHub**: every sync is one commit via the Git data API (`notes/<id>.enc`).
+- **WebDAV / Nextcloud, synced folder, S3** (`src/remote.rs`): no multi-file commits, so note files
+  are content-addressed (`notes/<id>-<hash>.enc`) and `index.enc` is written last, with
+  `If-Match`/`If-None-Match` where the server supports it; unreferenced files are removed
+  afterwards. Every index carries a revision and the previous ones: a machine whose write was
+  overwritten notices it and merges without a base, keeping both versions. Nextcloud uses Login
+  Flow v2 (app password), S3 requests are signed with AWS Signature V4.
+
+Tokens, passwords and keys are kept in the Secret Service. `cargo test real_servers -- --ignored`
+runs the targets against real servers (see the test for the environment variables).
 
 ## Notes on X11 drag and drop
 

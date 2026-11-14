@@ -20,6 +20,15 @@
 //!   sides changed a note, both versions are kept.
 //!
 //! Network calls block; they run in a worker thread (see `window.rs`).
+//!
+//! The merge and the encryption are shared with the other sync targets
+//! (WebDAV, Nextcloud, a synced folder, S3; see `remote.rs`): [`run`] works
+//! on any [`Remote`]. Those targets cannot commit several files at once, so
+//! their note files are named after the content (`notes/<id>-<hash>.enc`) and
+//! `index.enc` is written last. Every index has a revision and remembers the
+//! previous ones: a machine whose last write was overwritten (two machines
+//! at once on a folder synced by Dropbox, say) notices it and merges as if
+//! it knew nothing, so both versions are kept instead of one being lost.
 
 use crate::crypto::{Key, Lock};
 use base64::Engine;
@@ -37,9 +46,9 @@ const API_URL: &str = "https://api.github.com";
 const LOGIN_URL: &str = "https://github.com";
 /// Where fine-grained tokens are created.
 pub const TOKEN_PAGE: &str = "https://github.com/settings/personal-access-tokens/new";
-const DIR: &str = "quicknotes/";
-const VAULT: &str = "quicknotes/vault.json";
-const INDEX: &str = "quicknotes/index.enc";
+pub const DIR: &str = "quicknotes/";
+pub const VAULT: &str = "quicknotes/vault.json";
+pub const INDEX: &str = "quicknotes/index.enc";
 const INDEX_AAD: &[u8] = b"quicknotes-sync-index";
 const FORMAT: u32 = 1;
 /// Attempts when other machines push at the same time.
@@ -102,7 +111,7 @@ impl From<std::io::Error> for Error {
     }
 }
 
-type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 // ===== secrets ==============================================================
 
@@ -301,6 +310,31 @@ pub fn create_vault(token: &str, repo: &str, lock: &Lock) -> Result<()> {
     Client::new(Endpoints::github(), token, repo).create_vault(lock)
 }
 
+/// The wrapped key of a target (`None`: not set up yet).
+pub fn read_vault(remote: &dyn Remote) -> Result<Option<Lock>> {
+    let snapshot = remote.snapshot()?;
+    let Some(version) = snapshot.files.get(VAULT) else { return Ok(None) };
+    let text = remote.read(VAULT, version)?;
+    let file: VaultFile =
+        serde_json::from_str(&text).map_err(|_| Error::Repo(t!("The QuickNotes data in the repository is damaged").into()))?;
+    if file.format > FORMAT {
+        return Err(Error::Repo(t!("The repository was set up by a newer QuickNotes – please update").into()));
+    }
+    Ok(Some(file.lock))
+}
+
+/// Sets a target up with a new wrapped key.
+pub fn write_vault(remote: &dyn Remote, lock: &Lock) -> Result<()> {
+    let file = VaultFile {
+        about: "Encrypted notes of QuickNotes. The key is protected by the sync password.".into(),
+        format: FORMAT,
+        lock: lock.clone(),
+    };
+    let json = serde_json::to_string_pretty(&file).map_err(|e| Error::Net(e.to_string()))?;
+    let snapshot = remote.snapshot()?;
+    remote.commit(&snapshot, &[(VAULT.to_owned(), Some(json))])
+}
+
 /// The readable file with the wrapped key.
 #[derive(Serialize, Deserialize)]
 struct VaultFile {
@@ -314,6 +348,47 @@ struct VaultFile {
 struct Head {
     commit: String,
     tree: String,
+}
+
+/// QuickNotes' files at a target: path → version (a blob id, an ETag, …),
+/// and what identifies the whole state for [`Remote::commit`].
+#[derive(Clone, Debug, Default)]
+pub struct Snapshot {
+    pub version: String,
+    pub files: HashMap<String, String>,
+}
+
+/// A place the notes are synced with.
+pub trait Remote {
+    fn snapshot(&self) -> Result<Snapshot>;
+    /// The content of `path` in the version listed by the snapshot.
+    fn read(&self, path: &str, version: &str) -> Result<String>;
+    /// Writes (`Some`) and deletes (`None`) files; [`Error::Moved`] when the
+    /// index changed since `snapshot` (the sync then starts over).
+    fn commit(&self, snapshot: &Snapshot, writes: &[(String, Option<String>)]) -> Result<()>;
+    /// Note files are named after their content (targets without commits).
+    fn content_addressed(&self) -> bool {
+        false
+    }
+}
+
+impl Remote for Client {
+    fn snapshot(&self) -> Result<Snapshot> {
+        match self.head()? {
+            Some(head) => Ok(Snapshot { version: format!("{} {}", head.commit, head.tree), files: self.files(&head.tree)? }),
+            None => Ok(Snapshot::default()),
+        }
+    }
+
+    fn read(&self, _path: &str, version: &str) -> Result<String> {
+        self.blob(version)
+    }
+
+    fn commit(&self, snapshot: &Snapshot, writes: &[(String, Option<String>)]) -> Result<()> {
+        let (commit, tree) = snapshot.version.split_once(' ').unwrap_or_default();
+        let head = Head { commit: commit.to_owned(), tree: tree.to_owned() };
+        Client::commit(self, &head, writes, "QuickNotes sync")
+    }
 }
 
 struct Client {
@@ -576,7 +651,16 @@ pub struct Index {
     pub format: u32,
     pub folders: Vec<SyncFolder>,
     pub notes: BTreeMap<String, Entry>,
+    /// Changes with every write.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub rev: String,
+    /// Earlier revisions, newest first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<String>,
 }
+
+/// Revisions an index remembers.
+const HISTORY: usize = 200;
 
 /// What was synced last time.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -586,6 +670,9 @@ pub struct State {
     pub repo: String,
     pub notes: BTreeMap<String, Base>,
     pub folders: Vec<SyncFolder>,
+    /// Revision of the index after the last sync.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub rev: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -842,6 +929,13 @@ fn note_path(id: &str) -> String {
     format!("{DIR}notes/{id}.enc")
 }
 
+/// A new index revision.
+fn new_rev() -> String {
+    let mut bytes = [0u8; 8];
+    let _ = getrandom::getrandom(&mut bytes);
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Runs one sync (blocking); token and key come from the keyring.
 pub fn sync(job: Job) -> Result<Outcome> {
     let token = secret::load(secret::TOKEN).ok_or_else(|| Error::Auth(t!("Not signed in").into()))?;
@@ -850,20 +944,31 @@ pub fn sync(job: Job) -> Result<Outcome> {
     run(&client, &key, job, &mut crate::store::new_id)
 }
 
-fn run(gh: &Client, key: &Key, job: Job, new_id: &mut dyn FnMut() -> String) -> Result<Outcome> {
+/// Where a note's content is stored.
+fn note_file(content_addressed: bool, id: &str, hash: &str) -> String {
+    if content_addressed {
+        format!("{DIR}notes/{id}-{hash}.enc")
+    } else {
+        note_path(id)
+    }
+}
+
+/// One sync with `remote` (blocking).
+pub fn run(gh: &dyn Remote, key: &Key, job: Job, new_id: &mut dyn FnMut() -> String) -> Result<Outcome> {
     let repo = job.repo.to_lowercase();
-    let state = if job.state.repo == repo { job.state } else { State { repo, ..Default::default() } };
+    let mut state = if job.state.repo == repo { job.state } else { State { repo, ..Default::default() } };
     let local: BTreeMap<String, Note> = job.notes.into_iter().map(|n| (n.id.clone(), n)).collect();
+    let ca = gh.content_addressed();
     let no_data = || Error::Repo(t!("The repository has no QuickNotes data – connect it again in the preferences").into());
     for _ in 0..TRIES {
-        let head = gh.head()?.ok_or_else(no_data)?;
-        let files = gh.files(&head.tree)?;
+        let snapshot = gh.snapshot()?;
+        let files = &snapshot.files;
         if !files.contains_key(VAULT) {
             return Err(no_data());
         }
         let remote: Index = match files.get(INDEX) {
             Some(sha) => {
-                let plain = key.open_text(&gh.blob(sha)?, INDEX_AAD).map_err(|_| Error::Key)?;
+                let plain = key.open_text(&gh.read(INDEX, sha)?, INDEX_AAD).map_err(|_| Error::Key)?;
                 let index: Index = serde_json::from_str(&plain).map_err(|_| no_data())?;
                 if index.format > FORMAT {
                     return Err(Error::Repo(t!("The repository was set up by a newer QuickNotes – please update").into()));
@@ -872,17 +977,26 @@ fn run(gh: &Client, key: &Key, job: Job, new_id: &mut dyn FnMut() -> String) -> 
             }
             None => Index::default(),
         };
-        let plan = plan(&local, &job.skip, &state, &remote, &job.folders, new_id, &job.stamp);
+        // Our last write was overwritten (not in the remote's history):
+        // merge as if nothing was synced, which keeps both versions.
+        if !state.rev.is_empty() && remote.rev != state.rev && !remote.history.contains(&state.rev) {
+            state = State { repo: state.repo.clone(), ..Default::default() };
+        }
+        let mut plan = plan(&local, &job.skip, &state, &remote, &job.folders, new_id, &job.stamp);
+        plan.index.rev = remote.rev.clone();
+        plan.index.history = remote.history.clone();
 
         let mut changes = Vec::new();
         let mut writes: Vec<(String, Option<String>)> = Vec::new();
         for (id, fetch) in &plan.fetch {
-            let sha = files.get(&note_path(id)).ok_or_else(no_data)?;
-            let content = key.open_text(&gh.blob(sha)?, id.as_bytes()).map_err(|_| Error::Key)?;
+            let path = note_file(ca, id, &remote.notes.get(id).map(|e| e.hash.clone()).unwrap_or_default());
+            let sha = files.get(&path).ok_or_else(no_data)?;
+            let content = key.open_text(&gh.read(&path, sha)?, id.as_bytes()).map_err(|_| Error::Key)?;
             let target = match fetch {
                 Fetch::Same => id,
                 Fetch::Copy(copy) => {
-                    writes.push((note_path(copy), Some(key.seal_text(&content, copy.as_bytes()))));
+                    let hash = &plan.index.notes[copy].hash;
+                    writes.push((note_file(ca, copy, hash), Some(key.seal_text(&content, copy.as_bytes()))));
                     copy
                 }
             };
@@ -901,32 +1015,55 @@ fn run(gh: &Client, key: &Key, job: Job, new_id: &mut dyn FnMut() -> String) -> 
         }
         changes.extend(plan.delete.iter().map(|id| Change::Delete { id: id.clone() }));
         for id in &plan.upload {
-            writes.push((note_path(id), Some(key.seal_text(&local[id].content, id.as_bytes()))));
+            let path = note_file(ca, id, &local[id].hash());
+            // Content-addressed: already there with this content.
+            if !(ca && files.contains_key(&path)) {
+                writes.push((path, Some(key.seal_text(&local[id].content, id.as_bytes()))));
+            }
         }
-        for id in &plan.remove {
-            if files.contains_key(&note_path(id)) {
-                writes.push((note_path(id), None));
+        if !ca {
+            for id in &plan.remove {
+                if files.contains_key(&note_path(id)) {
+                    writes.push((note_path(id), None));
+                }
             }
         }
         let ids: BTreeSet<&String> = plan.index.notes.keys().chain(remote.notes.keys()).collect();
         let sent = ids.into_iter().filter(|id| plan.index.notes.get(*id) != remote.notes.get(*id)).count();
+        let mut rev = remote.rev.clone();
         if !writes.is_empty() || plan.index != remote {
+            rev = new_rev();
+            let mut history = remote.history.clone();
+            if !remote.rev.is_empty() {
+                history.insert(0, remote.rev.clone());
+            }
+            history.truncate(HISTORY);
+            plan.index.rev = rev.clone();
+            plan.index.history = history;
+            if ca {
+                // Files no index refers to any more (old versions, deleted
+                // notes, leftovers of interrupted syncs).
+                let keep: HashSet<String> = plan.index.notes.iter().map(|(id, e)| note_file(true, id, &e.hash)).collect();
+                for path in files.keys().filter(|p| p.starts_with(&format!("{DIR}notes/")) && !keep.contains(*p)) {
+                    writes.push((path.clone(), None));
+                }
+            }
             let json = serde_json::to_string(&plan.index).map_err(|e| Error::Net(e.to_string()))?;
             writes.push((INDEX.to_owned(), Some(key.seal_text(&json, INDEX_AAD))));
-            match gh.commit(&head, &writes, "QuickNotes sync") {
+            match gh.commit(&snapshot, &writes) {
                 Ok(()) => {}
                 Err(Error::Moved) => continue,
                 Err(e) => return Err(e),
             }
         }
-        let state = State { repo: state.repo.clone(), notes: plan.base, folders: plan.folders.clone() };
+        let state = State { repo: state.repo.clone(), notes: plan.base, folders: plan.folders.clone(), rev };
         return Ok(Outcome { state, changes, folders: plan.folders, sent, conflicts: plan.conflicts });
     }
     Err(Error::Moved)
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -942,7 +1079,7 @@ mod tests {
         }
     }
 
-    fn note(id: &str, content: &str) -> Note {
+    pub(crate) fn note(id: &str, content: &str) -> Note {
         Note { id: id.into(), meta: Meta::default(), label: None, lock: None, content: content.into() }
     }
 
@@ -1079,7 +1216,7 @@ mod tests {
         assert_eq!(p.base["a"], base(&a));
     }
 
-    fn folder(id: &str, name: &str, parent: Option<&str>) -> SyncFolder {
+    pub(crate) fn folder(id: &str, name: &str, parent: Option<&str>) -> SyncFolder {
         SyncFolder { id: id.into(), name: name.into(), parent: parent.map(Into::into) }
     }
 
@@ -1300,20 +1437,24 @@ mod tests {
     }
 
     /// One machine: its notes, folders and sync state.
-    struct Machine {
-        notes: Vec<Note>,
-        folders: Vec<SyncFolder>,
-        state: State,
+    pub(crate) struct Machine {
+        pub notes: Vec<Note>,
+        pub folders: Vec<SyncFolder>,
+        pub state: State,
         ids: usize,
         name: &'static str,
     }
 
     impl Machine {
-        fn new(name: &'static str, notes: Vec<Note>) -> Self {
+        pub fn new(name: &'static str, notes: Vec<Note>) -> Self {
             Machine { notes, folders: Vec::new(), state: State::default(), ids: 0, name }
         }
 
-        fn sync(&mut self, gh: &Client, key: &Key) -> Outcome {
+        pub fn sync(&mut self, gh: &dyn Remote, key: &Key) -> Outcome {
+            self.try_sync(gh, key).unwrap()
+        }
+
+        pub fn try_sync(&mut self, gh: &dyn Remote, key: &Key) -> Result<Outcome> {
             let job = Job {
                 repo: "me/notes".into(),
                 notes: self.notes.clone(),
@@ -1327,8 +1468,7 @@ mod tests {
             let out = run(gh, key, job, &mut || {
                 ids += 1;
                 format!("{name}-{ids}")
-            })
-            .unwrap();
+            })?;
             self.ids = ids;
             // Apply like the window does.
             for c in &out.changes {
@@ -1355,14 +1495,14 @@ mod tests {
             }
             self.folders = out.folders.clone();
             self.state = out.state.clone();
-            out
+            Ok(out)
         }
 
-        fn content(&self, id: &str) -> Option<&str> {
+        pub fn content(&self, id: &str) -> Option<&str> {
             self.notes.iter().find(|n| n.id == id).map(|n| n.content.as_str())
         }
 
-        fn edit(&mut self, id: &str, text: &str) {
+        pub fn edit(&mut self, id: &str, text: &str) {
             self.notes.iter_mut().find(|n| n.id == id).unwrap().content = text.into();
         }
     }

@@ -40,6 +40,15 @@ pub trait Handler {
     fn github_disconnect(&self);
     fn set_github_sync(&self, on: bool);
     fn github_sync_now(&self);
+    /// The kind of target chosen in the Sync page.
+    fn set_sync_kind(&self, kind: &str);
+    /// Connects a target other than GitHub (asks for the sync password).
+    fn sync_connect(&self, target: crate::remote::Target, secret: String, done: Box<dyn Fn(Result<String, String>)>);
+    /// Signs in to Nextcloud in the browser and connects `folder`.
+    fn nextcloud_sign_in(&self, server: String, folder: String, done: Box<dyn Fn(Result<String, String>)>);
+    fn sync_disconnect(&self);
+    /// The connected target other than GitHub, for the status.
+    fn sync_description(&self) -> Option<String>;
 }
 
 #[derive(Clone, Copy)]
@@ -78,7 +87,7 @@ pub fn show(
     dialog.add(&tabs_page(settings, colors, &handler));
     dialog.add(&security_page(&dialog, app_password, &handler));
     if sync {
-        dialog.add(&sync_page(settings, &handler));
+        dialog.add(&sync_page(&dialog, settings, &handler));
     }
     dialog.add(&import_export_page(&dialog, &handler));
     dialog.present(Some(parent));
@@ -390,14 +399,34 @@ fn security_page(dialog: &adw::PreferencesDialog, on: bool, handler: &Rc<dyn Han
     page
 }
 
-fn sync_page(settings: &Settings, handler: &Rc<dyn Handler>) -> adw::PreferencesPage {
+/// Sync target kinds of the Sync page.
+const SYNC_KINDS: [&str; 5] = ["github", "nextcloud", "webdav", "folder", "s3"];
+
+fn sync_page(dialog: &adw::PreferencesDialog, settings: &Settings, handler: &Rc<dyn Handler>) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::builder()
         .title(t!("Sync"))
         .icon_name("emblem-synchronizing-symbolic")
         .build();
+    let intro = adw::PreferencesGroup::builder()
+        .description(t!("Notes, folders and the trash are synced encrypted with a sync password – the target sees nothing readable. Changes are fetched at start and every five minutes and sent when QuickNotes closes. One target at a time; files opened from disk are not synced."))
+        .build();
+    let labels = ["GitHub", "Nextcloud", "WebDAV", t!("Synced Folder"), t!("S3-compatible Storage")];
+    let kind_row = adw::ComboRow::builder().title(t!("Sync With")).model(&gtk::StringList::new(&labels)).build();
+    let current = match &settings.sync_target {
+        Some(crate::remote::Target::Nextcloud { .. }) => "nextcloud",
+        Some(crate::remote::Target::Webdav { .. }) => "webdav",
+        Some(crate::remote::Target::Folder { .. }) => "folder",
+        Some(crate::remote::Target::S3 { .. }) => "s3",
+        None if SYNC_KINDS.contains(&settings.sync_kind.as_str()) => settings.sync_kind.as_str(),
+        None => "github",
+    };
+    kind_row.set_selected(SYNC_KINDS.iter().position(|k| *k == current).unwrap_or(0) as u32);
+    intro.add(&kind_row);
+    page.add(&intro);
+
     let group = adw::PreferencesGroup::builder()
         .title("GitHub")
-        .description(t!("Notes, folders and the trash are kept in a GitHub repository, encrypted with a sync password – even a public repository shows nothing readable. Changes are fetched when QuickNotes starts and sent when it closes. Files opened from disk are not synced."))
+        .description(t!("A GitHub repository, private or public."))
         .build();
 
     let account = adw::ActionRow::builder().title(t!("Account")).build();
@@ -426,7 +455,7 @@ fn sync_page(settings: &Settings, handler: &Rc<dyn Handler>) -> adw::Preferences
 
     let auto = adw::SwitchRow::builder()
         .title(t!("Sync Automatically"))
-        .subtitle(t!("Fetch changes at start, send them when closing"))
+        .subtitle(t!("At start, every five minutes and when closing"))
         .active(settings.github_sync)
         .build();
     let h = handler.clone();
@@ -544,6 +573,263 @@ fn sync_page(settings: &Settings, handler: &Rc<dyn Handler>) -> adw::Preferences
         repo_c.set_text("");
         auto_c.set_active(false);
         show_c(None, None);
+    });
+    let github_group = group;
+
+    // ----- other targets -----------------------------------------------------
+    let nextcloud = adw::PreferencesGroup::builder()
+        .title("Nextcloud")
+        .description(t!("Sign in in the browser; Nextcloud creates an app password for QuickNotes."))
+        .build();
+    let nc_server = adw::EntryRow::builder().title(t!("Server Address")).build();
+    let nc_folder = adw::EntryRow::builder().title(t!("Folder")).text("QuickNotes").build();
+    let nc_sign_in = button_row(t!("Sign In in the Browser…"), t!("Then confirm the access in Nextcloud"), "web-browser-symbolic");
+    for w in [nc_server.upcast_ref::<gtk::Widget>(), nc_folder.upcast_ref(), nc_sign_in.upcast_ref()] {
+        nextcloud.add(w);
+    }
+
+    let webdav = adw::PreferencesGroup::builder()
+        .title("WebDAV")
+        .description(t!("Any WebDAV folder: ownCloud, Nextcloud with an app password, Synology, Hetzner Storage Box, mailbox.org, a NAS …"))
+        .build();
+    let dav_url = adw::EntryRow::builder().title(t!("Folder Address (URL)")).build();
+    let dav_user = adw::EntryRow::builder().title(t!("User Name")).build();
+    let dav_password = adw::PasswordEntryRow::builder().title(t!("Password")).build();
+    let dav_connect = button_row(t!("Connect"), t!("The folder is created if it is missing"), "network-server-symbolic");
+    for w in [dav_url.upcast_ref::<gtk::Widget>(), dav_user.upcast_ref(), dav_password.upcast_ref(), dav_connect.upcast_ref()] {
+        webdav.add(w);
+    }
+
+    let folder = adw::PreferencesGroup::builder()
+        .title(t!("Synced Folder"))
+        .description(t!("A folder that another program syncs: Dropbox, OneDrive, Google Drive for desktop, pCloud, Syncthing, a USB stick …"))
+        .build();
+    let folder_row = adw::ActionRow::builder().title(t!("Folder")).subtitle(t!("Not chosen")).build();
+    let choose = gtk::Button::builder().label(t!("Choose…")).valign(gtk::Align::Center).build();
+    folder_row.add_suffix(&choose);
+    folder.add(&folder_row);
+
+    let s3 = adw::PreferencesGroup::builder()
+        .title(t!("S3-compatible Storage"))
+        .description(t!("A bucket at AWS, Backblaze B2, Wasabi, Cloudflare R2, MinIO …"))
+        .build();
+    let s3_endpoint = adw::EntryRow::builder().title(t!("Endpoint (empty for AWS)")).build();
+    let s3_region = adw::EntryRow::builder().title(t!("Region")).text("us-east-1").build();
+    let s3_bucket = adw::EntryRow::builder().title(t!("Bucket")).build();
+    let s3_prefix = adw::EntryRow::builder().title(t!("Path in the Bucket (optional)")).build();
+    let s3_access = adw::EntryRow::builder().title(t!("Access Key ID")).build();
+    let s3_secret = adw::PasswordEntryRow::builder().title(t!("Secret Access Key")).build();
+    let s3_connect = button_row(t!("Connect"), t!("The bucket must exist"), "network-server-symbolic");
+    for w in [
+        s3_endpoint.upcast_ref::<gtk::Widget>(),
+        s3_region.upcast_ref(),
+        s3_bucket.upcast_ref(),
+        s3_prefix.upcast_ref(),
+        s3_access.upcast_ref(),
+        s3_secret.upcast_ref(),
+        s3_connect.upcast_ref(),
+    ] {
+        s3.add(w);
+    }
+    // Fill in what is connected.
+    match &settings.sync_target {
+        Some(crate::remote::Target::Nextcloud { server, folder: f, .. }) => {
+            nc_server.set_text(server);
+            nc_folder.set_text(f);
+        }
+        Some(crate::remote::Target::Webdav { url, user }) => {
+            dav_url.set_text(url);
+            dav_user.set_text(user);
+        }
+        Some(crate::remote::Target::Folder { path }) => folder_row.set_subtitle(&glib::markup_escape_text(&path.display().to_string())),
+        Some(crate::remote::Target::S3 { endpoint, region, bucket, prefix, access_key }) => {
+            s3_endpoint.set_text(endpoint);
+            s3_region.set_text(region);
+            s3_bucket.set_text(bucket);
+            s3_prefix.set_text(prefix);
+            s3_access.set_text(access_key);
+        }
+        None => {}
+    }
+
+    let remote_status = adw::PreferencesGroup::new();
+    let status_row = adw::ActionRow::builder().title(t!("Status")).build();
+    let remote_disconnect = gtk::Button::builder().label(t!("Disconnect")).valign(gtk::Align::Center).build();
+    remote_disconnect.set_tooltip_text(Some(t!("Stop syncing with this target (its data stays there)")));
+    status_row.add_suffix(&remote_disconnect);
+    let remote_auto = adw::SwitchRow::builder()
+        .title(t!("Sync Automatically"))
+        .subtitle(t!("At start, every five minutes and when closing"))
+        .active(settings.github_sync && settings.sync_target.is_some())
+        .build();
+    let h = handler.clone();
+    remote_auto.connect_active_notify(move |row| h.set_github_sync(row.is_active()));
+    let remote_now = button_row(t!("Sync Now"), t!("Fetch and send changes right away"), "emblem-synchronizing-symbolic");
+    let h = handler.clone();
+    remote_now.connect_activated(move |_| h.github_sync_now());
+    for w in [status_row.upcast_ref::<gtk::Widget>(), remote_auto.upcast_ref(), remote_now.upcast_ref()] {
+        remote_status.add(w);
+    }
+
+    type Shown = Rc<std::cell::RefCell<Option<String>>>;
+    let connected: Shown = Rc::new(std::cell::RefCell::new(
+        settings.sync_target.as_ref().map(|t| format!("{}: {}", t.name(), t.describe())),
+    ));
+    type ShowRemote = Rc<dyn Fn(Option<&str>)>;
+    let show_remote: ShowRemote = {
+        let (status_row, remote_disconnect, remote_auto, remote_now, connected) =
+            (status_row.clone(), remote_disconnect.clone(), remote_auto.clone(), remote_now.clone(), connected.clone());
+        Rc::new(move |message: Option<&str>| {
+            let c = connected.borrow().clone();
+            let subtitle = match (message, &c) {
+                (Some(m), _) => glib::markup_escape_text(m).to_string(),
+                (None, Some(d)) => glib::markup_escape_text(&t!("Connected – {}", d)).to_string(),
+                (None, None) => t!("Not connected").to_owned(),
+            };
+            status_row.set_subtitle(&subtitle);
+            remote_disconnect.set_visible(c.is_some());
+            remote_auto.set_sensitive(c.is_some());
+            remote_now.set_sensitive(c.is_some());
+        })
+    };
+    show_remote(None);
+
+    // Connecting a target: the result in the status row; GitHub stops.
+    type Connect = Rc<dyn Fn(crate::remote::Target, String)>;
+    let connect: Connect = {
+        let (h, show_remote, connected, remote_auto) = (handler.clone(), show_remote.clone(), connected.clone(), remote_auto.clone());
+        let (github_view, github_show, github_auto, github_repo) = (view.clone(), show.clone(), auto.clone(), repo.clone());
+        Rc::new(move |target, secret| {
+            show_remote(Some(t!("Connecting…")));
+            let (show_remote, connected, remote_auto) = (show_remote.clone(), connected.clone(), remote_auto.clone());
+            let (github_view, github_show, github_auto, github_repo) =
+                (github_view.clone(), github_show.clone(), github_auto.clone(), github_repo.clone());
+            h.sync_connect(
+                target,
+                secret,
+                Box::new(move |result| match result {
+                    Ok(description) => {
+                        *connected.borrow_mut() = Some(description);
+                        remote_auto.set_active(true);
+                        show_remote(None);
+                        github_view.borrow_mut().repo = None;
+                        github_repo.set_text("");
+                        github_auto.set_active(false);
+                        github_show(None, None);
+                    }
+                    Err(e) => show_remote(Some(&format!("⚠ {e}"))),
+                }),
+            );
+        })
+    };
+    {
+        let (h, show_remote, connected, remote_auto) = (handler.clone(), show_remote.clone(), connected.clone(), remote_auto.clone());
+        let (server, folder_entry) = (nc_server.clone(), nc_folder.clone());
+        let (github_view, github_show, github_repo) = (view.clone(), show.clone(), repo.clone());
+        nc_sign_in.connect_activated(move |_| {
+            if server.text().trim().is_empty() {
+                show_remote(Some(&format!("⚠ {}", t!("Enter the address of your Nextcloud"))));
+                return;
+            }
+            show_remote(Some(t!("Waiting for the sign-in in the browser…")));
+            let (show_remote, connected, remote_auto) = (show_remote.clone(), connected.clone(), remote_auto.clone());
+            let (github_view, github_show, github_repo) = (github_view.clone(), github_show.clone(), github_repo.clone());
+            h.nextcloud_sign_in(
+                server.text().to_string(),
+                folder_entry.text().to_string(),
+                Box::new(move |result| match result {
+                    Ok(description) => {
+                        *connected.borrow_mut() = Some(description);
+                        remote_auto.set_active(true);
+                        show_remote(None);
+                        github_view.borrow_mut().repo = None;
+                        github_repo.set_text("");
+                        github_show(None, None);
+                    }
+                    Err(e) => show_remote(Some(&format!("⚠ {e}"))),
+                }),
+            );
+        });
+    }
+    {
+        let (connect, show_remote) = (connect.clone(), show_remote.clone());
+        let (url, user, password) = (dav_url.clone(), dav_user.clone(), dav_password.clone());
+        dav_connect.connect_activated(move |_| {
+            let u = url.text().trim().to_owned();
+            if !(u.starts_with("https://") || u.starts_with("http://")) {
+                show_remote(Some(&format!("⚠ {}", t!("Enter the address of a folder (https://…)"))));
+                return;
+            }
+            let u = if u.ends_with('/') { u } else { format!("{u}/") };
+            connect(crate::remote::Target::Webdav { url: u, user: user.text().trim().to_owned() }, password.text().to_string());
+        });
+    }
+    {
+        let (connect, row) = (connect.clone(), folder_row.clone());
+        let dialog = dialog.downgrade();
+        choose.connect_clicked(move |_| {
+            let chooser = gtk::FileDialog::builder().title(t!("Synced Folder")).modal(true).build();
+            let parent = dialog.upgrade().and_then(|d| d.root()).and_downcast::<gtk::Window>();
+            let (connect, row) = (connect.clone(), row.clone());
+            chooser.select_folder(parent.as_ref(), None::<&gtk::gio::Cancellable>, move |result| {
+                let Some(path) = result.ok().and_then(|f| f.path()) else { return };
+                row.set_subtitle(&glib::markup_escape_text(&path.display().to_string()));
+                connect(crate::remote::Target::Folder { path }, String::new());
+            });
+        });
+    }
+    {
+        let (connect, show_remote) = (connect.clone(), show_remote.clone());
+        let fields = (s3_endpoint.clone(), s3_region.clone(), s3_bucket.clone(), s3_prefix.clone(), s3_access.clone(), s3_secret.clone());
+        s3_connect.connect_activated(move |_| {
+            let (endpoint, region, bucket, prefix, access, secret) = &fields;
+            if bucket.text().trim().is_empty() || access.text().trim().is_empty() || secret.text().is_empty() {
+                show_remote(Some(&format!("⚠ {}", t!("Enter bucket, access key ID and secret access key"))));
+                return;
+            }
+            connect(
+                crate::remote::Target::S3 {
+                    endpoint: endpoint.text().trim().trim_end_matches('/').to_owned(),
+                    region: region.text().trim().to_owned(),
+                    bucket: bucket.text().trim().to_owned(),
+                    prefix: prefix.text().trim().trim_matches('/').to_owned(),
+                    access_key: access.text().trim().to_owned(),
+                },
+                secret.text().to_string(),
+            );
+        });
+    }
+    {
+        let (h, show_remote, connected, remote_auto) = (handler.clone(), show_remote.clone(), connected.clone(), remote_auto.clone());
+        remote_disconnect.connect_clicked(move |_| {
+            h.sync_disconnect();
+            *connected.borrow_mut() = None;
+            remote_auto.set_active(false);
+            show_remote(None);
+        });
+    }
+    let groups = [github_group.clone(), nextcloud.clone(), webdav.clone(), folder.clone(), s3.clone()];
+    for g in &groups {
+        page.add(g);
+    }
+    page.add(&remote_status);
+    let sync_visible = {
+        let (groups, remote_status) = (groups.clone(), remote_status.clone());
+        move |index: u32| {
+            for (i, g) in groups.iter().enumerate() {
+                g.set_visible(i as u32 == index);
+            }
+            remote_status.set_visible(index != 0);
+        }
+    };
+    sync_visible(kind_row.selected());
+    let h = handler.clone();
+    kind_row.connect_selected_notify(move |row| {
+        sync_visible(row.selected());
+        h.set_sync_kind(SYNC_KINDS.get(row.selected() as usize).copied().unwrap_or("github"));
+        // Connecting GitHub meanwhile ended the other target.
+        *connected.borrow_mut() = h.sync_description();
+        show_remote(None);
     });
     page
 }

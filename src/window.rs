@@ -156,6 +156,10 @@ pub struct Window {
     /// GitHub sync: a run is going on; the window closes after syncing;
     /// cancels a pending sign-in.
     sync_busy: Cell<bool>,
+    /// The last automatic sync failed (its error was shown once).
+    sync_failed: Cell<bool>,
+    /// Stops a running Nextcloud sign-in.
+    sync_login: RefCell<Option<Arc<AtomicBool>>>,
     sync_closing: Cell<bool>,
     sync_cancel: RefCell<Option<Arc<AtomicBool>>>,
     /// Notes deleted elsewhere whose tab closes without keeping them.
@@ -204,6 +208,7 @@ fn open_main(app: &adw::Application, session: Session, files: Vec<PathBuf>) {
     }
     w.win.present();
     w.github_startup();
+    w.sync_timer();
 }
 
 /// The unlock window shown instead of the notes while the app password is on.
@@ -615,6 +620,8 @@ impl Window {
             locking: Cell::new(false),
             sealed_tabs: RefCell::new(HashMap::new()),
             sync_busy: Cell::new(false),
+            sync_failed: Cell::new(false),
+            sync_login: RefCell::new(None),
             sync_closing: Cell::new(false),
             sync_cancel: RefCell::new(None),
             sync_discard: RefCell::new(HashSet::new()),
@@ -2222,12 +2229,38 @@ impl Window {
         *self.presentation.borrow_mut() = Some(presentation);
     }
 
-    // ===== GitHub sync ======================================================
+    // ===== sync (GitHub, Nextcloud, WebDAV, folder, S3) ======================
 
-    /// A repository is set up for syncing (and the features it needs are on).
-    fn github_connected(&self) -> bool {
+    /// The connected sync target, if the features it needs are on.
+    fn active_sync(&self) -> Option<ActiveSync> {
+        if !features::on(Feature::Sync) || !features::on(Feature::Folders) {
+            return None;
+        }
         let s = self.settings.borrow();
-        features::on(Feature::Sync) && features::on(Feature::Folders) && !s.github_account.is_empty() && !s.github_repo.is_empty()
+        if !s.github_account.is_empty() && !s.github_repo.is_empty() {
+            return Some(ActiveSync::GitHub(s.github_repo.clone()));
+        }
+        s.sync_target.clone().map(ActiveSync::Remote)
+    }
+
+    fn github_connected(&self) -> bool {
+        self.active_sync().is_some()
+    }
+
+    /// Syncs every 5 minutes while automatic sync is on.
+    fn sync_timer(self: &Rc<Self>) {
+        let weak = self.weak();
+        glib::timeout_add_seconds_local(300, move || {
+            let Some(this) = weak.upgrade() else { return glib::ControlFlow::Break };
+            if this.github_ready() && !this.sync_busy.get() && !this.sync_closing.get() && !this.locking.get() {
+                this.github_sync(|this, summary| {
+                    if let Some(s) = summary.filter(|s| !s.is_empty()) {
+                        this.toast(&s);
+                    }
+                });
+            }
+            glib::ControlFlow::Continue
+        });
     }
 
     /// Automatic sync (start, close) is on.
@@ -2318,22 +2351,25 @@ impl Window {
         });
     }
 
-    /// *Sync with GitHub* from the menu or the preferences.
+    /// *Sync Now* from the menu or the preferences.
     fn github_sync_now(self: &Rc<Self>) {
         if !features::on(Feature::Sync) {
             return;
         }
         if !features::on(Feature::Folders) {
-            self.toast(t!("GitHub sync needs the note folders – switch them on in the preferences (Features)"));
+            self.toast(t!("Syncing needs the note folders – switch them on in the preferences (Features)"));
             return;
         }
-        if !self.github_connected() {
-            self.toast(t!("Set up GitHub sync in the preferences (Sync)"));
+        let Some(active) = self.active_sync() else {
+            self.toast(t!("Set up syncing in the preferences (Sync)"));
             return;
-        }
-        self.github_sync(|this, summary| match summary {
+        };
+        // Errors of a sync by hand are always shown.
+        self.sync_failed.set(false);
+        let name = active.name();
+        self.github_sync(move |this, summary| match summary {
             Some(s) if !s.is_empty() => this.toast(&s),
-            Some(_) => this.toast(t!("Synced with GitHub – everything is up to date")),
+            Some(_) => this.toast(&t!("Synced with {} – everything is up to date", name)),
             None => {}
         });
     }
@@ -2351,13 +2387,17 @@ impl Window {
             });
             return;
         }
+        let Some(active) = self.active_sync() else {
+            done(self, None);
+            return;
+        };
         self.sync_busy.set(true);
         self.persist();
         let state = github::load_state();
         let (notes, skip) = self.sync_notes(&state);
         let snapshot: HashMap<String, String> = notes.iter().map(|n| (n.id.clone(), n.hash())).collect();
         let job = github::Job {
-            repo: self.settings.borrow().github_repo.clone(),
+            repo: active.id(),
             notes,
             skip,
             folders: self.folders.borrow().iter().map(github::SyncFolder::from).collect(),
@@ -2368,18 +2408,29 @@ impl Window {
                 .unwrap_or_default(),
         };
         let this = self.clone();
+        let name = active.name();
         glib::spawn_future_local(async move {
-            let result = gio::spawn_blocking(move || github::sync(job)).await;
+            let result = gio::spawn_blocking(move || match &active {
+                ActiveSync::GitHub(_) => github::sync(job),
+                ActiveSync::Remote(target) => crate::remote::sync(target, job),
+            })
+            .await;
             this.sync_busy.set(false);
+            // Automatic syncs show an error once, not every five minutes.
+            let report = !this.sync_failed.replace(!matches!(result, Ok(Ok(_))));
             let summary = match result {
-                Ok(Ok(outcome)) => Some(this.github_apply(outcome, &snapshot)),
+                Ok(Ok(outcome)) => Some(this.github_apply(outcome, &snapshot, name)),
                 Ok(Err(github::Error::Auth(e))) => {
-                    eprintln!("quicknotes: GitHub: {e}");
-                    this.toast(t!("GitHub: please sign in again in the preferences (Sync)"));
+                    eprintln!("quicknotes: {name}: {e}");
+                    if report {
+                        this.toast(&t!("{}: please sign in again in the preferences (Sync)", name));
+                    }
                     None
                 }
                 Ok(Err(e)) => {
-                    this.toast(&t!("GitHub sync failed: {}", e));
+                    if report {
+                        this.toast(&t!("Sync with {} failed: {}", name, e));
+                    }
                     None
                 }
                 Err(_) => None,
@@ -2397,7 +2448,7 @@ impl Window {
     }
 
     /// Applies what a sync brought; a summary of it for a toast.
-    fn github_apply(self: &Rc<Self>, mut outcome: github::Outcome, snapshot: &HashMap<String, String>) -> String {
+    fn github_apply(self: &Rc<Self>, mut outcome: github::Outcome, snapshot: &HashMap<String, String>, name: &str) -> String {
         // Tabs edited while the sync ran keep the edit.
         let edited = |t: &EditorTab| self.sync_note(t).map(|n| n.hash()).as_ref() != snapshot.get(&t.id);
         {
@@ -2418,7 +2469,7 @@ impl Window {
                         if content.is_some() && edited(&t) {
                             // The repository's version goes next to it (and
                             // is sent with the next sync).
-                            let title = Some(format!("{} ({})", meta.title.clone().or(label.clone()).unwrap_or_else(|| t.title()), t!("GitHub version")));
+                            let title = Some(format!("{} ({})", meta.title.clone().or(label.clone()).unwrap_or_else(|| t.title()), t!("{} version", name)));
                             let meta = github::Meta { title, ..meta };
                             self.add_synced_note(store::new_id(), meta, label, lock, content);
                             conflicts += 1;
@@ -2476,7 +2527,7 @@ impl Window {
         if parts.is_empty() {
             String::new()
         } else {
-            format!("GitHub: {}", parts.join(", "))
+            format!("{name}: {}", parts.join(", "))
         }
     }
 
@@ -2788,6 +2839,7 @@ impl Window {
             if let Err(e) = github::secret::store(&github::secret::key_name(&info.repo), &key.export()) {
                 return done(Err(t!("Cannot store the key in the keyring: {}", e)));
             }
+            this.sync_disconnect();
             {
                 let mut s = this.settings.borrow_mut();
                 s.github_repo = info.repo.clone();
@@ -2812,6 +2864,129 @@ impl Window {
         github::clear_state();
         self.settings.borrow_mut().github_sync = false;
         self.persist_all();
+    }
+
+    /// Asks for the sync password of a target that is set up already, or
+    /// for a new one: the data key, and the new wrapped key to store.
+    async fn sync_key(self: &Rc<Self>, place: &str, vault: Option<crypto::Lock>) -> Result<(crypto::Key, Option<crypto::Lock>), String> {
+        match vault {
+            Some(lock) => {
+                let body = t!("Enter the sync password of {} – the one chosen when it was first used with QuickNotes.", place);
+                match self.verify_password(lock, t!("Sync Password"), &body, t!("_Connect")).await {
+                    Some(key) => Ok((key, None)),
+                    None => Err(t!("Cancelled").into()),
+                }
+            }
+            None => {
+                let body = t!("Choose a sync password for {}. Your notes are encrypted with it before they are sent; other computers need it once to connect. A forgotten password cannot be recovered.", place);
+                let answer = self
+                    .ask_password(PasswordPrompt {
+                        heading: t!("Choose a Sync Password"),
+                        body: &body,
+                        confirm: true,
+                        ok: t!("_Set Up"),
+                        skip: None,
+                        error: None,
+                    })
+                    .await;
+                let PasswordAnswer::Password(password) = answer else {
+                    return Err(t!("Cancelled").into());
+                };
+                match gio::spawn_blocking(move || crypto::Lock::create(&password, crypto::Kdf::new())).await {
+                    Ok((lock, key)) => Ok((key, Some(lock))),
+                    Err(_) => Err(t!("Cancelled").into()),
+                }
+            }
+        }
+    }
+
+    /// Connects a sync target other than GitHub; `done` gets a description
+    /// or an error. GitHub sync stops (one target at a time).
+    fn sync_connect(self: &Rc<Self>, target: crate::remote::Target, secret: String, done: Box<dyn Fn(Result<String, String>)>) {
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let (t, s) = (target.clone(), secret.clone());
+            let vault = match gio::spawn_blocking(move || crate::remote::prepare(&t, &s)).await {
+                Ok(Ok(vault)) => vault,
+                Ok(Err(e)) => return done(Err(e.to_string())),
+                Err(_) => return done(Err(t!("Cancelled").into())),
+            };
+            let (key, new_lock) = match this.sync_key(&target.describe(), vault).await {
+                Ok(k) => k,
+                Err(e) => return done(Err(e)),
+            };
+            if let Some(lock) = new_lock {
+                let (t, s) = (target.clone(), secret.clone());
+                let written = gio::spawn_blocking(move || t.open_with(&s).and_then(|r| github::write_vault(&*r, &lock))).await;
+                match written {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => return done(Err(e.to_string())),
+                    Err(_) => return done(Err(t!("Cancelled").into())),
+                }
+            }
+            if let Some(name) = target.secret_name() {
+                if let Err(e) = github::secret::store(&name, &secret) {
+                    return done(Err(t!("Cannot store the key in the keyring: {}", e)));
+                }
+            }
+            if let Err(e) = github::secret::store(&github::secret::key_name(&target.id()), &key.export()) {
+                return done(Err(t!("Cannot store the key in the keyring: {}", e)));
+            }
+            this.github_disconnect();
+            this.sync_disconnect();
+            {
+                let mut s = this.settings.borrow_mut();
+                s.sync_target = Some(target.clone());
+                s.github_sync = true;
+            }
+            this.persist_all();
+            done(Ok(format!("{}: {}", target.name(), target.describe())));
+            this.github_sync_now();
+        });
+    }
+
+    /// Signs in to Nextcloud in the browser, then connects its folder.
+    fn nextcloud_sign_in(self: &Rc<Self>, server: String, folder: String, done: Box<dyn Fn(Result<String, String>)>) {
+        let server = crate::remote::normalize_server(&server);
+        let folder = folder.trim().trim_matches('/').to_owned();
+        let folder = if folder.is_empty() { "QuickNotes".to_owned() } else { folder };
+        let cancel = Arc::new(AtomicBool::new(false));
+        if let Some(old) = self.sync_login.replace(Some(cancel.clone())) {
+            old.store(true, Ordering::Relaxed);
+        }
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let s = server.clone();
+            let flow = match gio::spawn_blocking(move || crate::remote::nextcloud_start(&s)).await {
+                Ok(Ok(flow)) => flow,
+                Ok(Err(e)) => return done(Err(e.to_string())),
+                Err(_) => return done(Err(t!("Cancelled").into())),
+            };
+            gtk::UriLauncher::new(&flow.login_url).launch(Some(&this.win), None::<&gio::Cancellable>, |_| {});
+            this.toast(t!("Confirm the sign-in in the browser"));
+            let result = gio::spawn_blocking(move || crate::remote::nextcloud_finish(&flow, cancel)).await;
+            let (server_url, user, password) = match result {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => return done(Err(e.to_string())),
+                Err(_) => return done(Err(t!("Cancelled").into())),
+            };
+            let server = if server_url.is_empty() { server } else { server_url.trim_end_matches('/').to_owned() };
+            this.sync_connect(crate::remote::Target::Nextcloud { server, user, folder }, password, done);
+        });
+    }
+
+    /// Stops syncing with the target other than GitHub (its data stays).
+    fn sync_disconnect(self: &Rc<Self>) {
+        let target = self.settings.borrow_mut().sync_target.take();
+        if let Some(target) = target {
+            if let Some(name) = target.secret_name() {
+                github::secret::clear(&name);
+            }
+            github::secret::clear(&github::secret::key_name(&target.id()));
+            github::clear_state();
+            self.settings.borrow_mut().github_sync = false;
+            self.persist_all();
+        }
     }
 
     /// Removes a tab from bookkeeping and remembers it for t!("Reopen Closed Tab").
@@ -5887,6 +6062,26 @@ impl prefs::Handler for PrefsBridge {
     fn github_sync_now(&self) {
         self.with(|w| w.github_sync_now());
     }
+    fn set_sync_kind(&self, kind: &str) {
+        self.with(|w| {
+            w.settings.borrow_mut().sync_kind = kind.to_owned();
+            w.schedule_persist();
+        });
+    }
+    fn sync_connect(&self, target: crate::remote::Target, secret: String, done: Box<dyn Fn(Result<String, String>)>) {
+        self.with(|w| w.sync_connect(target, secret, done));
+    }
+    fn nextcloud_sign_in(&self, server: String, folder: String, done: Box<dyn Fn(Result<String, String>)>) {
+        self.with(|w| w.nextcloud_sign_in(server, folder, done));
+    }
+    fn sync_disconnect(&self) {
+        self.with(|w| w.sync_disconnect());
+    }
+    fn sync_description(&self) -> Option<String> {
+        let mut out = None;
+        self.with(|w| out = w.settings.borrow().sync_target.as_ref().map(|t| format!("{}: {}", t.name(), t.describe())));
+        out
+    }
     fn set_theme(&self, id: &str) {
         self.with(|w| w.set_theme(id));
     }
@@ -6115,7 +6310,7 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
     }
     menu.append_section(None, &menu_section(&file));
     if context.features.sync {
-        menu.append_section(None, &menu_section(&[(t!("Sync with GitHub"), "win.github-sync")]));
+        menu.append_section(None, &menu_section(&[(t!("Sync Now"), "win.github-sync")]));
     }
     if let Some(state) = context.lock.filter(|s| *s != LockState::Locked) {
         menu.append_section(None, &lock_items(false, Some(state)));
@@ -6464,6 +6659,29 @@ fn iso_now() -> String {
         .and_then(|d| d.format_iso8601().ok())
         .map(String::from)
         .unwrap_or_default()
+}
+
+/// The sync target in use.
+enum ActiveSync {
+    GitHub(String),
+    Remote(crate::remote::Target),
+}
+
+impl ActiveSync {
+    /// Identifies it (sync state).
+    fn id(&self) -> String {
+        match self {
+            ActiveSync::GitHub(repo) => repo.clone(),
+            ActiveSync::Remote(t) => t.id(),
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            ActiveSync::GitHub(_) => "GitHub",
+            ActiveSync::Remote(t) => t.name(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

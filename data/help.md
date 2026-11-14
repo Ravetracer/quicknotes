@@ -2,7 +2,7 @@
 
 **Contents:** [Notes & tabs](#notes) · [Folders](#folders) · [Checklists](#checklists) · [Tables](#tables) · [Formatting](#formatting) · [Math & music](#notation) · [Charts](#charts) · [Kanban](#kanban) · [Mind maps](#mindmaps) · [Flash cards](#flashcards) · [Calculations](#calc) · [Templates](#templates) ·
 [Previews & export](#previews) · [Presentations](#slides) · [Developer tools](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) ·
-[Security](#security) · [Backup](#backup) · [GitHub sync](#sync) ·
+[Security](#security) · [Backup](#backup) · [Sync](#sync) ·
 [Shortcuts](#shortcuts)
 
 ## Notes & tabs {#notes}
@@ -912,37 +912,49 @@ file. *Restore Backup…* either **adds** the tabs of a backup to the current on
   encrypted and authenticated with XChaCha20-Poly1305 – without the password the backup cannot
   be read, and a forgotten password cannot be recovered.
 
-## GitHub sync {#sync}
+## Sync {#sync}
 
-Keeps your notes in step on several computers through a GitHub repository –
-*Preferences → Sync*:
+Keeps your notes in step on several computers – *Preferences → Sync*. Choose **one** target under
+*Sync With*:
 
-1. **Sign in**: *Sign In…* shows a code; *Copy Code and Open GitHub*, paste it on github.com and
-   confirm. Alternatively *Use Token…* with a fine-grained personal access token that has access
-   to the repository and the permission *Contents: Read and write*.
-2. **Repository**: create a repository on GitHub (ideally a private one), enter it as
-   `owner/name` and press Enter. The first time you choose a **sync password**; every further
-   computer asks for it once.
-3. From then on QuickNotes fetches changes when it starts and sends them when it closes
-   (*Sync Automatically*). *Main menu → Sync with GitHub* syncs right away.
+- **GitHub**: *Sign In…* shows a code; *Copy Code and Open GitHub*, paste it on github.com and
+  confirm (or *Use Token…* with a fine-grained personal access token with *Contents: Read and
+  write*). Then enter a repository as `owner/name` (ideally a private one) and press Enter.
+- **Nextcloud**: enter the server address (e.g. `cloud.example.com`) and a folder, then *Sign In in
+  the Browser…* and confirm the access in Nextcloud. Nextcloud creates an app password for
+  QuickNotes; your own password is never asked for.
+- **WebDAV**: the address of a folder (e.g. `https://dav.example.com/notes/`), user name and
+  password – works with ownCloud, Nextcloud (with an app password), Synology, Hetzner Storage Box,
+  mailbox.org and most NAS. A missing folder is created.
+- **Synced Folder**: any folder that another program keeps in sync – Dropbox, OneDrive, Google
+  Drive for desktop, pCloud, Syncthing, or a USB stick you carry around.
+- **S3-compatible Storage**: endpoint (empty for AWS; e.g. `https://s3.eu-central-003.backblazeb2.com`),
+  region, an existing bucket, an optional path in it, access key ID and secret access key – AWS,
+  Backblaze B2, Wasabi, Cloudflare R2, MinIO and others.
+
+The first time a target is used you choose a **sync password**; every further computer asks for it
+once. From then on QuickNotes fetches changes when it starts and **every five minutes**, and sends
+them when it closes (*Sync Automatically*). *Main menu → Sync Now* syncs right away. Connecting
+another target ends the previous one (your notes stay).
 
 - **What is synced**: all notes – open ones and those in the library – with their title, syntax
   and folder, the folders and the trash. Files opened from disk are not synced.
   Password-protected notes travel encrypted with their own password; while one is unlocked it
   waits until it is locked again.
-- **Everything is encrypted** before it leaves the computer, in a private as well as in a
-  public repository: GitHub only sees encrypted files in the folder `quicknotes/` (and how many
-  there are and when they change). The key is random and protected by the sync password
-  (Argon2id, XChaCha20-Poly1305). Key and GitHub token are kept in the keyring (Secret Service),
-  never in the settings.
+- **Everything is encrypted** before it leaves the computer: the target only sees encrypted files
+  in the folder `quicknotes/` (and how many there are and when they change). The key is random and
+  protected by the sync password (Argon2id, XChaCha20-Poly1305). Key, tokens and passwords are kept
+  in the keyring (Secret Service), never in the settings.
 - **Conflicts**: when a note was changed on two computers between two syncs, both versions are
   kept – the other one as a copy with “conflict” and the time in its title. Renaming, moving to
-  another folder and editing the content are merged separately, so they don't conflict.
+  another folder and editing the content are merged separately, so they don't conflict. If two
+  computers write at the very same moment to a synced folder (or a server without locking), the
+  one whose write got lost notices it at its next sync and keeps both versions as well.
 - **Deleting** a note for good (from the trash) deletes it on the other computers too, unless it
   was changed there in the meantime.
-- Every sync is one commit, so the repository's history keeps older (encrypted) versions.
-- *Disconnect* stops syncing with the repository (its data stays on GitHub); *Sign Out* also
-  forgets the token. The sync needs the [note folders](#folders).
+- On GitHub every sync is one commit, so the repository's history keeps older (encrypted) versions.
+- *Disconnect* stops syncing (the data stays at the target); for GitHub, *Sign Out* also forgets
+  the token. The sync needs the [note folders](#folders).
 - A forgotten sync password cannot be recovered; the notes on your computers are not affected.
 
 ## Keyboard shortcuts {#shortcuts}

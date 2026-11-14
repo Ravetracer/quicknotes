@@ -40,7 +40,7 @@ pub const LIST: &[(Feature, &str, &str)] = &[
     ),
     (Feature::Flashcards, "Flash Cards", "Learning with flash cards and spaced repetition"),
     (Feature::Folders, "Note Folders", "A notes sidebar with folders; closed notes stay in it"),
-    (Feature::Sync, "GitHub Sync", "Encrypted sync of the notes with a GitHub repository"),
+    (Feature::Sync, "Sync", "Encrypted sync with GitHub, Nextcloud, WebDAV, S3 or a synced folder"),
     (Feature::Mindmaps, "Mind Maps", "Mind maps from Markdown outlines, with SVG and PDF export"),
 ];
 

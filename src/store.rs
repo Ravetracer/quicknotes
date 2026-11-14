@@ -64,6 +64,12 @@ pub struct Settings {
     pub github_repo: String,
     /// GitHub sync: sync at start and when closing.
     pub github_sync: bool,
+    /// Sync target chosen in the preferences: github, nextcloud, webdav,
+    /// folder or s3.
+    pub sync_kind: String,
+    /// Connected sync target other than GitHub (one target at a time).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync_target: Option<crate::remote::Target>,
     /// Imported Obsidian vaults (to import only new notes next time).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub obsidian_vaults: Vec<ObsidianVault>,
@@ -107,6 +113,8 @@ impl Default for Settings {
             github_repo: String::new(),
             github_sync: false,
             obsidian_vaults: Vec::new(),
+            sync_kind: String::new(),
+            sync_target: None,
         }
     }
 }
