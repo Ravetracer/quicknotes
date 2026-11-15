@@ -1,3 +1,7 @@
+## 0.18.2 – 2026-11-15
+
+- Fixed: after opening a note with no other note open, the syntax selector and the preview toggle stayed disabled.
+
 ## 0.18.1 – 2026-11-15
 
 - Fixed: the AppImage crashed at start on systems with a working bubblewrap sandbox (e.g. Bazzite, Fedora).

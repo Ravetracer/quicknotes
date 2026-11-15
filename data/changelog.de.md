@@ -1,3 +1,7 @@
+## 0.18.2 – 2026-11-15
+
+- Behoben: Nach dem Öffnen einer Notiz, wenn keine andere Notiz offen war, blieben Syntaxauswahl und Vorschau-Schalter deaktiviert.
+
 ## 0.18.1 – 2026-11-15
 
 - Behoben: Das AppImage stürzte beim Start auf Systemen mit funktionierender Bubblewrap-Sandbox ab (z. B. Bazzite, Fedora).
