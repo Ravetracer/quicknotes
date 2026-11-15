@@ -2421,6 +2421,7 @@ impl Window {
             language_locked: t.language_locked.get(),
             folder: self.tab_folders.borrow().get(&t.id).cloned(),
             trashed: false,
+            preview: t.preview_on(),
         };
         Some(github::Note { id: t.id.clone(), meta, label, lock, content })
     }
@@ -2457,6 +2458,7 @@ impl Window {
                 language_locked: m.language_locked,
                 folder: m.folder.clone(),
                 trashed: m.trashed,
+                preview: m.preview,
             };
             notes.push(github::Note { id: m.id.clone(), meta, label: m.label.clone(), lock: m.lock.clone(), content });
         }
@@ -2672,6 +2674,9 @@ impl Window {
         if t.language_id() != meta.language {
             t.set_language_id(meta.language.as_deref());
         }
+        if t.preview_on() != meta.preview {
+            t.set_preview(meta.preview);
+        }
         match &meta.folder {
             Some(f) => {
                 self.tab_folders.borrow_mut().insert(t.id.clone(), f.clone());
@@ -2702,6 +2707,8 @@ impl Window {
         self.refresh_title(&t.id);
         if meta.trashed {
             self.trash_note(&t.id);
+        } else if self.is_current(&t.id) {
+            self.sync_ui();
         }
     }
 
@@ -2716,6 +2723,7 @@ impl Window {
             m.language_locked = meta.language_locked;
             m.folder = meta.folder;
             m.trashed = meta.trashed;
+            m.preview = meta.preview;
             if content.is_some() {
                 m.lock = lock;
                 m.label = label;
@@ -2753,6 +2761,7 @@ impl Window {
             lock,
             folder: meta.folder,
             trashed: meta.trashed,
+            preview: meta.preview,
             label,
             ..Default::default()
         });

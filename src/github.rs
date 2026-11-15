@@ -566,6 +566,9 @@ pub struct Meta {
     pub folder: Option<String>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub trashed: bool,
+    /// The preview is switched on.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub preview: bool,
 }
 
 impl Meta {
@@ -581,6 +584,7 @@ impl Meta {
             language_locked: pick(&local.language_locked, &base.language_locked, &remote.language_locked),
             folder: pick(&local.folder, &base.folder, &remote.folder),
             trashed: pick(&local.trashed, &base.trashed, &remote.trashed),
+            preview: pick(&local.preview, &base.preview, &remote.preview),
         }
     }
 }
@@ -1148,6 +1152,23 @@ pub(crate) mod tests {
         assert_eq!(p.index.notes["a"].meta, merged);
         assert_eq!(p.meta, [("a".to_owned(), merged)]);
         assert!(p.upload.is_empty() && p.fetch.is_empty(), "content unchanged");
+    }
+
+    #[test]
+    fn preview_state_is_synced() {
+        let synced = note("a", "x");
+        let mut here = synced.clone();
+        here.meta.preview = true;
+        // Switched on here: sent, without uploading the content again.
+        let p = run_plan(&[&here], &state(&[&synced]), &index(&[&synced]));
+        assert!(p.index.notes["a"].meta.preview);
+        assert!(p.upload.is_empty() && p.fetch.is_empty(), "content unchanged");
+        // Switched on elsewhere: taken over.
+        let p = run_plan(&[&synced], &state(&[&synced]), &index(&[&here]));
+        assert_eq!(p.meta, [("a".to_owned(), here.meta.clone())]);
+        // Older versions do not know the field.
+        let old: Meta = serde_json::from_str(r#"{"title":"T"}"#).unwrap();
+        assert!(!old.preview);
     }
 
     #[test]

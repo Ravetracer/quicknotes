@@ -1826,6 +1826,11 @@ impl EditorTab {
         }
     }
 
+    /// The preview is switched on (whether or not the type has one).
+    pub fn preview_on(&self) -> bool {
+        self.preview_on.get()
+    }
+
     pub fn set_preview(self: &Rc<Self>, on: bool) {
         self.preview_on.set(on);
         self.sync_preview();
