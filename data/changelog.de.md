@@ -1,3 +1,7 @@
+## 0.18.3 – 2026-11-15
+
+- Sync: Ob eine Notiz ihre Vorschau zeigt, wird ebenfalls mit deinen anderen Geräten abgeglichen.
+
 ## 0.18.2 – 2026-11-15
 
 - Behoben: Nach dem Öffnen einer Notiz, wenn keine andere Notiz offen war, blieben Syntaxauswahl und Vorschau-Schalter deaktiviert.

@@ -1,3 +1,7 @@
+## 0.18.3 – 2026-11-15
+
+- Sync: whether a note shows its preview is synced to your other devices as well.
+
 ## 0.18.2 – 2026-11-15
 
 - Fixed: after opening a note with no other note open, the syntax selector and the preview toggle stayed disabled.
