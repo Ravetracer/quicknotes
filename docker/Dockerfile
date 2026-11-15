@@ -2,7 +2,7 @@
 # Matches the host distribution (Ubuntu 24.04) so the resulting binary links
 # against exactly the GTK4 / libadwaita / GtkSourceView / WebKitGTK runtime
 # libraries that are already installed on the desktop.
-FROM ubuntu:24.04
+FROM docker.io/library/ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \

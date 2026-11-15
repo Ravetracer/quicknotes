@@ -153,8 +153,8 @@ The complete user documentation is built into the app (F1); its source is
 
 ## Build
 
-The build runs entirely in a Docker container (Ubuntu 24.04, same GTK versions
-as the host). The host needs nothing but Docker and the GTK runtime libraries
+The build runs entirely in a container (Ubuntu 24.04, same GTK versions
+as the host). The host needs nothing but Docker or Podman and the GTK runtime libraries
 that ship with an Ubuntu 24.04 desktop.
 
 ```sh
@@ -162,6 +162,7 @@ that ship with an Ubuntu 24.04 desktop.
 ./dev.sh test             # unit tests
 ./dev.sh clippy           # lints
 ./dev.sh rebuild-image    # rebuild the dev image (docker/Dockerfile)
+./dev.sh --podman test    # force Podman (default: Docker if installed, else Podman)
 ./install.sh              # install binary, icon and .desktop entry to ~/.local
 ```
 
@@ -189,9 +190,9 @@ Usage: make it executable (`chmod +x QuickNotes-*.AppImage`) and start it. On Ba
 *Gear Lever* adds it to the application menu. Notes are stored in the same place as with
 the native build (`~/.local/share/quicknotes`), so both can be used alternately.
 
-WebKit runs web content in a bubblewrap sandbox. If the system cannot provide one (no
-`bwrap`/`xdg-dbus-proxy` or no user namespaces), the AppImage starts without it instead
-of failing. Build details: `packaging/appimage/`.
+The AppImage runs WebKit without its bubblewrap sandbox: inside an AppImage the sandbox
+cannot start its helpers (xdg-dbus-proxy) and WebKit would abort the app. Build details:
+`packaging/appimage/`.
 
 ## Previews and export
 

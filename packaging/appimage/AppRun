@@ -30,15 +30,12 @@ export GDK_PIXBUF_MODULE_FILE="$CACHE_DIR/loaders.cache"
 # Bundled PlantUML (Java + Graphviz), unless configured otherwise.
 export QUICKNOTES_PLANTUML="${QUICKNOTES_PLANTUML:-$HERE/usr/bin/plantuml}"
 
-# WebKit runs web content in a bubblewrap sandbox and aborts the whole app if
-# that is impossible (no bwrap/xdg-dbus-proxy, or no user namespaces). Only
-# then the sandbox is switched off.
-if [ -z "${WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS:-}" ]; then
-    if [ ! -x /usr/bin/bwrap ] || [ ! -x /usr/bin/xdg-dbus-proxy ] ||
-        ! /usr/bin/bwrap --ro-bind / / --dev /dev true >/dev/null 2>&1; then
-        export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
-    fi
-fi
+# WebKit's bubblewrap sandbox does not work from an AppImage: the sandbox
+# starts the host's xdg-dbus-proxy and WebKit helpers with the bundled
+# LD_LIBRARY_PATH and without the AppImage mount point, and WebKit aborts the
+# whole app when that fails ("Failed to fully launch dbus-proxy"). The sandbox
+# is therefore always off; QuickNotes only shows its own generated pages.
+export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
 
 # WebKit's helper processes and its injected bundle are looked up via the
 # relative path ././/lib/x86_64-linux-gnu/webkitgtk-6.0 (patched at build time).
