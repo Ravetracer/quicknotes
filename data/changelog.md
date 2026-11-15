@@ -1,3 +1,8 @@
+## 0.18.1 – 2026-11-15
+
+- Fixed: the AppImage crashed at start on systems with a working bubblewrap sandbox (e.g. Bazzite, Fedora).
+- Build: `dev.sh` works with Podman as well as Docker.
+
 ## 0.18.0 – 2026-11-14
 
 - **More sync targets**: besides GitHub, notes sync with Nextcloud (sign-in in the browser), any WebDAV server, S3-compatible storage or a folder kept in sync by another program (Dropbox, Syncthing, …) – end-to-end encrypted, at start, every five minutes and when closing.

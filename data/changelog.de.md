@@ -1,3 +1,8 @@
+## 0.18.1 – 2026-11-15
+
+- Behoben: Das AppImage stürzte beim Start auf Systemen mit funktionierender Bubblewrap-Sandbox ab (z. B. Bazzite, Fedora).
+- Build: `dev.sh` funktioniert neben Docker auch mit Podman.
+
 ## 0.18.0 – 2026-11-14
 
 - **Weitere Sync-Ziele**: Neben GitHub lassen sich Notizen mit Nextcloud (Anmeldung im Browser), jedem WebDAV-Server, S3-kompatiblem Speicher oder einem von einem anderen Programm synchronisierten Ordner (Dropbox, Syncthing, …) abgleichen – Ende-zu-Ende-verschlüsselt, beim Start, alle fünf Minuten und beim Beenden.
