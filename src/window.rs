@@ -1190,13 +1190,7 @@ impl Window {
         let weak = self.weak();
         self.view.connect_selected_page_notify(move |_| {
             if let Some(this) = weak.upgrade() {
-                this.sync_ui();
-                this.tab_list.sync_selection();
-                if let Some(Tab::Text(t)) = this.current() {
-                    if !this.search.revealer.reveals_child() {
-                        t.view.grab_focus();
-                    }
-                }
+                this.page_selected();
             }
         });
 
@@ -1441,6 +1435,28 @@ impl Window {
         self.tabs.borrow().get(page.child().widget_name().as_str()).cloned()
     }
 
+    /// Selects `page` and syncs the UI to it. The first page appended to an
+    /// empty view is selected automatically before it is registered in
+    /// `tabs`, so selecting it again emits no notification and the UI
+    /// would keep showing the state of an empty window.
+    fn select_page(self: &Rc<Self>, page: &adw::TabPage) {
+        if self.view.selected_page().as_ref() == Some(page) {
+            self.page_selected();
+        } else {
+            self.view.set_selected_page(page);
+        }
+    }
+
+    fn page_selected(self: &Rc<Self>) {
+        self.sync_ui();
+        self.tab_list.sync_selection();
+        if let Some(Tab::Text(t)) = self.current() {
+            if !self.search.revealer.reveals_child() {
+                t.view.grab_focus();
+            }
+        }
+    }
+
     fn current(&self) -> Option<Tab> {
         self.view
             .selected_page()
@@ -1496,7 +1512,7 @@ impl Window {
         }
         self.refresh_title(&id);
         if select {
-            self.view.set_selected_page(&page);
+            self.select_page(&page);
         }
         page
     }
@@ -1918,7 +1934,7 @@ impl Window {
     fn open_note(self: &Rc<Self>, id: &str) {
         let page = self.tabs.borrow().get(id).map(|e| e.page.clone());
         if let Some(page) = page {
-            self.view.set_selected_page(&page);
+            self.select_page(&page);
             return;
         }
         let Some(pos) = self.library.borrow().iter().position(|m| m.id == id) else { return };
@@ -1933,7 +1949,7 @@ impl Window {
             .flatten();
         let removed = self.library.borrow_mut().remove(pos);
         match self.restore_tab(meta, content) {
-            Some(page) => self.view.set_selected_page(&page),
+            Some(page) => self.select_page(&page),
             None => self.library.borrow_mut().insert(pos, removed),
         }
         self.refresh_tree();
@@ -3208,7 +3224,7 @@ impl Window {
             Some((meta, _)) if self.library.borrow().iter().any(|m| m.id == meta.id) => self.open_note(&meta.id),
             Some((meta, content)) => {
                 if let Some(page) = self.restore_tab(meta, content) {
-                    self.view.set_selected_page(&page);
+                    self.select_page(&page);
                 }
             }
             None => self.toast(t!("No closed tabs")),
@@ -3228,7 +3244,7 @@ impl Window {
             self.new_note();
         } else {
             let idx = (session.active as i32).min(self.view.n_pages() - 1);
-            self.view.set_selected_page(&self.view.nth_page(idx));
+            self.select_page(&self.view.nth_page(idx));
         }
         self.sync_ui();
     }
@@ -4121,7 +4137,7 @@ impl Window {
             self.new_note();
         } else {
             let idx = (backup.session.active as i32).clamp(0, self.view.n_pages() - 1);
-            self.view.set_selected_page(&self.view.nth_page(idx));
+            self.select_page(&self.view.nth_page(idx));
         }
         self.persist_all();
         self.sync_ui();
@@ -4149,7 +4165,7 @@ impl Window {
             .find(|e| e.tab.path().as_deref() == Some(path.as_path()))
             .map(|e| e.page.clone());
         if let Some(page) = existing {
-            self.view.set_selected_page(&page);
+            self.select_page(&page);
             return;
         }
         if !path.is_file() {
