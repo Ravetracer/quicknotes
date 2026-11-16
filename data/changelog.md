@@ -1,3 +1,7 @@
+## 0.19.0 – 2026-11-16
+
+- Sync: notes opened or closed on one device are opened or closed on your other devices as well (Preferences → Sync → *Sync Open Notes*, on by default).
+
 ## 0.18.3 – 2026-11-15
 
 - Sync: whether a note shows its preview is synced to your other devices as well.

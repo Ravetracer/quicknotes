@@ -1,3 +1,7 @@
+## 0.19.0 – 2026-11-16
+
+- Sync: Notizen, die auf einem Gerät geöffnet oder geschlossen werden, werden auch auf deinen anderen Geräten geöffnet oder geschlossen (Einstellungen → Sync → *Geöffnete Notizen abgleichen*, standardmäßig an).
+
 ## 0.18.3 – 2026-11-15
 
 - Sync: Ob eine Notiz ihre Vorschau zeigt, wird ebenfalls mit deinen anderen Geräten abgeglichen.
