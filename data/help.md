@@ -1073,6 +1073,8 @@ another target ends the previous one (your notes stay).
 
 - **What is synced**: all notes – open ones and those in the library – with their title, syntax
   and folder, the folders and the trash. Files opened from disk are not synced.
+  With *Sync Open Notes* (on by default) a note opened or closed on one computer is opened or
+  closed on the others too; a note you are typing in stays open.
   Password-protected notes travel encrypted with their own password; while one is unlocked it
   waits until it is locked again.
 - **Everything is encrypted** before it leaves the computer: the target only sees encrypted files

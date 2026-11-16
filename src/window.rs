@@ -1937,23 +1937,31 @@ impl Window {
             self.select_page(&page);
             return;
         }
-        let Some(pos) = self.library.borrow().iter().position(|m| m.id == id) else { return };
+        if let Some(page) = self.open_library_note(id) {
+            self.select_page(&page);
+        }
+    }
+
+    /// Opens a note of the library in a new tab (without switching to it).
+    fn open_library_note(self: &Rc<Self>, id: &str) -> Option<adw::TabPage> {
+        let pos = self.library.borrow().iter().position(|m| m.id == id)?;
         let mut meta = self.library.borrow()[pos].clone();
         if let Some(p) = meta.path.as_ref().filter(|p| !p.exists()) {
             self.toast(&t!("File not found: {}", p.display()));
-            return;
+            return None;
         }
         meta.trashed = false;
         let content = (meta.path.is_none() && meta.lock.is_none() && meta.kind == TabKind::Text)
             .then(|| store::read_note(id))
             .flatten();
         let removed = self.library.borrow_mut().remove(pos);
-        match self.restore_tab(meta, content) {
-            Some(page) => self.select_page(&page),
-            None => self.library.borrow_mut().insert(pos, removed),
+        let page = self.restore_tab(meta, content);
+        if page.is_none() {
+            self.library.borrow_mut().insert(pos, removed);
         }
         self.refresh_tree();
         self.schedule_persist();
+        page
     }
 
     /// Closing a tab with the notes library: notes stay in it (in their
@@ -2397,6 +2405,11 @@ impl Window {
         });
     }
 
+    /// Open notes are synced (needs the library to close them into).
+    fn sync_open(&self) -> bool {
+        self.settings.borrow().sync_open && features::on(Feature::Folders)
+    }
+
     /// Automatic sync (start, close) is on.
     fn github_ready(&self) -> bool {
         self.github_connected() && self.settings.borrow().github_sync
@@ -2422,6 +2435,7 @@ impl Window {
             folder: self.tab_folders.borrow().get(&t.id).cloned(),
             trashed: false,
             preview: t.preview_on(),
+            open: true,
         };
         Some(github::Note { id: t.id.clone(), meta, label, lock, content })
     }
@@ -2459,8 +2473,17 @@ impl Window {
                 folder: m.folder.clone(),
                 trashed: m.trashed,
                 preview: m.preview,
+                open: false,
             };
             notes.push(github::Note { id: m.id.clone(), meta, label: m.label.clone(), lock: m.lock.clone(), content });
+        }
+        if !self.sync_open() {
+            // As last synced, so neither side's open notes change.
+            for n in &mut notes {
+                if let Some(b) = state.notes.get(&n.id) {
+                    n.meta.open = b.meta.open;
+                }
+            }
         }
         (notes, skip)
     }
@@ -2532,6 +2555,7 @@ impl Window {
         let state = github::load_state();
         let (notes, skip) = self.sync_notes(&state);
         let snapshot: HashMap<String, String> = notes.iter().map(|n| (n.id.clone(), n.hash())).collect();
+        let open: HashSet<String> = self.tabs.borrow().keys().cloned().collect();
         let job = github::Job {
             repo: active.id(),
             notes,
@@ -2555,7 +2579,7 @@ impl Window {
             // Automatic syncs show an error once, not every five minutes.
             let report = !this.sync_failed.replace(!matches!(result, Ok(Ok(_))));
             let summary = match result {
-                Ok(Ok(outcome)) => Some(this.github_apply(outcome, &snapshot, name)),
+                Ok(Ok(outcome)) => Some(this.github_apply(outcome, &snapshot, &open, name)),
                 Ok(Err(github::Error::Auth(e))) => {
                     eprintln!("quicknotes: {name}: {e}");
                     if report {
@@ -2583,8 +2607,15 @@ impl Window {
         }
     }
 
-    /// Applies what a sync brought; a summary of it for a toast.
-    fn github_apply(self: &Rc<Self>, mut outcome: github::Outcome, snapshot: &HashMap<String, String>, name: &str) -> String {
+    /// Applies what a sync brought; a summary of it for a toast. `open`: the
+    /// tabs when the sync started (notes opened or closed meanwhile keep that).
+    fn github_apply(
+        self: &Rc<Self>,
+        mut outcome: github::Outcome,
+        snapshot: &HashMap<String, String>,
+        open: &HashSet<String>,
+        name: &str,
+    ) -> String {
         // Tabs edited while the sync ran keep the edit.
         let edited = |t: &EditorTab| self.sync_note(t).map(|n| n.hash()).as_ref() != snapshot.get(&t.id);
         {
@@ -2597,16 +2628,26 @@ impl Window {
                 .collect();
         }
         let (mut received, mut deleted, mut conflicts) = (0, 0, outcome.conflicts);
+        let sync_open = self.sync_open();
+        // Notes opened or closed elsewhere.
+        let (mut to_open, mut to_close) = (Vec::new(), Vec::new());
         for change in std::mem::take(&mut outcome.changes) {
             match change {
                 github::Change::Put { id, meta, label, lock, content } => {
                     received += 1;
+                    if sync_open && !meta.trashed {
+                        if meta.open && !open.contains(&id) {
+                            to_open.push(id.clone());
+                        } else if !meta.open && open.contains(&id) {
+                            to_close.push(id.clone());
+                        }
+                    }
                     if let Some(t) = self.text_tab(&id) {
                         if content.is_some() && edited(&t) {
                             // The repository's version goes next to it (and
                             // is sent with the next sync).
                             let title = Some(format!("{} ({})", meta.title.clone().or(label.clone()).unwrap_or_else(|| t.title()), t!("{} version", name)));
-                            let meta = github::Meta { title, ..meta };
+                            let meta = github::Meta { title, open: false, ..meta };
                             self.add_synced_note(store::new_id(), meta, label, lock, content);
                             conflicts += 1;
                         } else {
@@ -2642,6 +2683,19 @@ impl Window {
                     deleted += 1;
                 }
             }
+        }
+        for id in to_close {
+            // Not while it is being edited; it stays open then (and is sent
+            // as open next time).
+            let Some(t) = self.text_tab(&id) else { continue };
+            if !edited(&t) {
+                if let Some(page) = self.tabs.borrow().get(&id).map(|e| e.page.clone()) {
+                    self.view.close_page(&page);
+                }
+            }
+        }
+        for id in to_open {
+            self.open_library_note(&id);
         }
         github::save_state(&outcome.state);
         self.refresh_tree();
@@ -6736,6 +6790,12 @@ impl prefs::Handler for PrefsBridge {
     fn set_github_sync(&self, on: bool) {
         self.with(|w| {
             w.settings.borrow_mut().github_sync = on;
+            w.persist_all();
+        });
+    }
+    fn set_sync_open(&self, on: bool) {
+        self.with(|w| {
+            w.settings.borrow_mut().sync_open = on;
             w.persist_all();
         });
     }

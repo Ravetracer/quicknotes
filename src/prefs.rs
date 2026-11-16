@@ -42,6 +42,7 @@ pub trait Handler {
     fn github_connect(&self, repo: String, done: Box<dyn Fn(Result<String, String>)>);
     fn github_disconnect(&self);
     fn set_github_sync(&self, on: bool);
+    fn set_sync_open(&self, on: bool);
     fn github_sync_now(&self);
     /// The kind of target chosen in the Sync page.
     fn set_sync_kind(&self, kind: &str);
@@ -847,6 +848,16 @@ fn sync_page(dialog: &adw::PreferencesDialog, settings: &Settings, handler: &Rc<
         page.add(g);
     }
     page.add(&remote_status);
+    let options = adw::PreferencesGroup::builder().title(t!("What Is Synced")).build();
+    let open_row = adw::SwitchRow::builder()
+        .title(t!("Sync Open Notes"))
+        .subtitle(t!("Notes opened or closed here are opened or closed on the other computers too"))
+        .active(settings.sync_open)
+        .build();
+    let h = handler.clone();
+    open_row.connect_active_notify(move |row| h.set_sync_open(row.is_active()));
+    options.add(&open_row);
+    page.add(&options);
     let sync_visible = {
         let (groups, remote_status) = (groups.clone(), remote_status.clone());
         move |index: u32| {

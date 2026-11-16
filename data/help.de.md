@@ -1116,6 +1116,9 @@ anderes Ziel verbunden, endet das bisherige (deine Notizen bleiben).
 
 - **Was abgeglichen wird**: alle Notizen – offene und die in der Bibliothek – mit Titel, Syntax
   und Ordner, die Ordner und der Papierkorb. Von der Festplatte geöffnete Dateien nicht.
+  Mit *Geöffnete Notizen abgleichen* (standardmäßig an) wird eine Notiz, die auf einem Rechner
+  geöffnet oder geschlossen wird, auch auf den anderen geöffnet oder geschlossen; eine Notiz, in
+  der du gerade schreibst, bleibt offen.
   Passwortgeschützte Notizen reisen mit ihrem eigenen Passwort verschlüsselt; ist eine gerade
   entsperrt, wartet sie, bis sie wieder gesperrt ist.
 - **Alles wird verschlüsselt**, bevor es den Rechner verlässt: Das Ziel sieht nur verschlüsselte

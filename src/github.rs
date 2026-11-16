@@ -569,6 +569,9 @@ pub struct Meta {
     /// The preview is switched on.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub preview: bool,
+    /// The note is open in a tab (otherwise it is in the library).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub open: bool,
 }
 
 impl Meta {
@@ -585,6 +588,7 @@ impl Meta {
             folder: pick(&local.folder, &base.folder, &remote.folder),
             trashed: pick(&local.trashed, &base.trashed, &remote.trashed),
             preview: pick(&local.preview, &base.preview, &remote.preview),
+            open: pick(&local.open, &base.open, &remote.open),
         }
     }
 }
@@ -1169,6 +1173,24 @@ pub(crate) mod tests {
         // Older versions do not know the field.
         let old: Meta = serde_json::from_str(r#"{"title":"T"}"#).unwrap();
         assert!(!old.preview);
+    }
+
+    #[test]
+    fn open_state_is_synced() {
+        let synced = Note { meta: Meta { open: true, ..Default::default() }, ..note("a", "x") };
+        let mut closed = synced.clone();
+        closed.meta.open = false;
+        // Closed here: sent, without uploading the content again.
+        let p = run_plan(&[&closed], &state(&[&synced]), &index(&[&synced]));
+        assert!(!p.index.notes["a"].meta.open);
+        assert!(p.upload.is_empty() && p.fetch.is_empty(), "content unchanged");
+        // Closed elsewhere: taken over.
+        let p = run_plan(&[&synced], &state(&[&synced]), &index(&[&closed]));
+        assert_eq!(p.meta, [("a".to_owned(), closed.meta.clone())]);
+        // Opened here while another field changed elsewhere: both kept.
+        let titled = Note { meta: Meta { title: Some("T".into()), ..closed.meta.clone() }, ..closed.clone() };
+        let p = run_plan(&[&synced], &state(&[&closed]), &index(&[&titled]));
+        assert_eq!(p.index.notes["a"].meta, Meta { open: true, ..titled.meta.clone() });
     }
 
     #[test]

@@ -64,6 +64,8 @@ pub struct Settings {
     pub github_repo: String,
     /// GitHub sync: sync at start and when closing.
     pub github_sync: bool,
+    /// Sync which notes are open in tabs.
+    pub sync_open: bool,
     /// Sync target chosen in the preferences: github, nextcloud, webdav,
     /// folder or s3.
     pub sync_kind: String,
@@ -120,6 +122,7 @@ impl Default for Settings {
             github_account: String::new(),
             github_repo: String::new(),
             github_sync: false,
+            sync_open: true,
             obsidian_vaults: Vec::new(),
             sync_kind: String::new(),
             sync_target: None,
