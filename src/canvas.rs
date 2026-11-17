@@ -74,11 +74,15 @@ pub fn assets(text: &str) -> BTreeSet<String> {
     items_assets(items)
 }
 
+/// Images (`src`) and Pencil stencil packages (`pkg`) of items.
 fn items_assets(items: &[Value]) -> BTreeSet<String> {
     items
         .iter()
-        .filter(|i| kind(i) == "image")
-        .filter_map(|i| i.get("src").and_then(Value::as_str))
+        .filter_map(|i| match kind(i) {
+            "image" => i.get("src").and_then(Value::as_str),
+            "pencil" => i.get("pkg").and_then(Value::as_str),
+            _ => None,
+        })
         .filter(|n| valid_name(n))
         .map(str::to_owned)
         .collect()
@@ -309,7 +313,7 @@ const STRINGS: &[(&str, &str)] = &[
     ("tplRetro", "Retrospective"),
     ("tWell", "Went well"),
     ("tImprove", "To improve"),
-    ("tActions", "Actions"),
+    ("tActions", "Action items"),
     ("tplFlow", "Flowchart"),
     ("tplWire", "Wireframe"),
     ("tplMobile", "Mobile screen"),
@@ -420,7 +424,19 @@ const STRINGS: &[(&str, &str)] = &[
     ("removeColl", "Remove collection"),
     ("confirmRemove", "Click again to remove"),
     ("showMore", "Show more ({} of {})"),
-    ("pencilSoon", "Live Pencil shapes arrive with the next update"),
+    ("properties", "Properties"),
+    ("noProps", "This shape has no properties."),
+    ("pGeneral", "General"),
+    ("pActions", "Actions"),
+    ("pWidth", "Width"),
+    ("pSize", "Size"),
+    ("pItalic", "Italic"),
+    ("pFontName", "Font"),
+    ("pAlpha", "Opacity"),
+    ("pImage", "(image)"),
+    ("pRendering", "Drawing…"),
+    ("pFailed", "This shape cannot be drawn"),
+    ("pKnob", "Drag to adjust"),
     ("importStencils", "Import Pencil stencils…"),
     ("getStencils", "Get more stencils…"),
     ("repoTitle", "Pencil stencils"),
@@ -573,6 +589,13 @@ mod tests {
         assert_eq!(title(&template()), None);
         assert_eq!(stats(&scene), 3);
         assert_eq!(assets(&scene).into_iter().collect::<Vec<_>>(), [name]);
+    }
+
+    #[test]
+    fn stencil_packages_are_assets() {
+        let pkg = asset_name(b"zip", "zip");
+        let scene = format!(r#"{{"canvas":1,"items":[{{"id":"p","t":"pencil","pkg":"{pkg}","c":"x","s":"button"}}]}}"#);
+        assert_eq!(assets(&scene).into_iter().collect::<Vec<_>>(), [pkg]);
     }
 
     #[test]

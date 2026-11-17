@@ -20,6 +20,9 @@ struct Drawn {
     width: f64,
     height: f64,
     background: String,
+    /// Stencil packages of exported Pencil shapes (for their fonts).
+    #[serde(default)]
+    pkgs: Vec<String>,
 }
 
 /// A point in the canvas page (client pixels), `None` for the view's centre.
@@ -29,6 +32,13 @@ fn js_point(point: Point) -> String {
     match point {
         Some((x, y)) => format!("{x}, {y}"),
         None => "null, null".to_owned(),
+    }
+}
+
+/// Gives the page the fonts of a stencil package.
+fn send_fonts(t: &EditorTab, pkg: &str) {
+    if let Some(css) = crate::pencil::font_css(pkg).filter(|c| !c.is_empty()) {
+        t.canvas_js(&format!("QC.pencilFonts({}, {})", Value::from(pkg), Value::from(css)));
     }
 }
 
@@ -143,6 +153,9 @@ impl Window {
                         None => this.toast(t!("The graphic is missing")),
                     }
                 }
+                Some("canvas-pencil-place") => this.pencil_place(t, str_of(msg, "coll"), str_of(msg, "shape"), point),
+                Some("canvas-pencil-render") => this.pencil_call(t, msg, "render"),
+                Some("canvas-pencil-action") => this.pencil_call(t, msg, "action"),
                 Some("canvas-stencil-import") => this.stencil_import(),
                 Some("canvas-stencil-browse") => this.stencil_browse(t),
                 Some("canvas-stencil-install") => this.stencil_install(t, str_of(msg, "id")),
@@ -430,6 +443,70 @@ impl Window {
         });
     }
 
+    // ----- live Pencil shapes ---------------------------------------------------
+
+    /// Puts a shape of an installed collection on the canvas: the package is
+    /// copied into the canvas (so it syncs with it) and the shape rendered.
+    fn pencil_place(self: &Rc<Self>, t: &Rc<EditorTab>, coll: String, shape: String, point: Point) {
+        let Some(meta) = crate::library_art::installed().into_iter().find(|m| m.id == coll) else {
+            self.toast(t!("The stencil collection of this shape is missing"));
+            return;
+        };
+        let data = crate::library_art::package_data(&meta.id);
+        let stored = data.map(|d| store::write_asset(&t.id, &meta.pkg, &d));
+        if !matches!(stored, Some(Ok(()))) {
+            self.toast(t!("The stencil collection of this shape is missing"));
+            return;
+        }
+        let (this, t) = (self.clone(), t.clone());
+        let req = serde_json::json!({ "s": shape });
+        let pkg = meta.pkg.clone();
+        crate::pencil::request(&meta.pkg, crate::pencil::Source::Canvas(t.id.clone()), "render", req, move |result| {
+            match result.and_then(|r| if r["ok"] == true { Ok(r) } else { Err(r["error"].as_str().unwrap_or("?").to_owned()) }) {
+                Ok(r) => {
+                    send_fonts(&t, &pkg);
+                    let (x, y) = match point {
+                        Some((x, y)) => (Value::from(x), Value::from(y)),
+                        None => (Value::Null, Value::Null),
+                    };
+                    let item = serde_json::json!({
+                        "x": x, "y": y, "pkg": pkg, "c": coll, "s": shape,
+                        "w": r["w"], "h": r["h"], "p": r["props"], "render": r,
+                    });
+                    t.canvas_js(&format!("QC.addPencil({item})"));
+                }
+                Err(e) => this.toast(&t!("The shape cannot be drawn: {}", e)),
+            }
+        });
+    }
+
+    /// `canvas-pencil-render` / `canvas-pencil-action` from the page.
+    fn pencil_call(self: &Rc<Self>, t: &Rc<EditorTab>, msg: &Value, func: &'static str) {
+        let pkg = str_of(msg, "pkg");
+        let id = str_of(msg, "id");
+        let key = msg.get("key").cloned().unwrap_or(Value::Null);
+        let fonts = msg.get("fonts").and_then(Value::as_bool).unwrap_or(false);
+        let mut req = serde_json::json!({ "s": msg["s"], "props": msg["p"], "w": msg["w"], "h": msg["h"] });
+        for k in ["oldW", "oldH", "action"] {
+            if let Some(v) = msg.get(k) {
+                req[k] = v.clone();
+            }
+        }
+        let t = t.clone();
+        let p = pkg.clone();
+        crate::pencil::request(&pkg, crate::pencil::Source::Canvas(t.id.clone()), func, req, move |result| {
+            let r = result.unwrap_or_else(|e| serde_json::json!({ "ok": false, "error": e }));
+            if !fonts && r["ok"] == true {
+                send_fonts(&t, &p);
+            }
+            let id = Value::from(id.as_str());
+            match func {
+                "render" => t.canvas_js(&format!("QC.pencilRendered({id}, {key}, {r})")),
+                _ => t.canvas_js(&format!("QC.pencilAction({id}, {r})")),
+            }
+        });
+    }
+
     // ----- files ---------------------------------------------------------
 
     /// Saves the canvas with its images as one `.qncanvas` file. `then` runs
@@ -541,6 +618,14 @@ impl Window {
                 match drawn {
                     Ok(mut drawn) => {
                         drawn.svg = canvas::inline_images(&drawn.svg, |name| store::read_asset(&t.id, name));
+                        // Fonts of Pencil shapes travel inside the file.
+                        let css: String = drawn.pkgs.iter().filter_map(|p| crate::pencil::font_css(p)).collect();
+                        if !css.is_empty() {
+                            if let Some(end) = drawn.svg.find('>') {
+                                let style = format!("<defs><style>{}</style></defs>", css.replace("]]>", ""));
+                                drawn.svg.insert_str(end + 1, &style);
+                            }
+                        }
                         this.write_canvas_export(drawn, format, path);
                     }
                     Err(e) => this.export_done(&path, Err(e)),

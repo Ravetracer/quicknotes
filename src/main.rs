@@ -47,6 +47,7 @@ mod mindmap;
 mod notation;
 mod notes_tree;
 mod obsidian;
+mod pencil;
 mod plantuml;
 mod prefs;
 mod rates;

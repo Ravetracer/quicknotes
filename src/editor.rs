@@ -1919,6 +1919,12 @@ impl EditorTab {
         let theme = self.shared.theme.get();
         let webview = webkit6::WebView::new();
         webview.set_hexpand(true);
+        // Debugging aid: QN_WEB_CONSOLE=1 prints the pages' console to stdout.
+        if std::env::var_os("QN_WEB_CONSOLE").is_some() {
+            if let Some(settings) = WebViewExt::settings(&webview) {
+                settings.set_enable_write_console_messages_to_stdout(true);
+            }
+        }
         webview.set_vexpand(true);
         webview.set_background_color(&preview_bg(theme));
         webview.set_zoom_level(self.shared.zoom.get());

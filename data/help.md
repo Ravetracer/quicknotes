@@ -481,6 +481,11 @@ stickers, arrows and pictures. Create one with *New Canvas* in the main menu (Ct
   collections (e.g. Community Material Icons) are searchable and work like clip art. Graphics put
   on a canvas are copied into the canvas, so they sync with it. Preferences → Sync → *Sync Stencils
   and Clip Art* also syncs the installed collections and your OpenClipArt collection.
+- **Live Pencil shapes**: shapes of installed Pencil collections behave like in Pencil – they
+  stretch the way the shape is designed, a double-click edits their text, *Properties* in the
+  style bar changes colours, fonts, styles and options and runs the shape's own actions, and the
+  yellow knobs adjust details (e.g. a slider's position). The collection is copied into the canvas,
+  so the shapes look the same on every computer, also where it is not installed.
 - **Frames** (F) are titled areas, e.g. a page or a screen: moving a frame moves what lies in it,
   deleting it keeps the contents. Presets for A4, slides, desktop and phone are in the library.
 - **Templates**: an empty canvas offers templates – brainstorm, retrospective, flowchart,

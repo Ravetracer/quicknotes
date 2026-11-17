@@ -112,7 +112,7 @@
 //   tplRetro: Retrospective
 //   tWell: Went well
 //   tImprove: To improve
-//   tActions: Actions
+//   tActions: Action items
 //   tplFlow: Flowchart
 //   tplWire: Wireframe
 //   tplMobile: Mobile screen
@@ -223,7 +223,19 @@
 //   removeColl: Remove collection
 //   confirmRemove: Click again to remove
 //   showMore: Show more ({} of {})
-//   pencilSoon: Live Pencil shapes arrive with the next update
+//   properties: Properties
+//   noProps: This shape has no properties.
+//   pGeneral: General
+//   pActions: Actions
+//   pWidth: Width
+//   pSize: Size
+//   pItalic: Italic
+//   pFontName: Font
+//   pAlpha: Opacity
+//   pImage: (image)
+//   pRendering: Drawing…
+//   pFailed: This shape cannot be drawn
+//   pKnob: Drag to adjust
 //   importStencils: Import Pencil stencils…
 //   getStencils: Get more stencils…
 //   repoTitle: Pencil stencils
@@ -255,6 +267,7 @@
 
   /// Items with text that can be edited.
   function hasText(it) {
+    if (it.t === 'pencil') return pencilEdits(it).length > 0;
     return !!TEXTUAL[it.t] || it.t === 'frame' || (it.t === 'stencil' && stDef(it).text !== false);
   }
 
@@ -376,7 +389,8 @@
     dV: 'M4 3h16M4 21h16M7 8h10v3H7zM7 13h10v3H7z',
     sW: 'M4 6h16v4H4zM4 14h16v4H4z',
     sH: 'M6 4h4v16H6zM14 4h4v16h-4z',
-    search: 'M10.5 4a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM15.5 15.5L20 20'
+    search: 'M10.5 4a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM15.5 15.5L20 20',
+    props: 'M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4'
   };
 
   function icon(name, sw) {
@@ -1743,8 +1757,547 @@
       drawStencil(g, it, ex, hideText);
     } else if (t === 'frame') {
       drawFrame(g, it, ex, hideText);
+    } else if (t === 'pencil') {
+      drawPencil(g, it, ex);
     }
     return g;
+  }
+
+  // ----- live Pencil shapes -----------------------------------------------------------
+  //
+  // Pencil items are drawn by the stencil engine outside this page (Rust runs it
+  // in a sandboxed view): whenever an item's shape, properties or size change,
+  // the page asks for a rendering (`canvas-pencil-render`) and caches the
+  // sanitised result per item. Copies share renderings by key.
+
+  var pcache = {};      // item id -> { key, r, frag }
+  var pByKey = {};      // key -> { r, frag } (recent renderings)
+  var pKeyList = [];
+  var pState = {};      // item id -> { inflight, sent, timer, old, again, actionError }
+  var pFonts = {};      // pkg -> true once its @font-face css is in the page
+  var pVer = {};        // item id -> counter (redraw when a rendering arrives)
+  var pEditCur = null;  // the Pencil text being edited: { e, orig }
+  var pPropsRefresh = null;
+  var XMLNS_XML = 'http://www.w3.org/XML/1998/namespace';
+
+  function stableStr(o) {
+    if (!o || typeof o !== 'object') return JSON.stringify(o === undefined ? null : o);
+    return '{' + Object.keys(o).sort().map(function (k) { return JSON.stringify(k) + ':' + JSON.stringify(o[k]); }).join(',') + '}';
+  }
+
+  function pKey(it) {
+    return '[' + JSON.stringify(it.pkg || '') + ',' + JSON.stringify(it.s || '') + ',' + stableStr(it.p || {}) + ',' + r1(it.w) + ',' + r1(it.h) + ']';
+  }
+
+  function pencilName(it) {
+    var lib = typeof library === 'object' && library ? library.collections || [] : [];
+    for (var i = 0; i < lib.length; i++) {
+      if (lib[i].id !== it.c) continue;
+      var shapes = lib[i].shapes || [];
+      for (var j = 0; j < shapes.length; j++) if (shapes[j].id === it.s) return shapes[j].name || it.s;
+    }
+    return String(it.s || 'Pencil').replace(/^sc:/, '');
+  }
+
+  var P_TAGS = {};
+  ('svg g defs symbol use path rect circle ellipse line polyline polygon text tspan textPath image title desc ' +
+    'linearGradient radialGradient stop pattern clipPath mask marker filter feBlend feColorMatrix ' +
+    'feComponentTransfer feComposite feConvolveMatrix feDiffuseLighting feDisplacementMap feDistantLight ' +
+    'feDropShadow feFlood feFuncA feFuncB feFuncG feFuncR feGaussianBlur feImage feMerge feMergeNode ' +
+    'feMorphology feOffset fePointLight feSpecularLighting feSpotLight feTile feTurbulence').split(' ').forEach(function (t) { P_TAGS[t] = 1; });
+
+  /// `url(…)` only to things inside the drawing.
+  function localUrls(v) { return v.replace(/url\(\s*(['"]?)\s*(?!#)[^)]*\)/gi, 'none'); }
+
+  /// Parses an engine rendering into a fragment of allowed SVG only: no
+  /// scripts, no HTML, no event handlers, no links or images from outside.
+  function sanitizeSvg(markup) {
+    var src = String(markup || '').trim();
+    if (!src) return null;
+    if (!/^<svg[\s>]/i.test(src)) src = '<svg xmlns="' + NS + '" xmlns:xlink="http://www.w3.org/1999/xlink">' + src + '</svg>';
+    var doc;
+    try { doc = new DOMParser().parseFromString(src, 'image/svg+xml'); } catch (_) { return null; }
+    var root = doc && doc.documentElement;
+    if (!root || root.localName === 'parsererror' || root.getElementsByTagName('parsererror').length) return null;
+    var frag = document.createDocumentFragment();
+    (function walk(from, to) {
+      for (var n = from.firstChild; n; n = n.nextSibling) {
+        if (n.nodeType === 3 || n.nodeType === 4) { to.appendChild(document.createTextNode(n.nodeValue)); continue; }
+        if (n.nodeType !== 1) continue;
+        var name = n.localName;
+        if (n.namespaceURI !== NS || !P_TAGS[name]) {
+          // Plain wrappers keep their drawable children.
+          if (n.namespaceURI === NS && (name === 'a' || name === 'switch')) {
+            var wrap = document.createElementNS(NS, 'g');
+            to.appendChild(wrap);
+            walk(n, wrap);
+          }
+          continue;
+        }
+        var el = document.createElementNS(NS, name);
+        for (var i = 0; i < n.attributes.length; i++) {
+          var a = n.attributes[i], ln = a.localName, v = a.value;
+          if (/^on/i.test(ln) || /javascript:/i.test(v)) continue;
+          if (ln === 'href') {
+            if (/^\s*(data:|#)/i.test(v)) el.setAttribute('href', v.trim());
+            continue;
+          }
+          if (a.namespaceURI === XMLNS_XML) { el.setAttributeNS(XMLNS_XML, 'xml:' + ln, v); continue; }
+          if (a.namespaceURI) continue;
+          if (/url\(/i.test(v)) v = localUrls(v);
+          try { el.setAttribute(a.name, v); } catch (_) { /* invalid name */ }
+        }
+        to.appendChild(el);
+        walk(n, el);
+      }
+    })(root, frag);
+    return frag;
+  }
+
+  /// Gives the ids of a drawn copy a prefix (several copies of one shape).
+  function uniqueIds(root, prefix) {
+    var map = {}, any = false;
+    var all = root.querySelectorAll('[id]');
+    for (var i = 0; i < all.length; i++) {
+      var id = all[i].getAttribute('id');
+      map[id] = prefix + id;
+      all[i].setAttribute('id', prefix + id);
+      any = true;
+    }
+    if (!any) return;
+    var els = root.querySelectorAll('*');
+    for (var j = 0; j < els.length; j++) {
+      var el = els[j];
+      for (var k = 0; k < el.attributes.length; k++) {
+        var a = el.attributes[k], v = a.value;
+        if (a.localName === 'href' && v.charAt(0) === '#' && map[v.slice(1)]) { el.setAttribute('href', '#' + map[v.slice(1)]); continue; }
+        if (v.indexOf('url(') < 0) continue;
+        var nv = v.replace(/url\(\s*(['"]?)#([^'")\s]+)\1\s*\)/g, function (m, q, ref) { return map[ref] ? 'url(#' + map[ref] + ')' : m; });
+        if (nv !== v) el.setAttribute(a.name, nv);
+      }
+    }
+  }
+
+  function setPencil(id, key, r, frag) {
+    pcache[id] = { key: key, r: r, frag: frag };
+    pVer[id] = (pVer[id] || 0) + 1;
+    if (r && r.ok && frag) {
+      if (!pByKey[key]) pKeyList.push(key);
+      pByKey[key] = { r: r, frag: frag };
+      while (pKeyList.length > 200) delete pByKey[pKeyList.shift()];
+    }
+  }
+
+  /// A rendering for the item's current state: from the cache, shared by a
+  /// copy, or asked for (debounced; one request per item at a time).
+  function ensurePencil(it, delay) {
+    var key = pKey(it), c = pcache[it.id], st0 = pState[it.id];
+    if (c && c.key === key) { if (st0) st0.old = null; return; }
+    var shared = pByKey[key];
+    if (shared) { if (st0) st0.old = null; setPencil(it.id, key, shared.r, shared.frag); return; }
+    if (drag && drag.kind === 'resize' && drag.orig && drag.orig[it.id]) return;
+    var st = pState[it.id] || (pState[it.id] = {});
+    if (st.inflight) {
+      if (st.inflight !== key) st.again = true;
+      // A request without an answer is given up after a while.
+      if (Date.now() - st.sent < 20000) return;
+      st.inflight = null;
+    }
+    if (st.timer) return;
+    st.timer = setTimeout(function () { st.timer = null; sendRender(it.id); }, delay === undefined ? 30 : delay);
+  }
+
+  function sendRender(id) {
+    var it = byId[id], st = pState[id];
+    if (!it || it.t !== 'pencil' || !st) return;
+    var key = pKey(it);
+    if (pcache[id] && pcache[id].key === key) return;
+    st.inflight = key;
+    st.sent = Date.now();
+    st.again = false;
+    var msg = { type: 'canvas-pencil-render', id: id, key: key, pkg: it.pkg, s: it.s, p: it.p || {}, w: it.w, h: it.h, fonts: !!pFonts[it.pkg] };
+    if (st.old) { msg.oldW = st.old.w; msg.oldH = st.old.h; st.old = null; }
+    post(msg);
+  }
+
+  function pencilResult(it) {
+    var c = it && pcache[it.id];
+    return c && c.r && c.r.ok ? c.r : null;
+  }
+
+  function drawPencil(g, it, ex) {
+    var c = pcache[it.id], w = it.w, hh = it.h;
+    if (c && c.frag) {
+      var inner = svgEl('g'), rw = c.r.w || w, rh = c.r.h || hh;
+      if (Math.abs(rw - w) > 0.05 || Math.abs(rh - hh) > 0.05) inner.setAttribute('transform', 'scale(' + (w / rw) + ' ' + (hh / rh) + ')');
+      inner.appendChild(c.frag.cloneNode(true));
+      uniqueIds(inner, (ex ? 'x' : 'p') + it.id + '-');
+      g.appendChild(inner);
+    } else {
+      var failed = !!(c && c.r && c.r.ok === false);
+      g.appendChild(svgEl('rect', {
+        class: 'pencil-ph', width: r1(w), height: r1(hh), rx: 4, fill: 'none', stroke: failed ? '#e01b24' : ink,
+        'stroke-opacity': 0.6, 'stroke-dasharray': '6 4', 'vector-effect': 'non-scaling-stroke'
+      }));
+      var label = svgEl('text', {
+        x: r1(w / 2), y: r1(hh / 2), 'text-anchor': 'middle', 'dominant-baseline': 'central',
+        'font-size': Math.max(9, Math.min(13, hh / 3)), 'font-family': FONT, fill: failed ? '#e01b24' : ink, 'fill-opacity': 0.75
+      });
+      label.textContent = (failed ? '⚠ ' : '') + pencilName(it) + (failed ? '' : ' · ' + S('pRendering', 'Drawing…'));
+      g.appendChild(label);
+      if (failed) {
+        var tt = svgEl('title');
+        tt.textContent = S('pFailed', 'This shape cannot be drawn') + (c.r.error ? ': ' + c.r.error : '');
+        g.appendChild(tt);
+      }
+    }
+    if (!ex) hitRect(g, w, hh);
+  }
+
+  // Values of the engine (edit infos, handles) in a tolerant form.
+
+  function pAlign(a) {
+    var hv = [1, 1];
+    if (Array.isArray(a)) hv = [+a[0], +a[1]];
+    else if (a && typeof a === 'object') hv = [+a.h, +a.v];
+    else if (typeof a === 'string' && a.indexOf(',') > 0) hv = a.split(',').map(Number);
+    return { h: isFinite(hv[0]) ? hv[0] : 1, v: isFinite(hv[1]) ? hv[1] : 1 };
+  }
+
+  function pFont(f) {
+    if (f && typeof f === 'object') {
+      return { family: f.family || '', size: parseFloat(f.size) || 14, weight: String(f.weight || 'normal'), style: String(f.style || 'normal') };
+    }
+    var s = String(f || '');
+    if (s.indexOf('|') >= 0) {
+      var p = s.split('|');
+      return { family: p[0] || '', weight: p[1] || 'normal', style: p[2] || 'normal', size: parseFloat(p[3]) || 14 };
+    }
+    var m = /(\d+(?:\.\d+)?)px/.exec(s);
+    return { family: '', weight: /bold|[6-9]00/.test(s) ? 'bold' : 'normal', style: /italic/.test(s) ? 'italic' : 'normal', size: m ? parseFloat(m[1]) : 14, css: s };
+  }
+
+  function normEdit(e) {
+    var b = (e && e.bound) || e || {};
+    return {
+      prop: e.prop, x: +b.x || 0, y: +b.y || 0, w: +b.w || +b.width || 0, h: +b.h || +b.height || 0,
+      font: pFont(e.font), align: pAlign(e.align), rich: !!(e.rich || e.richText), multi: !!e.multi, color: e.color || null
+    };
+  }
+
+  function pencilEdits(it) {
+    var r = pencilResult(it);
+    return r && Array.isArray(r.edits) ? r.edits.filter(function (e) { return e && e.prop; }) : [];
+  }
+
+  /// Point in the rendering's coordinates (item may be rotated, scaled).
+  function pencilLocal(it, p) {
+    var r = pencilResult(it), c = center(it), q = rotP(p.x, p.y, c.x, c.y, -(it.rot || 0));
+    var sx = r && r.w ? it.w / r.w : 1, sy = r && r.h ? it.h / r.h : 1;
+    return { x: (q.x - it.x) / sx, y: (q.y - it.y) / sy };
+  }
+
+  function nearestEdit(it, p) {
+    var edits = pencilEdits(it), best = 0, bd = Infinity, q = pencilLocal(it, p);
+    edits.forEach(function (e0, i) {
+      var e = normEdit(e0);
+      var inside = q.x >= e.x && q.x <= e.x + e.w && q.y >= e.y && q.y <= e.y + e.h;
+      var d = inside ? -1 : Math.hypot(q.x - (e.x + e.w / 2), q.y - (e.y + e.h / 2));
+      if (d < bd) { bd = d; best = i; }
+    });
+    return best;
+  }
+
+  function escHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+  /// Rich text (HTML) as plain text: line breaks and block ends become newlines.
+  function richToText(html) {
+    var doc = new DOMParser().parseFromString('<div>' + String(html || '') + '</div>', 'text/html');
+    var out = '';
+    (function walk(n) {
+      for (var k = n.firstChild; k; k = k.nextSibling) {
+        if (k.nodeType === 3) { out += k.nodeValue.replace(/[ \t\r\n]+/g, ' '); continue; }
+        if (k.nodeType !== 1) continue;
+        var t = k.localName;
+        if (t === 'br') { out += '\n'; continue; }
+        if (t === 'script' || t === 'style') continue;
+        var block = /^(p|div|li|h[1-6]|ul|ol|blockquote|pre|tr|table)$/.test(t);
+        if (block && out && out.charAt(out.length - 1) !== '\n') out += '\n';
+        walk(k);
+        if (block && out && out.charAt(out.length - 1) !== '\n') out += '\n';
+      }
+    })(doc.body.firstChild || doc.body);
+    return out.replace(/\n+$/, '');
+  }
+
+  function textToRich(s) { return escHtml(s).replace(/\n/g, '<br>'); }
+
+  function pencilValue(it, name) {
+    if (it.p && it.p[name] !== undefined) return String(it.p[name]);
+    var r = pencilResult(it);
+    if (r && r.props && r.props[name] !== undefined) return String(r.props[name]);
+    var en = r && (r.schema || []).filter(function (x) { return x.name === name; })[0];
+    return en && en.value !== undefined ? String(en.value) : '';
+  }
+
+  function setPencilProp(it, name, v) {
+    if (!it || it.lock) return;
+    v = String(v);
+    if (pencilValue(it, name) === v) return;
+    it.p = clone(it.p || {});
+    it.p[name] = v;
+    commit();
+  }
+
+  /// Handle knobs: in the rendering's coordinates (= the property value).
+  function knobPos(it, r, hd) {
+    var v = it.p && it.p[hd.prop], x = +hd.x, y = +hd.y;
+    if (typeof v === 'string' && /^\s*-?[\d.]+\s*,\s*-?[\d.]+/.test(v)) {
+      var a = v.split(',');
+      x = parseFloat(a[0]);
+      y = parseFloat(a[1]);
+    }
+    if (!isFinite(x) || !isFinite(y)) return null;
+    var sx = r.w ? it.w / r.w : 1, sy = r.h ? it.h / r.h : 1, c = center(it);
+    return rotP(it.x + x * sx, it.y + y * sy, c.x, c.y, it.rot || 0);
+  }
+
+  function pencilKnobs(it, r) {
+    (r.handles || []).forEach(function (hd, i) {
+      if (!hd || !hd.prop || hd.disabled) return;
+      var q = knobPos(it, r, hd);
+      if (!q) return;
+      var s = sp(q);
+      var k = svgEl('polygon', {
+        class: 'ov-knob', 'data-h': 'ph:' + i,
+        points: [s.x, s.y - 6, s.x + 6, s.y, s.x, s.y + 6, s.x - 6, s.y].map(r1).join(' ')
+      });
+      var t = svgEl('title');
+      t.textContent = S('pKnob', 'Drag to adjust') + (hd.label ? ' – ' + hd.label : '');
+      k.appendChild(t);
+      overlay.appendChild(k);
+    });
+  }
+
+  function moveKnob(d, p, e) {
+    var it = d.it, hd = d.hd, q = pencilLocal(it, p);
+    var o = d.start;
+    var x = hd.lockX ? o.x : q.x, y = hd.lockY ? o.y : q.y;
+    function num(v) { return v === null || v === undefined || v === '' || !isFinite(+v) ? null : +v; }
+    var mnx = num(hd.minX), mxx = num(hd.maxX), mny = num(hd.minY), mxy = num(hd.maxY);
+    if (mnx !== null) x = Math.max(mnx, x);
+    if (mxx !== null) x = Math.min(mxx, x);
+    if (mny !== null) y = Math.max(mny, y);
+    if (mxy !== null) y = Math.min(mxy, y);
+    x = Math.round(x);
+    y = Math.round(y);
+    var v = x + ',' + y;
+    if (it.p && it.p[hd.prop] === v) return;
+    it.p = clone(it.p || {});
+    it.p[hd.prop] = v;
+    renderOverlay();
+    ensurePencil(it, 80);
+  }
+
+  // ----- Pencil properties panel ------------------------------------------------------------
+
+  function parsePColor(v) {
+    v = String(v || '').trim();
+    var m;
+    if ((m = /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(v))) return { hex: '#' + m[1].toLowerCase(), a: m[2] ? parseInt(m[2], 16) / 255 : 1 };
+    if ((m = /^#([0-9a-f]{3})$/i.exec(v))) return { hex: '#' + m[1].replace(/./g, '$&$&').toLowerCase(), a: 1 };
+    if ((m = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/i.exec(v))) {
+      return {
+        hex: '#' + [m[1], m[2], m[3]].map(function (x) { return ('0' + Math.min(255, Math.round(+x)).toString(16)).slice(-2); }).join(''),
+        a: m[4] === undefined ? 1 : Math.max(0, Math.min(1, +m[4]))
+      };
+    }
+    if (v === 'transparent' || v === 'none') return { hex: '#000000', a: 0 };
+    return { hex: '#000000', a: 1 };
+  }
+
+  function fmtPColor(hex, a) {
+    return hex.toLowerCase() + ('0' + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16)).slice(-2);
+  }
+
+  function stopKeys(el) {
+    el.addEventListener('keydown', function (e) { e.stopPropagation(); if (e.key === 'Escape') closePop(); });
+    el.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+    return el;
+  }
+
+  function propEditor(it, en) {
+    var v = pencilValue(it, en.name), type = String(en.type || '').toLowerCase(), set = function (nv) { setPencilProp(it, en.name, nv); };
+    var box = h('div', { class: 'ped' }), inp;
+    if (type === 'color') {
+      var col = parsePColor(v);
+      var sw = h('div', { class: 'swatches small' });
+      COLORS.forEach(function (cv) {
+        var b = h('button', { class: 'sw' + (cv.toLowerCase() === col.hex && col.a > 0 ? ' cur' : ''), type: 'button', title: cv });
+        b.style.background = cv;
+        b.addEventListener('click', function () { set(fmtPColor(cv, col.a || 1)); });
+        sw.appendChild(b);
+      });
+      var pick = stopKeys(h('input', { type: 'color', value: col.hex, title: S('custom', 'Custom colour') }));
+      pick.addEventListener('change', function () { set(fmtPColor(pick.value, col.a || 1)); });
+      var alpha = stopKeys(h('input', { type: 'range', min: '0', max: '1', step: '0.05', title: S('pAlpha', 'Opacity') }));
+      alpha.value = col.a;
+      alpha.addEventListener('change', function () { set(fmtPColor(col.hex, parseFloat(alpha.value))); });
+      box.append(sw, h('div', { class: 'prow-line' }, pick, alpha));
+    } else if (type === 'bool') {
+      inp = stopKeys(h('input', { type: 'checkbox' }));
+      inp.checked = /^true$/i.test(v);
+      inp.addEventListener('change', function () { set(inp.checked ? 'true' : 'false'); });
+      box.appendChild(inp);
+    } else if (type === 'enum') {
+      inp = stopKeys(h('select'));
+      var opts = (en.enumValues || en.enum || []).map(function (o) {
+        if (Array.isArray(o)) return [String(o[0]), String(o[1] === undefined ? o[0] : o[1])];
+        if (o && typeof o === 'object') return [String(o.value), String(o.label || o.value)];
+        var s2 = String(o), i = s2.indexOf('|');
+        return i >= 0 ? [s2.slice(0, i), s2.slice(i + 1)] : [s2, s2];
+      });
+      if (!opts.some(function (o) { return o[0] === v; })) opts.unshift([v, v]);
+      opts.forEach(function (o) {
+        var op = h('option', { value: o[0] }, o[1]);
+        if (o[0] === v) op.selected = true;
+        inp.appendChild(op);
+      });
+      inp.addEventListener('change', function () { set(inp.value); });
+      box.appendChild(inp);
+    } else if (type === 'num' || type === 'number') {
+      inp = stopKeys(h('input', { type: 'number', step: 'any', value: v }));
+      inp.addEventListener('change', function () { if (inp.value !== '' && isFinite(+inp.value)) set(String(+inp.value)); });
+      box.appendChild(inp);
+    } else if (type === 'font') {
+      var fp = v.split('|');
+      while (fp.length < 4) fp.push(fp.length === 1 || fp.length === 2 ? 'normal' : '12px');
+      var fam = stopKeys(h('input', { type: 'text', value: fp[0], title: S('pFontName', 'Font') }));
+      var size = stopKeys(h('input', { type: 'number', min: '1', step: '1', value: parseFloat(fp[3]) || 12, title: S('pSize', 'Size'), class: 'short' }));
+      var bold = /bold|[6-9]00/.test(fp[1]), ital = /italic/.test(fp[2]);
+      var fb = h('button', { type: 'button', class: 'mini' + (bold ? ' on' : ''), title: S('bold', 'Bold') }, h('b', null, 'B'));
+      var fi = h('button', { type: 'button', class: 'mini' + (ital ? ' on' : ''), title: S('pItalic', 'Italic') }, h('i', null, 'I'));
+      var out = function (b2, i2) {
+        var q = fp.slice();
+        q[0] = fam.value.replace(/\|/g, '');
+        q[1] = b2 ? 'bold' : 'normal';
+        q[2] = i2 ? 'italic' : 'normal';
+        q[3] = Math.max(1, Math.round(+size.value || 12)) + 'px';
+        set(q.join('|'));
+      };
+      fam.addEventListener('change', function () { out(bold, ital); });
+      size.addEventListener('change', function () { out(bold, ital); });
+      fb.addEventListener('click', function () { out(!bold, ital); });
+      fi.addEventListener('click', function () { out(bold, !ital); });
+      box.append(h('div', { class: 'prow-line' }, fam, size, fb, fi));
+    } else if (type === 'strokestyle') {
+      var sp2 = v.split('|'), sw2 = parseFloat(sp2[0]) || 1, arr = (sp2[1] || '').trim();
+      var kind = !arr ? '' : (parseFloat(arr) <= 1.5 ? 'dot' : 'dash');
+      var wi = stopKeys(h('input', { type: 'number', min: '0', step: '1', value: sw2, title: S('pWidth', 'Width'), class: 'short' }));
+      var ds = stopKeys(h('select'));
+      [['', S('solid', 'Solid')], ['dash', S('dashed', 'Dashed')], ['dot', S('dotted', 'Dotted')]].forEach(function (o) {
+        var op = h('option', { value: o[0] }, o[1]);
+        if (o[0] === kind) op.selected = true;
+        ds.appendChild(op);
+      });
+      var outS = function () {
+        var a2 = ds.value === kind ? arr : ds.value === 'dash' ? '4,2' : ds.value === 'dot' ? '1,3' : '';
+        set(Math.max(0, Math.round(+wi.value || 0)) + '|' + a2);
+      };
+      wi.addEventListener('change', outS);
+      ds.addEventListener('change', outS);
+      box.append(h('div', { class: 'prow-line' }, wi, ds));
+    } else if (type === 'alignment') {
+      var al = pAlign(v), gridEl = h('div', { class: 'agrid' });
+      for (var vy = 0; vy < 3; vy++) {
+        for (var hx = 0; hx < 3; hx++) {
+          (function (hx2, vy2) {
+            var b = h('button', { type: 'button', class: hx2 === al.h && vy2 === al.v ? 'on' : '' });
+            b.addEventListener('click', function () { set(hx2 + ',' + vy2); });
+            gridEl.appendChild(b);
+          })(hx, vy);
+        }
+      }
+      box.appendChild(gridEl);
+    } else if (type === 'plaintext' || type === 'richtext') {
+      var rich = type === 'richtext', shown = rich ? richToText(v) : v;
+      inp = stopKeys(h('textarea', { rows: Math.min(6, Math.max(2, shown.split('\n').length)) }));
+      inp.value = shown;
+      inp.addEventListener('change', function () {
+        if (inp.value === shown) return;
+        set(rich ? textToRich(inp.value) : inp.value);
+      });
+      box.appendChild(inp);
+    } else if (type === 'imagedata') {
+      box.appendChild(h('span', { class: 'muted' }, S('pImage', '(image)')));
+    } else {
+      inp = stopKeys(h('input', { type: 'text', value: v }));
+      inp.addEventListener('change', function () { set(inp.value); });
+      box.appendChild(inp);
+    }
+    if (en.disabled || it.lock) {
+      box.querySelectorAll('input, select, textarea, button').forEach(function (x) { x.disabled = true; });
+    }
+    return box;
+  }
+
+  function pencilPropsPop(anchorEl, item) {
+    var id = item.id;
+    openPop(anchorEl, function (p) {
+      p.addEventListener('keydown', function (e) { if (e.key === 'Escape') closePop(); });
+      function fill() {
+        var it = byId[id];
+        if (!it) { closePop(); return; }
+        p.textContent = '';
+        var r = pencilResult(it);
+        p.appendChild(h('div', { class: 'phead' }, pencilName(it)));
+        var list = h('div', { class: 'plist' });
+        var groups = [], byGroup = {};
+        ((r && r.schema) || []).forEach(function (en) {
+          if (!en || !en.name || en.name === 'box' || en.hidden) return;
+          var g = en.group || S('pGeneral', 'General');
+          if (!byGroup[g]) { byGroup[g] = []; groups.push(g); }
+          byGroup[g].push(en);
+        });
+        if (!groups.length) list.appendChild(h('div', { class: 'empty' }, r ? S('noProps', 'This shape has no properties.') : S('pRendering', 'Drawing…')));
+        groups.forEach(function (g) {
+          if (groups.length > 1 || g !== S('pGeneral', 'General')) list.appendChild(h('h4', null, g));
+          byGroup[g].forEach(function (en) {
+            var row = h('div', { class: 'prow' + (en.disabled ? ' off' : '') });
+            row.append(h('label', null, en.label || en.displayName || en.name), propEditor(it, en));
+            list.appendChild(row);
+          });
+        });
+        var acts = (r && r.actions) || [];
+        if (acts.length) {
+          list.appendChild(h('h4', null, S('pActions', 'Actions')));
+          var ab = h('div', { class: 'pacts' });
+          acts.forEach(function (a) {
+            if (!a || !a.id) return;
+            var b = h('button', { class: 'btn', type: 'button' }, a.label || a.displayName || a.id);
+            if (it.lock || a.disabled) b.disabled = true;
+            b.addEventListener('click', function () {
+              var cur = byId[id];
+              if (!cur) return;
+              (pState[id] || (pState[id] = {})).actionError = '';
+              post({ type: 'canvas-pencil-action', id: id, action: a.id, pkg: cur.pkg, s: cur.s, p: cur.p || {}, w: cur.w, h: cur.h, fonts: !!pFonts[cur.pkg] });
+            });
+            ab.appendChild(b);
+          });
+          list.appendChild(ab);
+        }
+        var err = pState[id] && pState[id].actionError;
+        if (err) list.appendChild(h('div', { class: 'error' }, err));
+        p.appendChild(list);
+      }
+      pPropsRefresh = function () {
+        var ae = document.activeElement;
+        if (ae && p.contains(ae) && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) && ae.type !== 'range' && ae.type !== 'checkbox') return;
+        fill();
+      };
+      pPropsRefresh.id = id;
+      fill();
+    }, 'pencilpop');
   }
 
   // ----- rendering --------------------------------------------------------------------
@@ -1753,6 +2306,7 @@
     var k = JSON.stringify(it);
     if (it.t === 'conn') k += JSON.stringify(endItem(it.a) || 0) + JSON.stringify(endItem(it.b) || 0);
     if (editing === it.id) k += '#edit';
+    if (it.t === 'pencil') k += '#' + (pVer[it.id] || 0);
     return k;
   }
 
@@ -1760,6 +2314,7 @@
     index();
     var keep = {}, i = 0;
     zOrder(scene.items).forEach(function (it) {
+      if (it.t === 'pencil') ensurePencil(it);
       var key = itemKey(it), c = cache[it.id];
       if (!c || c.key !== key) {
         if (c) c.el.remove();
@@ -1876,7 +2431,16 @@
     if (locked || moving || editing) return;
     var only = items.length === 1 ? items[0] : null;
     var names2 = only && only.t === 'text' ? ['e', 'w'] : Object.keys(HF);
+    var pr = only && only.t === 'pencil' ? pencilResult(only) : null;
+    if (pr && pr.box) {
+      // The shape's own resize rules.
+      var bx = pr.box;
+      if (bx.resizable === false || (bx.lockW && bx.lockH)) names2 = [];
+      else if (bx.lockW) names2 = ['n', 's'];
+      else if (bx.lockH) names2 = ['e', 'w'];
+    }
     names2.forEach(function (n) { handle(P(HF[n][0], HF[n][1]), n); });
+    if (pr) pencilKnobs(only, pr);
     if (items.some(function (x) { return x.t === 'frame'; })) return;
     var top = P(0.5, 0), dir = rotP(0, -1, 0, 0, rot);
     var q = { x: top.x + dir.x * 24, y: top.y + dir.y * 24 };
@@ -1945,7 +2509,8 @@
     }
     if (it.t === 'text') it.h = textLayout(it).h;
     if (it.t === 'frame') delete it.rot;
-    it.x = r1(it.x); it.y = r1(it.y); it.w = r1(Math.max(1, it.w)); it.h = r1(Math.max(1, it.h));
+    var minSize = it.t === 'pencil' ? 2 : 1;
+    it.x = r1(it.x); it.y = r1(it.y); it.w = r1(Math.max(minSize, it.w)); it.h = r1(Math.max(minSize, it.h));
     if (it.rot) {
       var r = r1(((it.rot % 360) + 540) % 360 - 180);
       if (Math.abs(r) < 0.5) delete it.rot; else it.rot = r;
@@ -2126,18 +2691,32 @@
 
   // ----- text editing --------------------------------------------------------------------
 
-  function startEdit(id) {
+  /// `opts.edit`: which text of a Pencil shape (index into its edit infos).
+  function startEdit(id, opts) {
     var it = byId[id];
     if (!it || it.lock || !hasText(it)) return;
     if (editing) finishEdit();
+    var pe = null;
+    if (it.t === 'pencil') {
+      var edits = pencilEdits(it), ei = opts && opts.edit >= 0 ? opts.edit : 0;
+      if (!edits[ei]) return;
+      var e0 = normEdit(edits[ei]), orig = pencilValue(it, e0.prop);
+      pe = { e: e0, orig: orig, text: e0.rich ? richToText(orig) : orig, cancel: false };
+    }
     editing = id;
+    pEditCur = pe;
     if (sel.length !== 1 || sel[0] !== id) sel = [id];
     render();
-    ta = h('textarea', { class: 'editor' + (it.t === 'conn' ? ' label' : ''), spellcheck: 'true' });
-    ta.value = it.txt || '';
+    ta = h('textarea', { class: 'editor' + (it.t === 'conn' ? ' label' : '') + (pe ? ' pencil' : ''), spellcheck: 'true' });
+    ta.value = pe ? pe.text : it.txt || '';
     app.appendChild(ta);
     ta.addEventListener('keydown', function (e) {
       e.stopPropagation();
+      if (pEditCur) {
+        if (e.key === 'Escape') { e.preventDefault(); pEditCur.cancel = true; finishEdit(); return; }
+        if (e.key === 'Enter' && !e.shiftKey && (!pEditCur.e.multi || e.ctrlKey || e.metaKey)) { e.preventDefault(); finishEdit(); }
+        return;
+      }
       if (e.key === 'Escape' || (e.key === 'Enter' && (e.ctrlKey || e.metaKey))) { e.preventDefault(); finishEdit(); }
     });
     ta.addEventListener('input', placeEditor);
@@ -2155,8 +2734,21 @@
     var it = byId[editing];
     if (!it) return;
     var z = view.z, st = ta.style, fs = fsOf(it), bold = !!it.b, al = alOf(it), va = 'c';
-    var col = it.s || ink, box, lines = 1, raw = false;
-    if (it.t === 'conn') {
+    var col = it.s || ink, box, lines = 1, raw = false, family = '', italic = false;
+    if (it.t === 'pencil' && pEditCur) {
+      var pe = pEditCur.e, pr = pencilResult(it);
+      var psx = pr && pr.w ? it.w / pr.w : 1, psy = pr && pr.h ? it.h / pr.h : 1;
+      var ew = pe.w || (pr ? pr.w : it.w), eh = pe.h || (pr ? pr.h : it.h);
+      box = { x: it.x + pe.x * psx, y: it.y + pe.y * psy, w: ew * psx, h: eh * psy };
+      fs = pe.font.size * Math.sqrt(psx * psy);
+      bold = /bold|[6-9]00/.test(pe.font.weight);
+      italic = /italic/.test(pe.font.style);
+      family = pe.font.family || '';
+      al = ['l', 'c', 'r'][pe.align.h] || 'l';
+      va = ['t', 'c', 'b'][pe.align.v] || 'c';
+      col = pe.color || ink;
+      lines = wrap(ta.value, Math.max(10, box.w), fs, bold).length;
+    } else if (it.t === 'conn') {
       var m = midOf(route(it));
       box = { x: m.x - 100, y: m.y - lineH(fs) / 2 - 4 / z, w: 200, h: null };
       al = 'c';
@@ -2198,6 +2790,8 @@
     st.width = Math.max(box.w * z, 40) + 'px';
     st.fontSize = (fs * z) + 'px';
     st.fontWeight = bold ? '700' : '400';
+    st.fontStyle = italic ? 'italic' : '';
+    st.fontFamily = family ? '"' + family.replace(/"/g, '') + '", ' + FONT : '';
     st.color = raw ? '' : col;
     st.textAlign = { l: 'left', c: 'center', r: 'right' }[al];
     st.paddingLeft = st.paddingRight = raw ? '6px' : '0px';
@@ -2209,7 +2803,7 @@
     } else {
       var hh = box.h * z, content = lines * lineH(fs) * z;
       st.height = Math.max(hh, content) + 'px';
-      st.paddingTop = (va === 't' ? 0 : Math.max(0, (hh - content) / 2)) + 'px';
+      st.paddingTop = (va === 't' ? 0 : Math.max(0, va === 'b' ? hh - content : (hh - content) / 2)) + 'px';
     }
     if (it.rot && it.t !== 'conn' && !raw) {
       var c = sp(center(it));
@@ -2223,9 +2817,24 @@
   function finishEdit() {
     if (!editing) return;
     var id = editing, val = ta ? ta.value : '';
+    var pe = pEditCur;
     editing = null;
+    pEditCur = null;
     if (ta) { var t = ta; ta = null; t.remove(); }
     var it = byId[id];
+    if (pe) {
+      // Pencil text: rich text is written back as escaped HTML; unchanged
+      // text keeps its formatting.
+      if (it && !pe.cancel && !it.lock && val !== pe.text) {
+        it.p = clone(it.p || {});
+        // Trailing blank lines would only push the label up.
+        val = val.replace(/\s+$/, '');
+        it.p[pe.e.prop] = pe.e.rich ? textToRich(val) : val;
+      }
+      commit();
+      flush();
+      return;
+    }
     if (it) {
       if (val.replace(/\s+$/, '')) it.txt = val.replace(/\s+$/, ''); else delete it.txt;
       if (it.t === 'text' && !it.txt) deleteIds([id], true);
@@ -2240,7 +2849,7 @@
 
   function closePop() {
     if (pop) { pop.remove(); pop = null; popAnchor = null; }
-    libRefresh = clipRefresh = repoRefresh = null;
+    libRefresh = clipRefresh = repoRefresh = pPropsRefresh = null;
   }
 
   function openPop(anchorEl, build, cls) {
@@ -2595,7 +3204,13 @@
         list.appendChild(collHeader(c.name, remove));
         grid(shapes.map(function (sh) {
           var art = sh.icon ? h('img', { src: sh.icon, alt: '', loading: 'lazy' }) : h('span', { class: 'noicon' }, (sh.name || '?').slice(0, 2));
-          return h('span', { class: 'tile pic soon', title: sh.name + ' – ' + S('pencilSoon', 'Live Pencil shapes arrive with the next update') }, art);
+          var b = h('button', { class: 'tile pic', type: 'button', title: sh.name }, art);
+          var place = function (cx, cy) {
+            post({ type: 'canvas-pencil-place', coll: c.id, shape: sh.id, x: cx, y: cy, fonts: false });
+          };
+          b.addEventListener('click', function () { closePop(); place(null, null); });
+          dragOut(b, sh.icon || '', place);
+          return b;
         }), 'pics');
       }
     });
@@ -2918,7 +3533,7 @@
     }],
     ['tplRetro', 'Retrospective', function () {
       var out = [];
-      [['tWell', 'Went well', '#c8f7c5'], ['tImprove', 'To improve', '#ffc8dd'], ['tActions', 'Actions', '#c5e3ff']].forEach(function (n, i) {
+      [['tWell', 'Went well', '#c8f7c5'], ['tImprove', 'To improve', '#ffc8dd'], ['tActions', 'Action items', '#c5e3ff']].forEach(function (n, i) {
         out.push(tItem('frame', i * 400, 0, 360, 480, { txt: S(n[0], n[1]) }), tItem('sticky', i * 400 + 24, 24, 150, 150, { f: n[2] }));
       });
       return out;
@@ -3029,6 +3644,8 @@
 
   function caps(it) {
     var t = it.t, lineish = t === 'line' || t === 'arrow' || t === 'conn';
+    // Pencil shapes have their own properties (panel).
+    if (t === 'pencil') return {};
     if (t === 'frame') return { stroke: true, fill: true, dash: true, font: true };
     if (t === 'stencil') {
       var def = stDef(it);
@@ -3198,6 +3815,10 @@
       grp().push(range);
     }
 
+    if (!tg.cat && items.length === 1 && first.t === 'pencil') {
+      grp().push(ibtn(icon('props'), S('properties', 'Properties'), function (e, el) { pencilPropsPop(el, first); }));
+    }
+
     if (!tg.cat && !locked && alignable().length >= 2) {
       grp().push(ibtn(icon('align'), S('align', 'Align and distribute'), function (e, el) { alignPop(el); }));
     }
@@ -3340,6 +3961,7 @@
     var hname = e.target.getAttribute ? e.target.getAttribute('data-h') : null;
 
     if (tool === 'select') {
+      if (hname && hname.indexOf('ph:') === 0) { startKnob(e, parseInt(hname.slice(3), 10)); return; }
       if (hname) { startHandle(e, hname, p); return; }
       var id = itemOf(e.target);
       if (id) {
@@ -3420,6 +4042,18 @@
     }
   }
 
+  /// Drag of a handle property of a Pencil shape.
+  function startKnob(e, idx) {
+    var it = selItems()[0];
+    if (!it || it.t !== 'pencil' || it.lock) return;
+    var r = pencilResult(it), hd = r && r.handles && r.handles[idx];
+    if (!hd) return;
+    var cur = pencilValue(it, hd.prop).split(',');
+    var start = { x: parseFloat(cur[0]), y: parseFloat(cur[1]) };
+    if (!isFinite(start.x) || !isFinite(start.y)) start = { x: +hd.x || 0, y: +hd.y || 0 };
+    startDrag(e, { kind: 'pknob', it: it, hd: hd, start: start, orig: clone(it.p || {}) });
+  }
+
   function startHandle(e, name, p) {
     var items = selItems().filter(function (it) { return !it.lock; });
     if (!items.length) return;
@@ -3473,7 +4107,11 @@
       if (!rot) lp = snapP(lp, e);
       var keepDefault = o.t === 'image' || o.t === 'emoji' || o.t === 'sticker';
       var keep = keepDefault ? !e.shiftKey : e.shiftKey;
+      var pbox = o.t === 'pencil' && pencilResult(o) ? pencilResult(o).box || {} : {};
+      if (pbox.lockRatio) keep = true;
       var nb = resizeBox(ob, hn, lp, keep);
+      if (pbox.lockW) { nb.x = ob.x; nb.w = ob.w; }
+      if (pbox.lockH) { nb.y = ob.y; nb.h = ob.h; }
       var fx = hn.indexOf('w') >= 0 ? ob.x + ob.w : hn.indexOf('e') >= 0 ? ob.x : c.x;
       var fy = hn.indexOf('n') >= 0 ? ob.y + ob.h : hn.indexOf('s') >= 0 ? ob.y : c.y;
       var fw = rotP(fx, fy, c.x, c.y, rot);
@@ -3505,8 +4143,9 @@
         ['a', 'b'].forEach(function (k) { if (o2[k] && !o2[k].id) it2[k] = map(o2[k].x, o2[k].y); });
       } else {
         var cc = map(o2.x + o2.w / 2, o2.y + o2.h / 2);
-        it2.w = Math.max(1, o2.w * sx);
-        if (o2.t !== 'text') it2.h = Math.max(1, o2.h * sy);
+        var minS = o2.t === 'pencil' ? 2 : 1;
+        it2.w = Math.max(minS, o2.w * sx);
+        if (o2.t !== 'text') it2.h = Math.max(minS, o2.h * sy);
         it2.x = cc.x - it2.w / 2;
         it2.y = cc.y - (o2.t === 'text' ? o2.h : it2.h) / 2;
         if (o2.t === 'path') it2.d = scaleD(o2.d, sx, sy);
@@ -3646,6 +4285,9 @@
         doResize(d, p, e);
         render();
         return;
+      case 'pknob':
+        moveKnob(d, p, e);
+        return;
       case 'rotate':
         doRotate(d, p, e);
         render();
@@ -3736,7 +4378,17 @@
         break;
       }
       case 'resize':
+        // Pencil shapes scale their handles from the size they had.
+        Object.keys(d.orig).forEach(function (id) {
+          var o = d.orig[id], it2 = byId[id];
+          if (!it2 || it2.t !== 'pencil' || (Math.abs(o.w - it2.w) < 0.05 && Math.abs(o.h - it2.h) < 0.05)) return;
+          var st = pState[id] || (pState[id] = {});
+          if (!st.old) st.old = { w: o.w, h: o.h };
+        });
+        commit();
+        break;
       case 'rotate':
+      case 'pknob':
         commit();
         break;
     }
@@ -3759,6 +4411,10 @@
     if (id) {
       var it = byId[id];
       if (it && it.g && sel.length > 1) setSel([id]);
+      if (it && it.t === 'pencil') {
+        if (pencilEdits(it).length) startEdit(id, { edit: nearestEdit(it, toWorld(e.clientX, e.clientY)) });
+        return;
+      }
       startEdit(id);
       return;
     }
@@ -3995,6 +4651,95 @@
       commit();
     },
 
+    /// A Pencil shape placed from the library (rendered once already).
+    addPencil: function (o) {
+      if (!o || !o.pkg) return;
+      var at = o.x === null || o.x === undefined ? viewCenter() : toWorld(o.x, o.y);
+      var r = o.render || null;
+      var w = Math.max(2, +o.w || (r && +r.w) || 120), hh = Math.max(2, +o.h || (r && +r.h) || 80);
+      var it = {
+        id: rid(), t: 'pencil', pkg: o.pkg, c: o.c || '', s: o.s || '',
+        x: at.x - w / 2, y: at.y - hh / 2, w: w, h: hh, p: clone(o.p || (r && r.props) || {})
+      };
+      if (snapOn) { it.x = snap(it.x); it.y = snap(it.y); }
+      normalize(it);
+      addItem(it);
+      if (r) {
+        var frag = r.ok ? sanitizeSvg(r.svg) : null;
+        setPencil(it.id, pKey(it), r.ok && !frag ? { ok: false, error: 'invalid SVG' } : r, frag);
+      }
+      setTool('select');
+      setSel([it.id]);
+      commit();
+    },
+
+    /// A rendering asked for with `canvas-pencil-render`.
+    pencilRendered: function (id, key, r) {
+      var st = pState[id];
+      if (st && st.inflight === key) st.inflight = null;
+      var it = byId[id];
+      if (!it || it.t !== 'pencil') return;
+      r = r && typeof r === 'object' ? r : { ok: false, error: 'no result' };
+      var frag = r.ok ? sanitizeSvg(r.svg) : null;
+      if (r.ok && !frag) r = { ok: false, error: 'invalid SVG' };
+      if (key !== pKey(it)) {
+        // Outdated (the item changed meanwhile, e.g. a knob is dragged): shown
+        // until the current one arrives.
+        if (r.ok || !pcache[id]) { setPencil(id, key, r, frag); render(); }
+        ensurePencil(it);
+        return;
+      }
+      var changed = false;
+      if (r.ok) {
+        // The engine may adjust values (scaled handles, locked sizes).
+        if (r.props && typeof r.props === 'object' && stableStr(r.props) !== stableStr(it.p || {})) { it.p = clone(r.props); changed = true; }
+        if (+r.w > 0 && Math.abs(+r.w - it.w) > 0.05) { it.w = Math.max(2, +r.w); changed = true; }
+        if (+r.h > 0 && Math.abs(+r.h - it.h) > 0.05) { it.h = Math.max(2, +r.h); changed = true; }
+      }
+      if (changed) {
+        normalize(it);
+        setPencil(id, pKey(it), r, frag);
+        commit();
+      } else {
+        setPencil(id, key, r, frag);
+        render();
+      }
+      if (sel.length === 1 && sel[0] === id) {
+        refreshStyleBar();
+        if (pPropsRefresh && pPropsRefresh.id === id) pPropsRefresh();
+      }
+      if (editing === id) placeEditor();
+    },
+
+    /// The result of a shape action: new property values (and size).
+    pencilAction: function (id, r) {
+      var it = byId[id];
+      if (!it || it.t !== 'pencil') return;
+      if (!r || !r.ok) {
+        (pState[id] || (pState[id] = {})).actionError = (r && r.error) || '?';
+        if (pPropsRefresh && pPropsRefresh.id === id) pPropsRefresh();
+        return;
+      }
+      if (r.props && typeof r.props === 'object') it.p = clone(r.props);
+      if (+r.w > 0) it.w = Math.max(2, +r.w);
+      if (+r.h > 0) it.h = Math.max(2, +r.h);
+      commit();
+    },
+
+    /// The fonts of a stencil package (@font-face rules), once per package.
+    pencilFonts: function (pkg, css) {
+      if (!pkg || pFonts[pkg]) return;
+      pFonts[pkg] = true;
+      // Only font faces, and fonts only from data or the app's own URLs.
+      var faces = (String(css || '').match(/@font-face\s*\{[^{}]*\}/g) || []).map(function (f) {
+        return f.replace(/url\(\s*(['"]?)(?!data:|qn-canvas:|qn-library:)[^)]*\)/gi, 'local("none")');
+      });
+      var st = document.createElement('style');
+      st.setAttribute('data-pkg', pkg);
+      st.textContent = faces.join('\n');
+      document.head.appendChild(st);
+    },
+
     pasteItems: function (cx, cy, payload) {
       if (!payload || !payload.items) return;
       var at = cx === null || cx === undefined ? viewCenter() : toWorld(cx, cy);
@@ -4020,12 +4765,14 @@
       var w = Math.ceil(bb.w + 2 * pad), hh = Math.ceil(bb.h + 2 * pad);
       var ser = new XMLSerializer();
       var parts = items.map(function (it) { return ser.serializeToString(draw(it, true)); });
+      var pkgs = [];
+      items.forEach(function (it) { if (it.t === 'pencil' && it.pkg && pkgs.indexOf(it.pkg) < 0) pkgs.push(it.pkg); });
       var out = '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + hh + '" viewBox="' +
         x + ' ' + y + ' ' + w + ' ' + hh + '">' +
         '<defs><filter id="qc-shadow" x="-10%" y="-10%" width="125%" height="135%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity=".18"/></filter></defs>' +
         '<rect x="' + x + '" y="' + y + '" width="' + w + '" height="' + hh + '" fill="' + canvasBg + '"/>' +
         parts.join('') + '</svg>';
-      return JSON.stringify({ svg: out, width: w, height: hh, background: canvasBg });
+      return JSON.stringify({ svg: out, width: w, height: hh, background: canvasBg, pkgs: pkgs });
     }
   };
 

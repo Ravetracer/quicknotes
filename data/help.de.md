@@ -501,6 +501,12 @@ Emoji, Sticker, Pfeile und Bilder. Ein neues legst du mit *Neues Canvas* im Haup
   durchsuchbar und funktionieren wie Cliparts. Grafiken auf einem Canvas werden in das Canvas
   kopiert und mit ihm synchronisiert. Einstellungen → Sync → *Schablonen und Cliparts abgleichen*
   gleicht auch die installierten Sammlungen und deine OpenClipArt-Sammlung ab.
+- **Lebendige Pencil-Formen**: Formen installierter Pencil-Sammlungen verhalten sich wie in Pencil –
+  sie dehnen sich so, wie die Form es vorsieht, ein Doppelklick bearbeitet ihren Text,
+  *Eigenschaften* in der Stilleiste ändert Farben, Schriften, Stile und Optionen und führt die
+  eigenen Aktionen der Form aus, und die gelben Knöpfe stellen Details ein (z. B. die Position eines
+  Schiebereglers). Die Sammlung wird in das Canvas kopiert, damit die Formen auf jedem Computer
+  gleich aussehen – auch dort, wo sie nicht installiert ist.
 - **Rahmen** (F) sind benannte Bereiche, etwa eine Seite oder ein Bildschirm: Wird ein Rahmen
   verschoben, wandert sein Inhalt mit; beim Löschen bleibt der Inhalt erhalten. Vorlagen für A4,
   Folien, Desktop und Smartphone stehen in der Bibliothek.
