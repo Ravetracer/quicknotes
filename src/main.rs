@@ -4,6 +4,7 @@ mod backup;
 mod calc;
 mod calc_assist;
 mod calendar;
+mod canvas;
 mod chart_data;
 mod adventure;
 mod changelog;

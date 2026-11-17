@@ -12,6 +12,8 @@ use crate::presenter::{self, Presentation};
 use crate::prefs::{self, MAX_FONT, MIN_FONT};
 use crate::tab_list::TabList;
 use crate::themes::{self, Theme};
+mod canvas_ui;
+use canvas_ui::CanvasExport;
 use crate::{checklist, crypto, format, format_bar, github, html, kanban, langs, md_format, slides, stats, table, APP_ID};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -204,6 +206,7 @@ pub fn present(app: &adw::Application, files: &[gio::File]) {
 }
 
 fn open_main(app: &adw::Application, session: Session, files: Vec<PathBuf>) {
+    crate::canvas::register_scheme();
     let w = Window::new(app, session.settings.clone());
     WINDOW.with(|c| *c.borrow_mut() = Some(w.clone()));
     *w.vault.borrow_mut() = session.vault.clone();
@@ -896,6 +899,11 @@ impl Window {
         self.action("zoom-in", &["<Control>plus", "<Control>equal", "<Control>KP_Add"], |w| w.zoom(1.0));
         self.action("zoom-out", &["<Control>minus", "<Control>KP_Subtract"], |w| w.zoom(-1.0));
         self.action("zoom-reset", &["<Control>0", "<Control>KP_0"], |w| {
+            // Canvases zoom their view, not the font.
+            if let Some(t) = w.current_text().filter(|t| t.is_canvas()) {
+                t.canvas_js("QC.zoomBy(0)");
+                return;
+            }
             w.settings.borrow_mut().font_size = BASE_FONT;
             w.apply_font();
             w.schedule_persist();
@@ -913,6 +921,16 @@ impl Window {
         self.action("new-adventure", &[], |w| {
             if features::on(Feature::GmTools) {
                 w.new_adventure();
+            }
+        });
+        self.action("new-canvas", &["<Control><Shift>b"], |w| {
+            if features::on(Feature::Canvas) {
+                w.new_canvas();
+            }
+        });
+        self.action("export-png", &[], |w| {
+            if let Some(t) = w.current_text().filter(|t| t.is_canvas()) {
+                w.export_canvas(&t, CanvasExport::Png);
             }
         });
         let character = gio::SimpleAction::new("insert-character", Some(glib::VariantTy::STRING));
@@ -1213,6 +1231,10 @@ impl Window {
                     this.confirm_close(view.clone(), page.clone(), t);
                     return glib::Propagation::Stop;
                 }
+                Some(Tab::Text(t)) if this.canvas_close_needs_answer(&t) => {
+                    this.confirm_close_canvas(view.clone(), page.clone(), t);
+                    return glib::Propagation::Stop;
+                }
                 Some(tab) => this.forget(&tab),
                 None => {}
             }
@@ -1292,6 +1314,7 @@ impl Window {
         }
         let mimes: Vec<&str> = match kind {
             DropKind::Files => vec![URI_LIST],
+            DropKind::Preview(_) => std::iter::once(URI_LIST).chain(crate::canvas::IMAGE_TYPES.iter().map(|(_, m)| *m)).collect(),
             DropKind::Editor(_) => std::iter::once(URI_LIST).chain(TEXT_MIMES.iter().copied()).collect(),
         };
         // COPY only: accepting MOVE could make the source delete the files.
@@ -1332,14 +1355,21 @@ impl Window {
                     let mark = t.buffer.create_mark(None, &iter, true);
                     (t, mark)
                 }),
-                DropKind::Files => None,
+                DropKind::Files | DropKind::Preview(_) => None,
+            };
+            let canvas = match &kind {
+                DropKind::Preview(t) => t.upgrade().filter(|t| t.is_canvas()).map(|t| (t, x, y)),
+                _ => None,
             };
             let drop = drop.clone();
             let kind = kind.clone();
             let widget_ref = widget_ref.clone();
             let slot_ref = slot_ref.clone();
             glib::spawn_future_local(async move {
-                let ok = this.handle_drop(&drop, insert_at).await;
+                let ok = match canvas {
+                    Some((t, x, y)) => this.canvas_drop(&drop, &t, x, y).await,
+                    None => this.handle_drop(&drop, insert_at).await,
+                };
                 drop.finish(if ok { gdk::DragAction::COPY } else { gdk::DragAction::empty() });
                 if let (Some(widget), Some(slot)) = (widget_ref.upgrade(), slot_ref.upgrade()) {
                     this.install_drop_target(&widget, kind, &slot);
@@ -1623,11 +1653,13 @@ impl Window {
             }
         }));
         let weak = self.weak();
+        let tab = Rc::downgrade(t);
         *t.webview_hook.borrow_mut() = Some(Box::new(move |webview: &gtk::Widget| {
             if let Some(this) = weak.upgrade() {
-                this.install_drop_target(webview, DropKind::Files, &DropSlot::default());
+                this.install_drop_target(webview, DropKind::Preview(tab.clone()), &DropSlot::default());
             }
         }));
+        self.connect_canvas(t);
     }
 
     fn refresh_title(&self, id: &str) {
@@ -2182,6 +2214,7 @@ impl Window {
             Some(PreviewKind::Kanban) => Doc::Kanban,
             Some(PreviewKind::Mindmap) => Doc::Mindmap,
             Some(PreviewKind::Adventure) => Doc::Adventure,
+            Some(PreviewKind::Canvas) => Doc::Canvas,
             Some(PreviewKind::Markdown) => Doc::Markdown,
             Some(PreviewKind::Rst | PreviewKind::Html | PreviewKind::PlantUml) => Doc::Preview,
             None if t.is_calc() => Doc::Calc,
@@ -2566,6 +2599,8 @@ impl Window {
                 .and_then(|d| d.format("%Y-%m-%d %H:%M"))
                 .map(|s| s.to_string())
                 .unwrap_or_default(),
+            assets: store::asset_owners().into_iter().map(|id| (id.clone(), store::list_assets(&id))).collect(),
+            local_key: store::app_key(),
         };
         let this = self.clone();
         let name = active.name();
@@ -2627,6 +2662,12 @@ impl Window {
                 .map(|f| Folder { id: f.id.clone(), name: f.name.clone(), parent: f.parent.clone(), collapsed: collapsed.contains(&f.id) })
                 .collect();
         }
+        // Canvas images first, so canvases find them.
+        for (id, name, data) in std::mem::take(&mut outcome.assets) {
+            if let Err(e) = store::write_asset(&id, &name, &data) {
+                eprintln!("quicknotes: cannot store image {id}/{name}: {e}");
+            }
+        }
         let (mut received, mut deleted, mut conflicts) = (0, 0, outcome.conflicts);
         let sync_open = self.sync_open();
         // Notes opened or closed elsewhere.
@@ -2648,7 +2689,13 @@ impl Window {
                             // is sent with the next sync).
                             let title = Some(format!("{} ({})", meta.title.clone().or(label.clone()).unwrap_or_else(|| t.title()), t!("{} version", name)));
                             let meta = github::Meta { title, open: false, ..meta };
-                            self.add_synced_note(store::new_id(), meta, label, lock, content);
+                            let copy = store::new_id();
+                            for image in content.as_deref().map(crate::canvas::assets).unwrap_or_default() {
+                                if let Some(data) = store::read_asset(&id, &image) {
+                                    let _ = store::write_asset(&copy, &image, &data);
+                                }
+                            }
+                            self.add_synced_note(copy, meta, label, lock, content);
                             conflicts += 1;
                         } else {
                             self.apply_to_tab(&t, meta, lock, content);
@@ -3204,6 +3251,11 @@ impl Window {
             self.schedule_persist();
             return;
         }
+        if let Tab::Text(t) = tab {
+            if t.is_canvas() && self.forget_canvas(t) {
+                return;
+            }
+        }
         // Templates are kept even without the notes sidebar.
         let template = self.tab_folders.borrow().get(&id).is_some_and(|f| f == TEMPLATES_FOLDER);
         if features::on(Feature::Folders) || template {
@@ -3303,6 +3355,7 @@ impl Window {
             let content = store::read_note(&meta.id);
             self.restore_tab(meta, content);
         }
+        self.canvas_housekeeping();
         if self.view.n_pages() == 0 {
             self.new_note();
         } else {
@@ -3771,7 +3824,8 @@ impl Window {
     fn update_lock_actions(&self) {
         let tab = self.menu_text_tab();
         let state = tab.as_ref().map(|t| t.lock_state());
-        let note = tab.as_ref().is_some_and(|t| t.path.borrow().is_none());
+        // Not canvases: their images could not follow the tab password.
+        let note = tab.as_ref().is_some_and(|t| t.path.borrow().is_none() && !t.is_canvas());
         self.set_enabled("tab-protect", note && state == Some(LockState::Open));
         for name in ["tab-lock", "tab-change-password", "tab-remove-password"] {
             self.set_enabled(name, state == Some(LockState::Unlocked));
@@ -3793,6 +3847,10 @@ impl Window {
     fn protect_tab(self: &Rc<Self>, t: Rc<EditorTab>) {
         if t.path.borrow().is_some() {
             self.toast(t!("Only notes (tabs without a file) can be protected with a password"));
+            return;
+        }
+        if t.is_canvas() {
+            self.toast(t!("Canvases cannot be protected with a tab password"));
             return;
         }
         let this = self.clone();
@@ -4221,6 +4279,10 @@ impl Window {
 
     pub fn open_path(self: &Rc<Self>, path: PathBuf) {
         let path = std::fs::canonicalize(&path).unwrap_or(path);
+        if path.extension().is_some_and(|e| e == crate::canvas::EXTENSION) {
+            self.import_canvas(&path);
+            return;
+        }
         let existing = self
             .tabs
             .borrow()
@@ -4337,6 +4399,14 @@ impl Window {
     /// Exports the current Markdown/reStructuredText document.
     fn export(self: &Rc<Self>, format: ExportFormat) {
         let Some(t) = self.current_text() else { return };
+        if t.is_canvas() {
+            match format {
+                ExportFormat::Pdf => self.export_canvas(&t, CanvasExport::Pdf),
+                ExportFormat::Svg => self.export_canvas(&t, CanvasExport::Svg),
+                ExportFormat::Html => {}
+            }
+            return;
+        }
         if t.preview_kind() == Some(PreviewKind::Mindmap) {
             self.export_mindmap(&t, format);
             return;
@@ -4718,6 +4788,10 @@ impl Window {
 
     fn save_as(self: &Rc<Self>) {
         let Some(t) = self.current_text() else { return };
+        if t.is_canvas() {
+            self.save_canvas_file(t, None);
+            return;
+        }
         let dialog = gtk::FileDialog::builder().title(t!("Save As")).modal(true).build();
         let current_path = t.path.borrow().clone();
         match current_path {
@@ -5496,6 +5570,10 @@ impl Window {
     // ===== appearance =====================================================
 
     fn zoom(self: &Rc<Self>, delta: f64) {
+        if let Some(t) = self.current_text().filter(|t| t.is_canvas()) {
+            t.canvas_js(&format!("QC.zoomBy({delta})"));
+            return;
+        }
         {
             let mut s = self.settings.borrow_mut();
             s.font_size = (s.font_size + delta).clamp(MIN_FONT, MAX_FONT);
@@ -5819,9 +5897,11 @@ impl Window {
                 self.set_toggle("wrap", true, t.wrap());
                 let exportable = t.preview_kind().is_some_and(PreviewKind::is_document);
                 let mindmap = t.preview_kind() == Some(PreviewKind::Mindmap);
+                let canvas = t.is_canvas();
                 self.set_enabled("export-html", exportable);
-                self.set_enabled("export-pdf", exportable || mindmap);
-                self.set_enabled("export-svg", mindmap);
+                self.set_enabled("export-pdf", exportable || mindmap || canvas);
+                self.set_enabled("export-svg", mindmap || canvas);
+                self.set_enabled("export-png", canvas);
                 let slides = t.preview_kind() == Some(PreviewKind::Slides);
                 self.set_presentable(slides);
                 self.set_calc_tools(t.is_calc());
@@ -6094,6 +6174,10 @@ impl Window {
             self.status_counts.set_text(&t!("{} cards  ·  {} done", cards, done));
             return;
         }
+        if t.is_canvas() {
+            self.status_counts.set_text(&t!("{} objects", crate::canvas::stats(&text)));
+            return;
+        }
         let c = stats::count(&text);
         let mut label = t!("{} words  ·  {} characters  ·  {} paragraphs", c.words, c.chars, c.paragraphs);
         if selected {
@@ -6129,6 +6213,10 @@ impl Window {
         self.schedule_counts();
         self.update_problems_status();
         match self.current() {
+            Some(Tab::Text(t)) if t.is_canvas() => {
+                self.status_info.set_text(t!("Canvas"));
+                self.status_pos.set_text("");
+            }
             Some(Tab::Text(t)) => {
                 let mut info = vec![match t.path.borrow().as_ref() {
                     Some(p) => tilde(p),
@@ -6153,7 +6241,7 @@ impl Window {
     }
 
     fn update_position(&self) {
-        let Some(t) = self.current_text() else { return };
+        let Some(t) = self.current_text().filter(|t| !t.is_canvas()) else { return };
         let buf = &t.buffer;
         let iter = buf.iter_at_mark(&buf.get_insert());
         let mut text = t!("Ln {}, Col {}", iter.line() + 1, iter.line_offset() + 1);
@@ -6399,6 +6487,8 @@ const TEXT_MIMES: &[&str] = &["text/plain;charset=utf-8", "UTF8_STRING", "text/p
 enum DropKind {
     /// Opens dropped files.
     Files,
+    /// Opens dropped files; images dropped on a canvas go into it.
+    Preview(Weak<EditorTab>),
     /// Opens dropped files, inserts dropped text.
     Editor(Weak<EditorTab>),
 }
@@ -6407,12 +6497,17 @@ type DropSlot = Rc<RefCell<Option<gtk::DropTargetAsync>>>;
 
 /// Reads the dropped data as `mime`, trying the direct X11 path first.
 async fn read_drop_data(drop: &gdk::Drop, x11_window: Option<u32>, mime: &str) -> Option<String> {
-    let decode = |data: &[u8]| String::from_utf8_lossy(data).trim_end_matches('\0').to_owned();
+    let data = read_drop_bytes(drop, x11_window, mime).await?;
+    Some(String::from_utf8_lossy(&data).trim_end_matches('\0').to_owned())
+}
+
+/// Reads the dropped data as `mime` (raw bytes).
+async fn read_drop_bytes(drop: &gdk::Drop, x11_window: Option<u32>, mime: &str) -> Option<Vec<u8>> {
     if let Some(xid) = x11_window {
         let target = mime.to_owned();
         if let Ok(Ok(data)) = gio::spawn_blocking(move || crate::xdnd::read(xid, &target)).await {
             if !data.is_empty() {
-                return Some(decode(&data));
+                return Some(data);
             }
         }
     }
@@ -6421,13 +6516,13 @@ async fn read_drop_data(drop: &gdk::Drop, x11_window: Option<u32>, mime: &str) -
         let mut data = Vec::new();
         loop {
             match stream.read_bytes_future(64 * 1024, glib::Priority::DEFAULT).await {
-                Ok(chunk) if !chunk.is_empty() => data.extend_from_slice(&chunk),
+                Ok(chunk) if !chunk.is_empty() && data.len() <= crate::canvas::MAX_IMAGE => data.extend_from_slice(&chunk),
                 _ => break,
             }
         }
-        Some(decode(&data))
+        Some(data)
     };
-    glib::future_with_timeout(Duration::from_secs(3), read).await.ok().flatten()
+    glib::future_with_timeout(Duration::from_secs(10), read).await.ok().flatten()
 }
 
 /// The URIs of a `text/uri-list` payload, one per line (for inserting links).
@@ -6564,12 +6659,24 @@ enum TabStyle {
     Cards,
     Mindmap,
     Adventure,
+    Canvas,
     Image,
 }
 
 impl TabStyle {
-    const ALL: [Self; 10] =
-        [Self::Note, Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Kanban, Self::Cards, Self::Mindmap, Self::Adventure, Self::Image];
+    const ALL: [Self; 11] = [
+        Self::Note,
+        Self::Code,
+        Self::Document,
+        Self::Slides,
+        Self::Calc,
+        Self::Kanban,
+        Self::Cards,
+        Self::Mindmap,
+        Self::Adventure,
+        Self::Canvas,
+        Self::Image,
+    ];
 
     fn of(tab: &Tab) -> Self {
         let Tab::Text(t) = tab else { return Self::Image };
@@ -6579,6 +6686,7 @@ impl TabStyle {
             Some(PreviewKind::Flashcards) => Self::Cards,
             Some(PreviewKind::Mindmap) => Self::Mindmap,
             Some(PreviewKind::Adventure) => Self::Adventure,
+            Some(PreviewKind::Canvas) => Self::Canvas,
             Some(kind) if kind.is_document() => Self::Document,
             _ if t.is_calc() => Self::Calc,
             _ if t.language_id().is_none() => Self::Note,
@@ -6598,6 +6706,7 @@ impl TabStyle {
             Some(crate::flashcards::LANGUAGE) if features::on(Feature::Flashcards) => Self::Cards,
             Some(crate::mindmap::LANGUAGE) if features::on(Feature::Mindmaps) => Self::Mindmap,
             Some(crate::adventure::LANGUAGE) if features::on(Feature::GmTools) => Self::Adventure,
+            Some(crate::canvas::LANGUAGE) if features::on(Feature::Canvas) => Self::Canvas,
             Some("calc") => Self::Calc,
             Some(
                 "markdown" | "rst" | "html" | "plantuml" | slides::LANGUAGE | kanban::LANGUAGE | crate::flashcards::LANGUAGE
@@ -6620,13 +6729,24 @@ impl TabStyle {
             Self::Cards => "starred-symbolic",
             Self::Mindmap => "qn-format-mindmap-symbolic",
             Self::Adventure => "qn-format-dice-symbolic",
+            Self::Canvas => "qn-format-canvas-symbolic",
             Self::Image => "image-x-generic-symbolic",
         }
     }
 
     /// Types with their own colour (plain notes keep the default look).
-    const COLORED: [Self; 9] =
-        [Self::Code, Self::Document, Self::Slides, Self::Calc, Self::Kanban, Self::Cards, Self::Mindmap, Self::Adventure, Self::Image];
+    const COLORED: [Self; 10] = [
+        Self::Code,
+        Self::Document,
+        Self::Slides,
+        Self::Calc,
+        Self::Kanban,
+        Self::Cards,
+        Self::Mindmap,
+        Self::Adventure,
+        Self::Canvas,
+        Self::Image,
+    ];
 
     /// Whether tabs of this type exist with the current features.
     fn available(&self) -> bool {
@@ -6636,6 +6756,7 @@ impl TabStyle {
             Self::Cards => features::on(Feature::Flashcards),
             Self::Mindmap => features::on(Feature::Mindmaps),
             Self::Adventure => features::on(Feature::GmTools),
+            Self::Canvas => features::on(Feature::Canvas),
             _ => true,
         }
     }
@@ -6652,6 +6773,7 @@ impl TabStyle {
             Self::Cards => "flashcards",
             Self::Mindmap => "mindmap",
             Self::Adventure => "adventure",
+            Self::Canvas => "canvas",
             Self::Image => "image",
         }
     }
@@ -6667,6 +6789,7 @@ impl TabStyle {
             Self::Cards => t!("Flash cards"),
             Self::Mindmap => t!("Mind maps"),
             Self::Adventure => t!("Adventures"),
+            Self::Canvas => t!("Canvases"),
             Self::Image => t!("Images"),
         }
     }
@@ -6682,6 +6805,7 @@ impl TabStyle {
             Self::Cards => "#c061cb",
             Self::Mindmap => "#e01b24",
             Self::Adventure => "#986a44",
+            Self::Canvas => "#1c71d8",
             Self::Image => "#ff7800",
         }
     }
@@ -6697,6 +6821,7 @@ impl TabStyle {
             Self::Cards => "tab-flashcards",
             Self::Mindmap => "tab-mindmap",
             Self::Adventure => "tab-adventure",
+            Self::Canvas => "tab-canvas",
             Self::Image => "tab-image",
         }
     }
@@ -6706,7 +6831,7 @@ impl TabStyle {
     }
 
     fn exportable(self) -> bool {
-        matches!(self, Self::Document | Self::Slides | Self::Mindmap)
+        matches!(self, Self::Document | Self::Slides | Self::Mindmap | Self::Canvas)
     }
 }
 
@@ -7028,6 +7153,13 @@ fn export_section(style: TabStyle) -> gio::Menu {
     if style == TabStyle::Mindmap {
         return menu_section(&[(t!("Export as PDF…"), "win.export-pdf"), (t!("Export as SVG…"), "win.export-svg")]);
     }
+    if style == TabStyle::Canvas {
+        return menu_section(&[
+            (t!("Export as PDF…"), "win.export-pdf"),
+            (t!("Export as SVG…"), "win.export-svg"),
+            (t!("Export as PNG…"), "win.export-png"),
+        ]);
+    }
     let mut items = vec![
         (t!("Export as HTML…"), "win.export-html"),
         (t!("Export as PDF…"), "win.export-pdf"),
@@ -7068,6 +7200,9 @@ fn fill_main_menu(menu: &gio::Menu, context: MenuContext) {
     }
     if context.features.gmtools {
         file.push((t!("New Adventure"), "win.new-adventure"));
+    }
+    if context.features.canvas {
+        file.push((t!("New Canvas"), "win.new-canvas"));
     }
     file.push((t!("New from Template…"), "win.new-from-template"));
     file.push((t!("Open File…"), "win.open"));
@@ -7498,7 +7633,7 @@ impl ActiveSync {
 enum ExportFormat {
     Html,
     Pdf,
-    /// Mind maps only.
+    /// Mind maps and canvases only.
     Svg,
 }
 

@@ -180,7 +180,21 @@ fn xml_text(xml: &str, name: &str) -> Option<String> {
 
 /// Whether a path belongs to the synced files.
 fn known(rel: &str) -> bool {
-    rel == VAULT || rel == INDEX || (rel.starts_with(&format!("{DIR}notes/")) && rel.ends_with(".enc") && !rel.contains(' '))
+    let asset = rel
+        .strip_prefix(&format!("{DIR}assets/"))
+        .and_then(|n| n.strip_suffix(".enc"))
+        .is_some_and(crate::canvas::valid_name);
+    asset || rel == VAULT || rel == INDEX || (rel.starts_with(&format!("{DIR}notes/")) && rel.ends_with(".enc") && !rel.contains(' '))
+}
+
+/// Largest file read from a sync target (an encrypted image of 25 MB in Base64).
+const MAX_READ: u64 = 64 * 1024 * 1024;
+
+fn read_body(response: ureq::Response) -> Result<String> {
+    use std::io::Read;
+    let mut body = String::new();
+    response.into_reader().take(MAX_READ).read_to_string(&mut body)?;
+    Ok(body)
 }
 
 // ===== synced folder =========================================================
@@ -221,9 +235,10 @@ impl Remote for FolderRemote {
                 files.insert(rel.to_owned(), v);
             }
         }
-        if let Ok(entries) = std::fs::read_dir(self.root.join(DIR).join("notes")) {
+        for sub in ["notes", "assets"] {
+            let Ok(entries) = std::fs::read_dir(self.root.join(DIR).join(sub)) else { continue };
             for entry in entries.flatten() {
-                let rel = format!("{DIR}notes/{}", entry.file_name().to_string_lossy());
+                let rel = format!("{DIR}{sub}/{}", entry.file_name().to_string_lossy());
                 if known(&rel) {
                     if let Some(v) = Self::version(&entry.path()) {
                         files.insert(rel, v);
@@ -428,7 +443,7 @@ impl Dav {
 impl Remote for Dav {
     fn snapshot(&self) -> Result<Snapshot> {
         let mut files = HashMap::new();
-        for dir in [DIR.to_owned(), format!("{DIR}notes/")] {
+        for dir in [DIR.to_owned(), format!("{DIR}notes/"), format!("{DIR}assets/")] {
             let Some(entries) = self.list(&dir)? else { continue };
             for (rel, e) in entries {
                 if e.dir || !known(&rel) {
@@ -442,17 +457,18 @@ impl Remote for Dav {
     }
 
     fn read(&self, path: &str, _version: &str) -> Result<String> {
-        self.request("GET", path).call().map_err(|e| http_error(e, path))?.into_string().map_err(Into::into)
+        read_body(self.request("GET", path).call().map_err(|e| http_error(e, path))?)
     }
 
     fn commit(&self, snapshot: &Snapshot, writes: &[(String, Option<String>)]) -> Result<()> {
         if !snapshot.files.contains_key(VAULT) {
             self.mkcol(DIR)?;
         }
-        let notes_dir = format!("{DIR}notes/");
-        let has_notes = snapshot.files.keys().any(|p| p.starts_with(&notes_dir));
-        if !has_notes && writes.iter().any(|(p, c)| c.is_some() && p.starts_with(&notes_dir)) {
-            self.mkcol(&notes_dir)?;
+        for dir in [format!("{DIR}notes/"), format!("{DIR}assets/")] {
+            let exists = snapshot.files.keys().any(|p| p.starts_with(&dir));
+            if !exists && writes.iter().any(|(p, c)| c.is_some() && p.starts_with(&dir)) {
+                self.mkcol(&dir)?;
+            }
         }
         for (rel, content) in writes.iter().filter(|(r, c)| c.is_some() && r != INDEX) {
             let condition = (rel == VAULT).then_some(("If-None-Match", "*"));
@@ -775,7 +791,7 @@ impl Remote for S3 {
     }
 
     fn read(&self, path: &str, _version: &str) -> Result<String> {
-        self.call("GET", Some(path), &[], b"", &[]).map_err(|e| http_error(e, path))?.into_string().map_err(Into::into)
+        read_body(self.call("GET", Some(path), &[], b"", &[]).map_err(|e| http_error(e, path))?)
     }
 
     fn commit(&self, snapshot: &Snapshot, writes: &[(String, Option<String>)]) -> Result<()> {
@@ -1004,6 +1020,22 @@ mod tests {
         assert!(b.content("n2").is_none());
         assert!(!files().iter().any(|f| f.contains("notes/n2-")), "{:?}", files());
 
+        // Canvas images go across and leave once no canvas uses them.
+        a.enter();
+        let (canvas, name) = github::tests::canvas_note("c1", b"\x89PNG\r\n\x1a\npixels");
+        a.notes.push(canvas);
+        a.sync(remote, &key);
+        assert!(files().iter().any(|f| f.ends_with(&format!("assets/{name}.enc"))), "{:?}", files());
+        assert_eq!(b.sync(remote, &key_b).assets.len(), 1);
+        b.enter();
+        assert!(crate::store::read_asset("c1", &name).is_some());
+        a.edit("c1", &crate::canvas::template());
+        a.sync(remote, &key);
+        assert!(!files().iter().any(|f| f.contains("assets/")), "{:?}", files());
+        for m in [&a, &b] {
+            let _ = std::fs::remove_dir_all(&m.dir);
+        }
+
         // Nothing readable is stored.
         assert!(!files().is_empty());
     }
@@ -1070,7 +1102,7 @@ mod tests {
         let remote = FolderRemote { root: dir.clone() };
         let list = || -> Vec<String> {
             let mut out = Vec::new();
-            for sub in ["quicknotes", "quicknotes/notes"] {
+            for sub in ["quicknotes", "quicknotes/notes", "quicknotes/assets"] {
                 for e in std::fs::read_dir(dir.join(sub)).into_iter().flatten().flatten() {
                     out.push(format!("{sub}/{}", e.file_name().to_string_lossy()));
                 }

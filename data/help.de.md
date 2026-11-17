@@ -1,6 +1,6 @@
 # QuickNotes-Hilfe {#top}
 
-**Inhalt:** [Notizen & Tabs](#notes) · [Ordner](#folders) · [Notizvorlagen](#note-templates) · [Checklisten](#checklists) · [Tabellen](#tables) · [Formatierung](#formatting) · [Formeln & Noten](#notation) · [Diagramme](#charts) · [Kanban](#kanban) · [Mindmaps](#mindmaps) · [Lernkarten](#flashcards) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
+**Inhalt:** [Notizen & Tabs](#notes) · [Ordner](#folders) · [Notizvorlagen](#note-templates) · [Checklisten](#checklists) · [Tabellen](#tables) · [Formatierung](#formatting) · [Formeln & Noten](#notation) · [Diagramme](#charts) · [Kanban](#kanban) · [Mindmaps](#mindmaps) · [Canvases](#canvas) · [Lernkarten](#flashcards) · [Berechnungen](#calc) · [Vorlagen](#templates) ·
 [Vorschau & Export](#previews) · [Präsentationen](#slides) · [Datenformate](#dataformats) · [Entwicklerwerkzeuge](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) · [Spielleitung](#gmtools) ·
 [Sicherheit](#security) · [Sicherung](#backup) · [Sync](#sync) ·
 [Tastenkürzel](#shortcuts)
@@ -465,6 +465,47 @@ Einrückung und Listenmarkierung).
 **Export** (Hauptmenü oder Kontextmenü): *Als PDF exportieren…* setzt die Mindmap auf eine
 A4-Seite – quer oder hoch, je nachdem, was besser passt – und *Als SVG exportieren…* speichert
 sie als Vektorgrafik. Exporte nutzen beim Theme `default` das helle Aussehen.
+
+## Canvases {#canvas}
+
+Ein **Canvas** ist eine freie Fläche zum Skizzieren von Ideen: Zeichnungen, Formen, Haftnotizen,
+Emoji, Sticker, Pfeile und Bilder. Ein neues legst du mit *Neues Canvas* im Hauptmenü an
+(Strg+Umschalt+B).
+
+- **Werkzeuge** (Leiste links, Taste in Klammern): Auswählen (V), Hand (H), Stift (P),
+  Textmarker (M), Radierer (E), Rechteck (R), Ellipse (O), Raute (D), Dreieck, Linie (L),
+  Pfeil (A), Verbinder (C), Text (T), Haftnotiz (N), Emoji und Sticker, *Bild…*. Nach dem
+  Platzieren einer Form ist wieder das Auswahlwerkzeug aktiv; Stift, Textmarker und Radierer
+  bleiben an.
+- **Auswählen** per Klick, Umschalt+Klick oder durch Aufziehen eines Rahmens. Ziehen verschiebt,
+  die Griffe ändern die Größe (Umschalt behält die Proportionen) und drehen. Doppelklick (oder
+  Enter) bearbeitet den Text einer Form, Haftnotiz, eines Textfelds oder Verbinders; Esc beendet.
+- **Verbinder** laufen von einem Objekt zum anderen und folgen, wenn du sie verschiebst – gerade,
+  gewinkelt oder gebogen, mit Pfeilspitzen oder Punkten an beiden Enden und optionaler Beschriftung.
+- **Stilleiste** (oben, für die Auswahl oder das aktuelle Werkzeug): Farbe, Füllung, Linienstärke
+  und -art, Deckkraft, Schriftgröße, Ausrichtung, Pfeilenden, Reihenfolge (vorne/hinten),
+  Gruppieren, Sperren und Löschen.
+- **Bilder**: Bildschirmfotos und Bilder mit Strg+V einfügen, Bilddateien auf das Canvas ziehen
+  oder *Bild…* verwenden (PNG, JPEG, GIF, WebP, SVG bis je 25 MB).
+- **Tasten**: Strg+Z / Strg+Umschalt+Z rückgängig und wiederholen, Strg+C / Strg+X / Strg+V
+  kopieren, ausschneiden und einfügen (auch zwischen Canvases), Strg+D dupliziert, Strg+A wählt
+  alles, Entf löscht, Pfeiltasten verschieben (Umschalt: 10 px), Strg+G / Strg+Umschalt+G
+  gruppieren und Gruppierung aufheben, Strg+] / Strg+[ eine Ebene nach oben oder unten (mit
+  Umschalt: ganz nach vorne oder hinten).
+- **Ansicht**: Das Mausrad scrollt, Strg+Mausrad zoomt, Leertaste oder mittlere Maustaste ziehen
+  die Ansicht. Die Knöpfe unten rechts zoomen, zeigen alles an und schalten das Einrasten am
+  Raster.
+
+Alles wird als Vektorgrafik gespeichert, Zeichnungen bleiben also in jeder Größe scharf. Bilder
+liegen neben der Notiz in einem eigenen Ordner (mit dem App-Passwort verschlüsselt) und werden
+mit dem Canvas verschlüsselt synchronisiert. Bilder, die das Canvas nicht mehr verwendet, werden
+beim Schließen aufgeräumt; wird das Canvas endgültig gelöscht (Papierkorb leeren), verschwinden
+auch seine Bilder. Ohne Notizordner fragt das Schließen eines Canvas, ob es vorher als Datei
+gespeichert werden soll.
+
+*Speichern unter…* schreibt eine einzelne `.qncanvas`-Datei mit allen Bildern; beim Öffnen
+wird sie als neues Canvas hinzugefügt. **Export** (Hauptmenü): *Als PDF exportieren…*, *Als SVG
+exportieren…* und *Als PNG exportieren…* speichern die ganze Zeichnung.
 
 ## Berechnungen {#calc}
 
@@ -1148,6 +1189,9 @@ anderes Ziel verbunden, endet das bisherige (deine Notizen bleiben).
 | Strg+Umschalt+N | Neue Berechnung |
 <!-- if kanban -->
 | Strg+Umschalt+K | Neues Kanban-Board |
+<!-- end -->
+<!-- if canvas -->
+| Strg+Umschalt+B | Neues Canvas |
 <!-- end -->
 | Strg+Alt+N, Strg+Alt+I | Neue Notiz aus Vorlage, Vorlage einfügen |
 | Strg+O, Strg+S, Strg+Umschalt+S | Öffnen, Speichern, Speichern unter |

@@ -12,6 +12,9 @@
 //!   - `quicknotes/vault.json`      the wrapped key (readable)
 //!   - `quicknotes/index.enc`       folders and the metadata of all notes
 //!   - `quicknotes/notes/<id>.enc`  the content of each note
+//!   - `quicknotes/assets/<name>.enc` images of canvases, named after their
+//!     SHA-256 (see `canvas.rs`); which ones are used follows from the
+//!     canvases' contents, so the index does not list them
 //! - Every sync is one commit made with the Git data API. When another
 //!   machine pushed in between, the branch update is refused and the sync
 //!   starts over with the new state.
@@ -522,13 +525,18 @@ impl Client {
     /// One commit on top of `head` that writes (`Some`) or deletes (`None`)
     /// files. [`Error::Moved`] when the branch moved in between.
     fn commit(&self, head: &Head, writes: &[(String, Option<String>)], message: &str) -> Result<()> {
-        let entries: Vec<serde_json::Value> = writes
-            .iter()
-            .map(|(path, content)| match content {
+        let mut entries: Vec<serde_json::Value> = Vec::new();
+        for (path, content) in writes {
+            entries.push(match content {
+                // Large files (images) as blobs of their own.
+                Some(c) if c.len() > 512 * 1024 => {
+                    let blob = self.send("POST", &self.repo_path("/git/blobs"), serde_json::json!({ "content": c, "encoding": "utf-8" }))?;
+                    serde_json::json!({ "path": path, "mode": "100644", "type": "blob", "sha": blob["sha"] })
+                }
                 Some(c) => serde_json::json!({ "path": path, "mode": "100644", "type": "blob", "content": c }),
                 None => serde_json::json!({ "path": path, "mode": "100644", "type": "blob", "sha": null }),
-            })
-            .collect();
+            });
+        }
         let tree = self.send("POST", &self.repo_path("/git/trees"), serde_json::json!({ "base_tree": head.tree, "tree": entries }))?;
         let commit = self.send(
             "POST",
@@ -920,6 +928,8 @@ pub struct Outcome {
     /// Notes changed in the repository.
     pub sent: usize,
     pub conflicts: usize,
+    /// Canvas images to store locally: canvas id, name, bytes.
+    pub assets: Vec<(String, String, Vec<u8>)>,
 }
 
 /// Everything a sync run needs from the window.
@@ -931,10 +941,96 @@ pub struct Job {
     pub state: State,
     /// Date and time for conflict copies.
     pub stamp: String,
+    /// The images stored locally per canvas.
+    pub assets: HashMap<String, BTreeSet<String>>,
+    /// The app key the local images are sealed with (app password on).
+    pub local_key: Option<Key>,
 }
 
 fn note_path(id: &str) -> String {
     format!("{DIR}notes/{id}.enc")
+}
+
+/// Where a canvas image is stored (shared by all canvases using it).
+fn asset_path(name: &str) -> String {
+    format!("{DIR}assets/{name}.enc")
+}
+
+fn asset_aad(name: &str) -> Vec<u8> {
+    format!("quicknotes-asset/{name}").into_bytes()
+}
+
+/// Canvas images: uploads the ones the repository lacks, fetches the ones
+/// missing here and removes the ones no canvas uses any more (only when
+/// the content of every note is known).
+fn sync_assets(
+    gh: &dyn Remote,
+    key: &Key,
+    job_assets: &HashMap<String, BTreeSet<String>>,
+    local_key: Option<&Key>,
+    contents: &BTreeMap<String, Option<&str>>,
+    files: &HashMap<String, String>,
+    writes: &mut Vec<(String, Option<String>)>,
+) -> Result<Vec<(String, String, Vec<u8>)>> {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let mut used: BTreeSet<String> = BTreeSet::new();
+    let mut fetched: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut store = Vec::new();
+    let mut uploaded = HashSet::new();
+    // Where a local copy of an image is, for uploads and for canvases that
+    // need an image another canvas has.
+    let local_copy = |name: &str| -> Option<Vec<u8>> {
+        job_assets
+            .iter()
+            .filter(|(_, names)| names.contains(name))
+            .find_map(|(id, _)| crate::store::read_asset_with(local_key, id, name))
+            .filter(|data| crate::canvas::asset_name(data, name.rsplit('.').next().unwrap_or("")) == name)
+    };
+    for (id, content) in contents {
+        let Some(content) = content else { continue };
+        let names = crate::canvas::assets(content);
+        let here = job_assets.get(id);
+        for name in &names {
+            let path = asset_path(name);
+            let local = here.is_some_and(|n| n.contains(name));
+            if !files.contains_key(&path) && !uploaded.contains(name) {
+                if let Some(data) = local_copy(name) {
+                    writes.push((path.clone(), Some(b64.encode(key.seal(&data, &asset_aad(name))))));
+                    uploaded.insert(name.clone());
+                }
+            }
+            if local {
+                continue;
+            }
+            let data = match fetched.get(name) {
+                Some(d) => Some(d.clone()),
+                None => match files.get(&path) {
+                    Some(version) => {
+                        let sealed = b64.decode(gh.read(&path, version)?.trim()).map_err(|_| Error::Key)?;
+                        let plain = key.open(&sealed, &asset_aad(name)).map_err(|_| Error::Key)?.to_vec();
+                        fetched.insert(name.clone(), plain.clone());
+                        Some(plain)
+                    }
+                    None => local_copy(name),
+                },
+            };
+            if let Some(data) = data {
+                store.push((id.clone(), name.clone(), data));
+            }
+        }
+        used.extend(names);
+    }
+    if contents.values().all(Option::is_some) {
+        let prefix = format!("{DIR}assets/");
+        for path in files.keys().filter(|p| p.starts_with(&prefix)) {
+            let name = path[prefix.len()..].trim_end_matches(".enc");
+            if !used.contains(name) {
+                writes.push((path.clone(), None));
+            }
+        }
+    }
+    Ok(store)
 }
 
 /// A new index revision.
@@ -1022,6 +1118,22 @@ pub fn run(gh: &dyn Remote, key: &Key, job: Job, new_id: &mut dyn FnMut() -> Str
             changes.push(Change::Put { id: id.clone(), meta: meta.clone(), label: l.label.clone(), lock: l.lock.clone(), content: None });
         }
         changes.extend(plan.delete.iter().map(|id| Change::Delete { id: id.clone() }));
+        // The content of every note after this sync (`None`: not known here).
+        let contents: BTreeMap<String, Option<&str>> = plan
+            .index
+            .notes
+            .keys()
+            .map(|id| {
+                let fetched = changes.iter().find_map(|c| match c {
+                    Change::Put { id: i, content: Some(c), .. } if i == id => Some(c.as_str()),
+                    _ => None,
+                });
+                // Protected notes are no canvases (no images).
+                let local = local.get(id).map(|n| if n.lock.is_none() { n.content.as_str() } else { "" });
+                (id.clone(), fetched.or(local))
+            })
+            .collect();
+        let assets = sync_assets(gh, key, &job.assets, job.local_key.as_ref(), &contents, files, &mut writes)?;
         for id in &plan.upload {
             let path = note_file(ca, id, &local[id].hash());
             // Content-addressed: already there with this content.
@@ -1065,7 +1177,7 @@ pub fn run(gh: &dyn Remote, key: &Key, job: Job, new_id: &mut dyn FnMut() -> Str
             }
         }
         let state = State { repo: state.repo.clone(), notes: plan.base, folders: plan.folders.clone(), rev };
-        return Ok(Outcome { state, changes, folders: plan.folders, sent, conflicts: plan.conflicts });
+        return Ok(Outcome { state, changes, folders: plan.folders, sent, conflicts: plan.conflicts, assets });
     }
     Err(Error::Moved)
 }
@@ -1486,11 +1598,19 @@ pub(crate) mod tests {
         pub state: State,
         ids: usize,
         name: &'static str,
+        /// Data folder (canvas images).
+        pub dir: std::path::PathBuf,
     }
 
     impl Machine {
         pub fn new(name: &'static str, notes: Vec<Note>) -> Self {
-            Machine { notes, folders: Vec::new(), state: State::default(), ids: 0, name }
+            let dir = crate::store::tests::temp_data_dir(name);
+            Machine { notes, folders: Vec::new(), state: State::default(), ids: 0, name, dir }
+        }
+
+        /// Makes this machine's data folder the current one.
+        pub fn enter(&self) {
+            crate::store::tests::set_data_dir(&self.dir);
         }
 
         pub fn sync(&mut self, gh: &dyn Remote, key: &Key) -> Outcome {
@@ -1498,6 +1618,8 @@ pub(crate) mod tests {
         }
 
         pub fn try_sync(&mut self, gh: &dyn Remote, key: &Key) -> Result<Outcome> {
+            self.enter();
+            let assets = crate::store::asset_owners().into_iter().map(|id| (id.clone(), crate::store::list_assets(&id))).collect();
             let job = Job {
                 repo: "me/notes".into(),
                 notes: self.notes.clone(),
@@ -1505,6 +1627,8 @@ pub(crate) mod tests {
                 folders: self.folders.clone(),
                 state: self.state.clone(),
                 stamp: "now".into(),
+                assets,
+                local_key: None,
             };
             let name = self.name;
             let mut ids = self.ids;
@@ -1535,6 +1659,9 @@ pub(crate) mod tests {
                     },
                     Change::Delete { id } => self.notes.retain(|n| &n.id != id),
                 }
+            }
+            for (id, name, data) in &out.assets {
+                crate::store::write_asset(id, name, data).unwrap();
             }
             self.folders = out.folders.clone();
             self.state = out.state.clone();
@@ -1637,8 +1764,56 @@ pub(crate) mod tests {
             folders: vec![],
             state: State::default(),
             stamp: String::new(),
+            assets: HashMap::new(),
+            local_key: None,
         }, &mut String::new);
         assert!(matches!(wrong, Err(Error::Key)));
+    }
+
+    /// A canvas with one image (stored in the current data folder).
+    pub(crate) fn canvas_note(id: &str, image: &[u8]) -> (Note, String) {
+        let name = crate::store::add_asset(id, image, "png").unwrap();
+        let scene = format!(r#"{{"canvas":1,"items":[{{"id":"i","t":"image","src":"{name}","x":0,"y":0,"w":10,"h":10}}]}}"#);
+        let mut n = note(id, &scene);
+        n.meta.language = Some(crate::canvas::LANGUAGE.into());
+        (n, name)
+    }
+
+    #[test]
+    fn canvas_images_are_synced() {
+        let (ep, repo) = mock_github();
+        let gh = Client::new(ep, "tok", "me/notes");
+        let (lock, key) = Lock::create("pw", crate::crypto::tests::fast_kdf());
+        gh.create_vault(&lock).unwrap();
+        let png = b"\x89PNG\r\n\x1a\nsecret pixels".to_vec();
+        let mut a = Machine::new("canvas-a", vec![]);
+        a.enter();
+        let (canvas, name) = canvas_note("c1", &png);
+        a.notes.push(canvas);
+        let mut b = Machine::new("canvas-b", vec![]);
+        a.sync(&gh, &key);
+        let path = format!("quicknotes/assets/{name}.enc");
+        {
+            let files = repo.lock().unwrap().files();
+            assert!(files.contains_key(&path), "{:?}", files.keys());
+            assert!(files.values().all(|c| !c.contains("secret pixels")));
+        }
+        let out = b.sync(&gh, &key);
+        assert_eq!(out.assets.len(), 1);
+        b.enter();
+        assert_eq!(crate::store::read_asset("c1", &name), Some(png.clone()));
+        // Nothing to do the next time.
+        assert!(b.sync(&gh, &key).assets.is_empty());
+
+        // B removes the image: it leaves the repository.
+        b.edit("c1", &crate::canvas::template());
+        b.sync(&gh, &key);
+        assert!(!repo.lock().unwrap().files().contains_key(&path));
+        a.sync(&gh, &key);
+        assert_eq!(a.content("c1"), Some(crate::canvas::template().as_str()));
+        for m in [&a, &b] {
+            let _ = std::fs::remove_dir_all(&m.dir);
+        }
     }
 
     #[test]
@@ -1652,6 +1827,8 @@ pub(crate) mod tests {
             folders: vec![],
             state: State::default(),
             stamp: String::new(),
+            assets: HashMap::new(),
+            local_key: None,
         };
         assert!(matches!(run(&gh, &Key::random(), job(), &mut String::new), Err(Error::Repo(_))));
         let mut r = repo.lock().unwrap();

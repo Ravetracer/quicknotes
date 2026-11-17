@@ -26,6 +26,7 @@ pub enum Feature {
     Mindmaps,
     DataFormats,
     GmTools,
+    Canvas,
 }
 
 /// The features with their preference labels and descriptions.
@@ -54,6 +55,11 @@ pub const LIST: &[(Feature, &str, &str)] = &[
         "GM Tools",
         "Adventures for game masters: chapters, character sheets, dice, initiative, play and world time",
     ),
+    (
+        Feature::Canvas,
+        "Canvases",
+        "Boards for sketching: drawings, shapes, sticky notes, emoji, connectors and images",
+    ),
 ];
 
 impl Feature {
@@ -71,6 +77,7 @@ impl Feature {
             Self::Mindmaps => 512,
             Self::DataFormats => 1024,
             Self::GmTools => 2048,
+            Self::Canvas => 4096,
         }
     }
 
@@ -90,6 +97,7 @@ impl Feature {
             Self::Mindmaps => "mindmaps",
             Self::DataFormats => "dataformats",
             Self::GmTools => "gmtools",
+            Self::Canvas => "canvas",
         }
     }
 }
@@ -118,6 +126,8 @@ pub struct Features {
     pub dataformats: bool,
     #[serde(default = "yes")]
     pub gmtools: bool,
+    #[serde(default = "yes")]
+    pub canvas: bool,
 }
 
 fn yes() -> bool {
@@ -127,7 +137,7 @@ fn yes() -> bool {
 impl Features {
     /// All features on (settings from before the switches existed).
     pub fn all() -> Self {
-        Self { charts: true, presentations: true, kanban: true, geocaching: true, plantuml: true, devtools: true, flashcards: true, folders: true, sync: true, mindmaps: true, dataformats: true, gmtools: true }
+        Self { charts: true, presentations: true, kanban: true, geocaching: true, plantuml: true, devtools: true, flashcards: true, folders: true, sync: true, mindmaps: true, dataformats: true, gmtools: true, canvas: true }
     }
 
     pub fn get(&self, f: Feature) -> bool {
@@ -144,6 +154,7 @@ impl Features {
             Feature::Mindmaps => self.mindmaps,
             Feature::DataFormats => self.dataformats,
             Feature::GmTools => self.gmtools,
+            Feature::Canvas => self.canvas,
         }
     }
 
@@ -161,6 +172,7 @@ impl Features {
             Feature::Mindmaps => self.mindmaps = on,
             Feature::DataFormats => self.dataformats = on,
             Feature::GmTools => self.gmtools = on,
+            Feature::Canvas => self.canvas = on,
         }
     }
 

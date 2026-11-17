@@ -72,6 +72,8 @@ pub enum PreviewKind {
     Mindmap,
     /// The GM screen of an adventure.
     Adventure,
+    /// Canvas: the board replaces the editor like a Kanban board.
+    Canvas,
 }
 
 impl PreviewKind {
@@ -93,6 +95,7 @@ impl PreviewKind {
             Some(crate::adventure::LANGUAGE) => Some(Self::Adventure),
             Some(slides::LANGUAGE) => Some(Self::Slides),
             Some(kanban::LANGUAGE) => Some(Self::Kanban),
+            Some(crate::canvas::LANGUAGE) if features::on(Feature::Canvas) => Some(Self::Canvas),
             _ => None,
         }
     }
@@ -105,7 +108,7 @@ impl PreviewKind {
     /// Shown automatically when such a file is opened (HTML files are often
     /// edited as code, so their preview is opt-in).
     pub fn auto_preview(self) -> bool {
-        !matches!(self, Self::Html | Self::Kanban)
+        !matches!(self, Self::Html | Self::Kanban | Self::Canvas)
     }
 
     fn render_delay_ms(self) -> u64 {
@@ -113,7 +116,7 @@ impl PreviewKind {
             Self::PlantUml => 700,
             Self::Html => 400,
             Self::Markdown | Self::Rst | Self::Slides | Self::Flashcards => 250,
-            Self::Kanban => 60,
+            Self::Kanban | Self::Canvas => 60,
             Self::Mindmap | Self::Adventure => 150,
         }
     }
@@ -142,6 +145,8 @@ enum Shell {
     Mindmap,
     /// The GM screen.
     Adventure,
+    /// A canvas.
+    Canvas,
 }
 
 struct Preview {
@@ -156,6 +161,8 @@ struct Preview {
 }
 
 pub type WidgetHook = Box<dyn Fn(&gtk::Widget)>;
+/// Handles `canvas-…` messages of the canvas page (paste, copy, insert image).
+pub type CanvasHook = Box<dyn Fn(&Rc<EditorTab>, &serde_json::Value)>;
 pub type MessageHook = Box<dyn Fn(&str)>;
 
 /// Result column of a calculation sheet (right gutter).
@@ -235,6 +242,7 @@ pub struct EditorTab {
     pub message_hook: RefCell<Option<MessageHook>>,
     /// Opens the note of a wikilink (`[[Title]]`) clicked in the preview.
     pub note_link_hook: RefCell<Option<MessageHook>>,
+    pub canvas_hook: RefCell<Option<CanvasHook>>,
     calc: RefCell<Option<CalcColumn>>,
     calc_timer: RefCell<Option<glib::SourceId>>,
     /// This tab (for callbacks of methods that only get `&self`).
@@ -414,6 +422,7 @@ impl EditorTab {
             webview_hook: RefCell::new(None),
             message_hook: RefCell::new(None),
             note_link_hook: RefCell::new(None),
+            canvas_hook: RefCell::new(None),
             calc: RefCell::new(None),
             calc_timer: RefCell::new(None),
             me: RefCell::new(std::rc::Weak::new()),
@@ -1565,6 +1574,9 @@ impl EditorTab {
                 return truncate(&title, 32);
             }
         }
+        if self.is_canvas() {
+            return truncate(&crate::canvas::title(&self.text()).unwrap_or_else(|| t!("Canvas").into()), 32);
+        }
         if self.language_id().as_deref() == Some(crate::adventure::LANGUAGE) {
             if let Some(title) = crate::adventure::title(&self.text()) {
                 return truncate(&title, 32);
@@ -1810,16 +1822,25 @@ impl EditorTab {
     }
 
     pub fn preview_visible(&self) -> bool {
-        self.is_kanban() || (self.preview_on.get() && self.preview_kind().is_some())
+        self.takes_over() || (self.preview_on.get() && self.preview_kind().is_some())
     }
 
     pub fn is_kanban(&self) -> bool {
         self.preview_kind() == Some(PreviewKind::Kanban)
     }
 
+    pub fn is_canvas(&self) -> bool {
+        self.preview_kind() == Some(PreviewKind::Canvas)
+    }
+
+    /// Boards and canvases: the web view replaces the editor.
+    fn takes_over(&self) -> bool {
+        matches!(self.preview_kind(), Some(PreviewKind::Kanban | PreviewKind::Canvas))
+    }
+
     /// State of the *Preview* toggle: for boards it shows the Markdown source.
     pub fn preview_toggle_state(&self) -> bool {
-        if self.is_kanban() {
+        if self.takes_over() {
             self.preview_on.get()
         } else {
             self.preview_visible()
@@ -1855,7 +1876,7 @@ impl EditorTab {
 
     fn sync_preview(self: &Rc<Self>) {
         self.sync_format_bar();
-        let kanban = self.is_kanban();
+        let kanban = self.takes_over();
         if let Some(source) = self.root.start_child() {
             source.set_visible(!self.transient.get() && (!kanban || (self.preview_on.get() && !self.focus.get())));
         }
@@ -2007,6 +2028,16 @@ impl EditorTab {
                             t.apply_board(board.clone());
                         }
                     }
+                    Some("canvas") => {
+                        if let Some(scene) = msg.get("scene") {
+                            t.apply_canvas(scene);
+                        }
+                    }
+                    Some(kind) if kind.starts_with("canvas-") => {
+                        if let Some(hook) = t.canvas_hook.borrow().as_ref() {
+                            hook(&t, &msg);
+                        }
+                    }
                     Some("undo") if t.buffer.can_undo() => t.buffer.undo(),
                     Some("redo") if t.buffer.can_redo() => t.buffer.redo(),
                     Some("learn") => {
@@ -2076,7 +2107,8 @@ impl EditorTab {
             | PreviewKind::Kanban
             | PreviewKind::Flashcards
             | PreviewKind::Mindmap
-            | PreviewKind::Adventure => None,
+            | PreviewKind::Adventure
+            | PreviewKind::Canvas => None,
         }
     }
 
@@ -2326,6 +2358,62 @@ impl EditorTab {
         }
     }
 
+    /// Writes a canvas edited in the web view back to the source.
+    fn apply_canvas(&self, scene: &serde_json::Value) {
+        if !scene.is_object() || scene.get("canvas").is_none() {
+            return;
+        }
+        let Ok(text) = serde_json::to_string(scene) else { return };
+        if text == self.text() {
+            return;
+        }
+        let (mut start, mut end) = self.buffer.bounds();
+        self.buffer.begin_user_action();
+        self.buffer.delete(&mut start, &mut end);
+        self.buffer.insert(&mut start, &text);
+        self.buffer.end_user_action();
+    }
+
+    /// Runs a script in the canvas page (once it is loaded).
+    pub fn canvas_js(&self, js: &str) {
+        let preview = self.preview.borrow();
+        let Some(p) = preview.as_ref().filter(|p| p.shell.get() == Shell::Canvas) else { return };
+        if p.loaded.get() {
+            p.webview.evaluate_javascript(js, None, None, None::<&gio::Cancellable>, |_| {});
+        } else {
+            let mut pending = p.pending.borrow_mut();
+            let js = match pending.take() {
+                Some(before) => format!("{before};{js}"),
+                None => js.to_owned(),
+            };
+            *pending = Some(js);
+        }
+    }
+
+    /// The canvas' web view, for the export.
+    pub fn canvas_webview(&self) -> Option<webkit6::WebView> {
+        let preview = self.preview.borrow();
+        preview.as_ref().filter(|p| p.shell.get() == Shell::Canvas && p.loaded.get()).map(|p| p.webview.clone())
+    }
+
+    fn render_canvas(&self) {
+        let text = self.text();
+        let scene: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or_else(|_| serde_json::from_str(&crate::canvas::template()).unwrap_or_default());
+        let js = format!("QC.update({})", scene);
+        let preview = self.preview.borrow();
+        let Some(p) = preview.as_ref() else { return };
+        if p.shell.get() != Shell::Canvas {
+            let theme = self.shared.theme.get();
+            self.load_page(p, &crate::canvas::page(theme.dark, &theme.preview_vars(), &self.id), Shell::Canvas);
+            *p.pending.borrow_mut() = Some(js);
+        } else if p.loaded.get() {
+            p.webview.evaluate_javascript(&js, None, None, None::<&gio::Cancellable>, |_| {});
+        } else {
+            *p.pending.borrow_mut() = Some(js);
+        }
+    }
+
     /// Writes a board edited in the board view back to the source.
     fn apply_board(&self, value: serde_json::Value) {
         let Ok(mut board) = serde_json::from_value::<kanban::Board>(value) else { return };
@@ -2438,6 +2526,7 @@ impl EditorTab {
             Some(PreviewKind::Html) => self.render_html_page(),
             Some(PreviewKind::Slides) => self.render_slides(),
             Some(PreviewKind::Kanban) => self.render_kanban(),
+            Some(PreviewKind::Canvas) => self.render_canvas(),
             Some(PreviewKind::Flashcards) => self.render_flashcards(),
             Some(PreviewKind::Mindmap) => self.render_mindmap(),
             Some(PreviewKind::Adventure) => self.render_adventure(),

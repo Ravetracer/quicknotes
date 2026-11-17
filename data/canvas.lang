@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- QuickNotes canvases: a JSON scene (`{"canvas":1, "items":[…]}`) edited in
+     the canvas view (see src/canvas.rs). The source is plain JSON. -->
+<language id="canvas" name="Canvas" version="2.0" section="Other">
+  <metadata>
+    <property name="globs">*.canvas.json</property>
+    <property name="suggested-suffix">.canvas.json</property>
+  </metadata>
+
+  <definitions>
+    <context id="canvas">
+      <include>
+        <context ref="json:json"/>
+      </include>
+    </context>
+  </definitions>
+</language>

@@ -3,6 +3,7 @@
 //! Layout below `$XDG_DATA_HOME/quicknotes` (usually `~/.local/share/quicknotes`):
 //! - `session.json`   tab order, per-tab metadata and global settings
 //! - `notes/<id>.txt` content of notes and of unsaved changes to opened files
+//! - `canvas/<id>/`   images of a canvas (see `canvas.rs`)
 //!
 //! With the app password on, the tabs part of the session is stored sealed in
 //! `session.json` (settings stay readable for the unlock screen) and notes are
@@ -11,6 +12,7 @@
 use crate::crypto::{self, Key, Lock};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -254,7 +256,17 @@ impl Session {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Data folder of the running test (tests that touch files).
+    static TEST_DIR: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
 pub fn data_dir() -> PathBuf {
+    #[cfg(test)]
+    if let Some(dir) = TEST_DIR.with(|d| d.borrow().clone()) {
+        return dir;
+    }
     dirs::data_dir()
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".local/share"))
         .join("quicknotes")
@@ -375,18 +387,158 @@ pub fn write_note(id: &str, content: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Deletes a note's content and, for canvases, its images.
 pub fn delete_note(id: &str) {
     let _ = fs::remove_file(note_path(id));
     let _ = fs::remove_file(sealed_note_path(id));
     let _ = fs::remove_file(locked_note_path(id));
+    delete_assets(id);
+}
+
+// ===== canvas images ==========================================================
+//
+// `canvas/<note id>/<sha256>.<ext>`, or `<name>.enc` sealed with the app key
+// (associated data `<note id>/<name>`) while the app password is on.
+
+fn canvas_root() -> PathBuf {
+    data_dir().join("canvas")
+}
+
+/// Folder of a canvas' images (`None` for ids that are not plain names).
+fn canvas_dir(id: &str) -> Option<PathBuf> {
+    let plain = !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    plain.then(|| canvas_root().join(id))
+}
+
+fn asset_aad(id: &str, name: &str) -> Vec<u8> {
+    format!("{id}/{name}").into_bytes()
+}
+
+/// Stores an image of a canvas under its content name, which is returned.
+pub fn add_asset(id: &str, data: &[u8], ext: &str) -> io::Result<String> {
+    let name = crate::canvas::asset_name(data, ext);
+    write_asset(id, &name, data)?;
+    Ok(name)
+}
+
+/// Stores an image under a known name (nothing to do when it exists).
+pub fn write_asset(id: &str, name: &str, data: &[u8]) -> io::Result<()> {
+    write_asset_with(app_key().as_ref(), id, name, data)
+}
+
+pub fn write_asset_with(key: Option<&Key>, id: &str, name: &str, data: &[u8]) -> io::Result<()> {
+    let dir = canvas_dir(id).filter(|_| crate::canvas::valid_name(name)).ok_or_else(|| io::Error::other("invalid image name"))?;
+    let (plain, sealed) = (dir.join(name), dir.join(format!("{name}.enc")));
+    match key {
+        Some(key) => {
+            if !sealed.exists() {
+                write_atomic(&sealed, &key.seal(data, &asset_aad(id, name)))?;
+            }
+            let _ = fs::remove_file(plain);
+        }
+        None => {
+            if !plain.exists() {
+                write_atomic(&plain, data)?;
+            }
+            let _ = fs::remove_file(sealed);
+        }
+    }
+    Ok(())
+}
+
+pub fn read_asset(id: &str, name: &str) -> Option<Vec<u8>> {
+    read_asset_with(app_key().as_ref(), id, name)
+}
+
+pub fn read_asset_with(key: Option<&Key>, id: &str, name: &str) -> Option<Vec<u8>> {
+    let dir = canvas_dir(id).filter(|_| crate::canvas::valid_name(name))?;
+    if let Ok(data) = fs::read(dir.join(format!("{name}.enc"))) {
+        return match key?.open(&data, &asset_aad(id, name)) {
+            Ok(plain) => Some(plain.to_vec()),
+            Err(e) => {
+                eprintln!("quicknotes: cannot decrypt image {id}/{name}: {e}");
+                None
+            }
+        };
+    }
+    fs::read(dir.join(name)).ok()
+}
+
+/// Names of the stored images of a canvas.
+pub fn list_assets(id: &str) -> BTreeSet<String> {
+    let Some(entries) = canvas_dir(id).and_then(|d| fs::read_dir(d).ok()) else { return BTreeSet::new() };
+    entries
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .map(|n| n.strip_suffix(".enc").map(str::to_owned).unwrap_or(n))
+        .filter(|n| crate::canvas::valid_name(n))
+        .collect()
+}
+
+pub fn remove_asset(id: &str, name: &str) {
+    if let Some(dir) = canvas_dir(id).filter(|_| crate::canvas::valid_name(name)) {
+        let _ = fs::remove_file(dir.join(name));
+        let _ = fs::remove_file(dir.join(format!("{name}.enc")));
+    }
+}
+
+/// Deletes all images of a canvas.
+pub fn delete_assets(id: &str) {
+    if let Some(dir) = canvas_dir(id) {
+        let _ = fs::remove_dir_all(dir);
+    }
+}
+
+/// Ids of the canvases that have an image folder.
+pub fn asset_owners() -> Vec<String> {
+    let Ok(entries) = fs::read_dir(canvas_root()) else { return Vec::new() };
+    entries
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect()
+}
+
+/// Removes the images of a canvas that its scene no longer uses.
+pub fn prune_assets(id: &str, used: &BTreeSet<String>) {
+    let stored = list_assets(id);
+    for name in stored.difference(used) {
+        remove_asset(id, name);
+    }
+    if used.is_empty() {
+        if let Some(dir) = canvas_dir(id) {
+            // Only removed when empty.
+            let _ = fs::remove_dir(dir);
+        }
+    }
+}
+
+/// Re-stores every canvas image with the current app key (or in plain
+/// form without one). Returns the number of failures.
+fn convert_assets(old_key: Option<&Key>) -> usize {
+    let new_key = app_key();
+    let mut failed = 0;
+    for id in asset_owners() {
+        for name in list_assets(&id) {
+            match read_asset_with(old_key, &id, &name) {
+                Some(data) => {
+                    remove_asset(&id, &name);
+                    if write_asset_with(new_key.as_ref(), &id, &name, &data).is_err() {
+                        failed += 1;
+                    }
+                }
+                None => failed += 1,
+            }
+        }
+    }
+    failed
 }
 
 /// Re-stores every note file with the current app key (or in plain text
 /// without one), also notes of no open tab. Returns the number of failures.
 pub fn convert_notes(old_key: Option<&Key>) -> usize {
-    let Ok(entries) = fs::read_dir(notes_dir()) else { return 0 };
     let mut failed = 0;
-    for entry in entries.flatten() {
+    for entry in fs::read_dir(notes_dir()).into_iter().flatten().flatten() {
         let path = entry.path();
         let (Some(id), Some(ext)) = (path.file_stem().and_then(|s| s.to_str()), path.extension().and_then(|s| s.to_str()))
         else {
@@ -409,7 +561,7 @@ pub fn convert_notes(old_key: Option<&Key>) -> usize {
             None => failed += 1,
         }
     }
-    failed
+    failed + convert_assets(old_key)
 }
 
 pub fn new_id() -> String {
@@ -422,7 +574,7 @@ pub fn new_id() -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -464,6 +616,53 @@ mod tests {
         assert_eq!(loaded.library[0].label.as_deref(), Some("Closed diary"));
         assert_eq!(loaded.folders[0].name, "Private folder");
         assert!(loaded.sealed.is_none());
+    }
+
+    /// Points the data folder of this test thread to a fresh folder.
+    pub(crate) fn temp_data_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("quicknotes-test-{name}-{}", new_id()));
+        set_data_dir(&dir);
+        dir
+    }
+
+    pub(crate) fn set_data_dir(dir: &Path) {
+        TEST_DIR.with(|d| *d.borrow_mut() = Some(dir.to_path_buf()));
+    }
+
+    #[test]
+    fn canvas_images() {
+        let dir = temp_data_dir("assets");
+        let png = b"\x89PNG\r\n\x1a\nimage".to_vec();
+        let name = add_asset("c1", &png, "png").unwrap();
+        assert!(dir.join("canvas/c1").join(&name).exists());
+        assert_eq!(read_asset("c1", &name), Some(png.clone()));
+        assert!(write_asset("../x", &name, &png).is_err());
+        assert!(write_asset("c1", "../../evil.png", &png).is_err());
+        assert_eq!(list_assets("c1").into_iter().collect::<Vec<_>>(), [name.clone()]);
+
+        // App password on: sealed, and readable only with the key.
+        let key = Key::random();
+        set_app_key(Some(key.clone()));
+        assert_eq!(convert_notes(None), 0);
+        assert!(!dir.join("canvas/c1").join(&name).exists());
+        let sealed = std::fs::read(dir.join("canvas/c1").join(format!("{name}.enc"))).unwrap();
+        assert!(!sealed.windows(5).any(|w| w == b"image"));
+        assert_eq!(read_asset("c1", &name), Some(png.clone()));
+        assert_eq!(read_asset_with(None, "c1", &name), None);
+        // And off again.
+        set_app_key(None);
+        assert_eq!(convert_notes(Some(&key)), 0);
+        assert_eq!(read_asset("c1", &name), Some(png.clone()));
+
+        // Unused images are pruned, deleting the note removes the folder.
+        let other = add_asset("c1", b"GIF89a", "gif").unwrap();
+        prune_assets("c1", &BTreeSet::from([name.clone()]));
+        assert_eq!(list_assets("c1").into_iter().collect::<Vec<_>>(), [name.clone()]);
+        assert!(!list_assets("c1").contains(&other));
+        assert_eq!(asset_owners(), ["c1"]);
+        delete_note("c1");
+        assert!(!dir.join("canvas/c1").exists());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

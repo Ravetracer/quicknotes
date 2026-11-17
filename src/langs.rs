@@ -15,6 +15,7 @@ const BUNDLED: &[(&str, &str)] = &[
     ("flashcards.lang", include_str!("../data/flashcards.lang")),
     ("mindmap.lang", include_str!("../data/mindmap.lang")),
     ("adventure.lang", include_str!("../data/adventure.lang")),
+    ("canvas.lang", include_str!("../data/canvas.lang")),
 ];
 
 /// Registers bundled language definitions. Must run before any language is used.
@@ -80,12 +81,18 @@ pub fn guess(path: Option<&Path>, content: &str) -> Option<Language> {
         if name.ends_with(".slides.md") {
             return by_id(crate::slides::LANGUAGE);
         }
+        if name.ends_with(".canvas.json") {
+            return by_id(crate::canvas::LANGUAGE);
+        }
         if name.ends_with(".mongodb.js") {
             return by_id(crate::mongo::LANGUAGE);
         }
         // JSON with a `$schema` has the content type application/schema+json,
         // which GtkSourceView takes for JavaScript.
         if name.ends_with(".json") {
+            if crate::canvas::is_canvas(content) {
+                return by_id(crate::canvas::LANGUAGE);
+            }
             return by_id("json");
         }
         let head = &content.as_bytes()[..content.len().min(4096)];
@@ -132,6 +139,9 @@ pub fn sniff(content: &str) -> Option<&'static str> {
     }
     if t.starts_with("@start") {
         return Some("plantuml");
+    }
+    if t.starts_with('{') && crate::canvas::is_canvas(t) {
+        return Some(crate::canvas::LANGUAGE);
     }
     if t.starts_with('{') || t.starts_with('[') {
         let sample = sample_of(t);
@@ -205,6 +215,7 @@ mod tests {
     fn sniffs_common_formats() {
         assert_eq!(sniff("  {\"a\": 1}"), Some("json"));
         assert_eq!(sniff("{ not json"), None);
+        assert_eq!(sniff(&crate::canvas::template()), Some(crate::canvas::LANGUAGE));
         assert_eq!(sniff("{ a: 1, b: 'x' }"), Some("mongodb"));
         assert_eq!(sniff("// orders\ndb.orders.find({})"), Some("mongodb"));
         assert_eq!(sniff("{\"$oid\": \"x\"}"), Some("json"));

@@ -79,6 +79,7 @@ pub enum Doc<'a> {
     Slides,
     Kanban,
     Mindmap,
+    Canvas,
     Adventure,
     Calc,
     /// reStructuredText, HTML or PlantUML with a preview.
@@ -118,6 +119,7 @@ pub fn topic(doc: Doc<'_>, cursor: Cursor<'_>, emmet: bool) -> &'static str {
         Doc::Slides => "slides",
         Doc::Kanban => "kanban",
         Doc::Mindmap => "mindmaps",
+        Doc::Canvas => "canvas",
         Doc::Adventure => "gmtools",
         Doc::Calc => "calc",
         Doc::Markdown => "formatting",
@@ -232,7 +234,7 @@ mod tests {
     #[test]
     fn every_topic_is_a_section() {
         let docs = [
-            Doc::Note, Doc::Markdown, Doc::Flashcards, Doc::Slides, Doc::Kanban, Doc::Calc, Doc::Preview,
+            Doc::Note, Doc::Markdown, Doc::Flashcards, Doc::Slides, Doc::Kanban, Doc::Canvas, Doc::Calc, Doc::Preview,
             Doc::Code("rust"), Doc::Code(crate::mongo::LANGUAGE), Doc::Image,
         ];
         let cursors = [
@@ -261,7 +263,7 @@ mod tests {
             assert_eq!(ifs, help.matches("<!-- end -->").count(), "unbalanced markers");
             let keys: Vec<&str> = crate::features::LIST.iter().map(|(f, ..)| f.key()).collect();
             let minimal = filter(help, |k| !keys.contains(&k));
-            for key in ["charts", "slides", "kanban", "geocaching", "devtools", "flashcards", "folders", "sync", "mindmaps", "dataformats", "gmtools"] {
+            for key in ["charts", "slides", "kanban", "geocaching", "devtools", "flashcards", "folders", "sync", "mindmaps", "dataformats", "gmtools", "canvas"] {
                 assert!(!minimal.contains(&format!("{{#{key}}}")), "{key}");
                 assert!(!minimal.contains(&format!("](#{key})")), "{key}");
                 assert!(filter(help, |_| true).contains(&format!("{{#{key}}}")), "{key}");

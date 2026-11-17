@@ -1,6 +1,6 @@
 # QuickNotes Help {#top}
 
-**Contents:** [Notes & tabs](#notes) · [Folders](#folders) · [Note templates](#note-templates) · [Checklists](#checklists) · [Tables](#tables) · [Formatting](#formatting) · [Math & music](#notation) · [Charts](#charts) · [Kanban](#kanban) · [Mind maps](#mindmaps) · [Flash cards](#flashcards) · [Calculations](#calc) · [Templates](#templates) ·
+**Contents:** [Notes & tabs](#notes) · [Folders](#folders) · [Note templates](#note-templates) · [Checklists](#checklists) · [Tables](#tables) · [Formatting](#formatting) · [Math & music](#notation) · [Charts](#charts) · [Kanban](#kanban) · [Mind maps](#mindmaps) · [Canvases](#canvas) · [Flash cards](#flashcards) · [Calculations](#calc) · [Templates](#templates) ·
 [Previews & export](#previews) · [Presentations](#slides) · [Data formats](#dataformats) · [Developer tools](#devtools) · [Emmet](#emmet) · [Geocaching](#geocaching) · [GM tools](#gmtools) ·
 [Security](#security) · [Backup](#backup) · [Sync](#sync) ·
 [Shortcuts](#shortcuts)
@@ -449,6 +449,41 @@ The new line is written like its siblings (same indentation and list marker).
 **Export** (main menu or context menu): *Export as PDF…* puts the map on one A4 page – landscape
 or portrait, whichever suits it – and *Export as SVG…* saves it as a vector image. Exports use
 the light look for the `default` theme.
+
+## Canvases {#canvas}
+
+A **canvas** is a free board for sketching ideas: drawings, shapes, sticky notes, emoji,
+stickers, arrows and pictures. Create one with *New Canvas* in the main menu (Ctrl+Shift+B).
+
+- **Tools** (bar on the left, key in brackets): select (V), hand (H), pen (P), highlighter (M),
+  eraser (E), rectangle (R), ellipse (O), diamond (D), triangle, line (L), arrow (A),
+  connector (C), text (T), sticky note (N), emoji and stickers, *Image…*. After placing a shape
+  the select tool is back; pen, highlighter and eraser stay on.
+- **Select** with a click, Shift+click or by dragging a frame. Drag to move, the handles resize
+  (Shift keeps the proportions) and rotate. Double-click (or Enter) edits the text of a shape,
+  sticky note, text box or connector; Esc ends it.
+- **Connectors** run from one object to another and follow when you move them – straight,
+  elbowed or curved, with arrow heads or dots at either end and an optional label.
+- **Style bar** (top, for the selection or the current tool): colour, fill, line width and style,
+  opacity, font size, alignment, arrow ends, order (front/back), group, lock and delete.
+- **Pictures**: paste screenshots and images with Ctrl+V, drop image files onto the canvas or use
+  *Image…* (PNG, JPEG, GIF, WebP, SVG up to 25 MB each).
+- **Keys**: Ctrl+Z / Ctrl+Shift+Z undo and redo, Ctrl+C / Ctrl+X / Ctrl+V copy, cut and paste
+  (also between canvases), Ctrl+D duplicates, Ctrl+A selects all, Delete removes, arrow keys nudge
+  (Shift: 10 px), Ctrl+G / Ctrl+Shift+G group and ungroup, Ctrl+] / Ctrl+[ move up and down
+  (with Shift: to the front or back).
+- **View**: the mouse wheel scrolls, Ctrl+wheel zooms, Space or the middle mouse button drags the
+  view. The buttons at the bottom right zoom, fit everything in and switch snapping to the grid.
+
+Everything is stored as vectors, so drawings stay sharp at any size. Pictures are kept next to the
+note in a folder of their own (encrypted with the app password) and synced, encrypted, with the
+canvas. Pictures the canvas no longer uses are cleaned up when it is closed; deleting the canvas
+for good (emptying the trash) removes its pictures as well. Without note folders, closing a canvas
+asks whether to save it as a file first.
+
+*Save As…* writes a single `.qncanvas` file with all pictures; opening one adds it as a new canvas.
+**Export** (main menu): *Export as PDF…*, *Export as SVG…* and *Export as PNG…* save the whole
+drawing.
 
 ## Calculations {#calc}
 
@@ -1101,6 +1136,9 @@ another target ends the previous one (your notes stay).
 | Ctrl+Shift+N | New calculation |
 <!-- if kanban -->
 | Ctrl+Shift+K | New Kanban board |
+<!-- end -->
+<!-- if canvas -->
+| Ctrl+Shift+B | New canvas |
 <!-- end -->
 | Ctrl+Alt+N, Ctrl+Alt+I | New note from template, insert template |
 | Ctrl+O, Ctrl+S, Ctrl+Shift+S | Open, save, save as |
