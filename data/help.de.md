@@ -474,7 +474,8 @@ Emoji, Sticker, Pfeile und Bilder. Ein neues legst du mit *Neues Canvas* im Haup
 
 - **Werkzeuge** (Leiste links, Taste in Klammern): Auswählen (V), Hand (H), Stift (P),
   Textmarker (M), Radierer (E), Rechteck (R), Ellipse (O), Raute (D), Dreieck, Linie (L),
-  Pfeil (A), Verbinder (C), Text (T), Haftnotiz (N), Emoji und Sticker, *Bild…*. Nach dem
+  Pfeil (A), Verbinder (C), Text (T), Haftnotiz (N), Rahmen (F), Formenbibliothek (S), Emoji und
+  Sticker, *Bild…*. Nach dem
   Platzieren einer Form ist wieder das Auswahlwerkzeug aktiv; Stift, Textmarker und Radierer
   bleiben an.
 - **Auswählen** per Klick, Umschalt+Klick oder durch Aufziehen eines Rahmens. Ziehen verschiebt,
@@ -484,7 +485,18 @@ Emoji, Sticker, Pfeile und Bilder. Ein neues legst du mit *Neues Canvas* im Haup
   gewinkelt oder gebogen, mit Pfeilspitzen oder Punkten an beiden Enden und optionaler Beschriftung.
 - **Stilleiste** (oben, für die Auswahl oder das aktuelle Werkzeug): Farbe, Füllung, Linienstärke
   und -art, Deckkraft, Schriftgröße, Ausrichtung, Pfeilenden, Reihenfolge (vorne/hinten),
-  Gruppieren, Sperren und Löschen.
+  Gruppieren, Sperren und Löschen. Bei zwei oder mehr ausgewählten Objekten richtet *Ausrichten
+  und verteilen* sie aus, verteilt sie gleichmäßig oder gibt ihnen die gleiche Breite oder Höhe.
+- **Formenbibliothek** (S oder der Formen-Knopf): Grundformen, Rahmen-Vorlagen,
+  Flussdiagramm-Symbole, Wireframe-Elemente (Fenster, Browser, Schaltflächen, Textfelder,
+  Kontrollkästchen, Tabs, Listen, Tabellen, …), mobile Bildschirme sowie weitere Formen und
+  Symbole, mit Suchfeld. Listen, Tabs, Tabellen und Navigationsleisten nehmen einen Eintrag pro
+  Zeile (Tabellenzellen getrennt durch `|`).
+- **Rahmen** (F) sind benannte Bereiche, etwa eine Seite oder ein Bildschirm: Wird ein Rahmen
+  verschoben, wandert sein Inhalt mit; beim Löschen bleibt der Inhalt erhalten. Vorlagen für A4,
+  Folien, Desktop und Smartphone stehen in der Bibliothek.
+- **Vorlagen**: Ein leeres Canvas bietet Vorlagen an – Brainstorming, Retrospektive,
+  Flussdiagramm, Wireframe, mobiler Bildschirm, SWOT-Analyse und Wochenplan.
 - **Bilder**: Bildschirmfotos und Bilder mit Strg+V einfügen, Bilddateien auf das Canvas ziehen
   oder *Bild…* verwenden (PNG, JPEG, GIF, WebP, SVG bis je 25 MB).
 - **Tasten**: Strg+Z / Strg+Umschalt+Z rückgängig und wiederholen, Strg+C / Strg+X / Strg+V
@@ -505,7 +517,8 @@ gespeichert werden soll.
 
 *Speichern unter…* schreibt eine einzelne `.qncanvas`-Datei mit allen Bildern; beim Öffnen
 wird sie als neues Canvas hinzugefügt. **Export** (Hauptmenü): *Als PDF exportieren…*, *Als SVG
-exportieren…* und *Als PNG exportieren…* speichern die ganze Zeichnung.
+exportieren…* und *Als PNG exportieren…* speichern die ganze Zeichnung – oder nur die Auswahl,
+wenn Objekte ausgewählt sind (ein ausgewählter Rahmen samt Inhalt).
 
 ## Berechnungen {#calc}
 

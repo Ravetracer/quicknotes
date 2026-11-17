@@ -457,7 +457,8 @@ stickers, arrows and pictures. Create one with *New Canvas* in the main menu (Ct
 
 - **Tools** (bar on the left, key in brackets): select (V), hand (H), pen (P), highlighter (M),
   eraser (E), rectangle (R), ellipse (O), diamond (D), triangle, line (L), arrow (A),
-  connector (C), text (T), sticky note (N), emoji and stickers, *Image…*. After placing a shape
+  connector (C), text (T), sticky note (N), frame (F), shape library (S), emoji and stickers,
+  *Image…*. After placing a shape
   the select tool is back; pen, highlighter and eraser stay on.
 - **Select** with a click, Shift+click or by dragging a frame. Drag to move, the handles resize
   (Shift keeps the proportions) and rotate. Double-click (or Enter) edits the text of a shape,
@@ -465,7 +466,17 @@ stickers, arrows and pictures. Create one with *New Canvas* in the main menu (Ct
 - **Connectors** run from one object to another and follow when you move them – straight,
   elbowed or curved, with arrow heads or dots at either end and an optional label.
 - **Style bar** (top, for the selection or the current tool): colour, fill, line width and style,
-  opacity, font size, alignment, arrow ends, order (front/back), group, lock and delete.
+  opacity, font size, alignment, arrow ends, order (front/back), group, lock and delete. With two
+  or more objects selected, *Align and distribute* lines them up, spaces them evenly or gives them
+  the same width or height.
+- **Shape library** (S, or the shapes button): basic shapes, frame presets, flowchart symbols,
+  wireframe elements (window, browser, buttons, text fields, checkboxes, tabs, lists, tables, …),
+  mobile screens and other shapes and symbols, with a search field. Lists, tabs, tables and
+  navigation bars take one entry per line (table cells separated by `|`).
+- **Frames** (F) are titled areas, e.g. a page or a screen: moving a frame moves what lies in it,
+  deleting it keeps the contents. Presets for A4, slides, desktop and phone are in the library.
+- **Templates**: an empty canvas offers templates – brainstorm, retrospective, flowchart,
+  wireframe, mobile screen, SWOT analysis and weekly plan.
 - **Pictures**: paste screenshots and images with Ctrl+V, drop image files onto the canvas or use
   *Image…* (PNG, JPEG, GIF, WebP, SVG up to 25 MB each).
 - **Keys**: Ctrl+Z / Ctrl+Shift+Z undo and redo, Ctrl+C / Ctrl+X / Ctrl+V copy, cut and paste
@@ -483,7 +494,7 @@ asks whether to save it as a file first.
 
 *Save As…* writes a single `.qncanvas` file with all pictures; opening one adds it as a new canvas.
 **Export** (main menu): *Export as PDF…*, *Export as SVG…* and *Export as PNG…* save the whole
-drawing.
+drawing – or only the selection when objects are selected (a selected frame with its contents).
 
 ## Calculations {#calc}
 
