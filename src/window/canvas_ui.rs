@@ -32,6 +32,44 @@ fn js_point(point: Point) -> String {
     }
 }
 
+fn str_of(msg: &Value, key: &str) -> String {
+    msg.get(key).and_then(Value::as_str).unwrap_or_default().to_owned()
+}
+
+thread_local! {
+    /// Listings of installed collections by package name (parsing is not free).
+    static LISTINGS: std::cell::RefCell<HashMap<String, crate::library_art::Listing>> = std::cell::RefCell::new(HashMap::new());
+    /// The last loaded stencil repository.
+    static REPO: std::cell::RefCell<Vec<crate::library_art::RepoItem>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// What the canvas pages show of the art library.
+fn library_json() -> Value {
+    let collections: Vec<Value> = crate::library_art::installed()
+        .iter()
+        .filter_map(|m| {
+            let listing = LISTINGS.with(|l| l.borrow().get(&m.pkg).cloned()).or_else(|| {
+                let listing = crate::library_art::listing(m)?;
+                LISTINGS.with(|l| l.borrow_mut().insert(m.pkg.clone(), listing.clone()));
+                Some(listing)
+            })?;
+            serde_json::to_value(listing).ok()
+        })
+        .collect();
+    let clipart: Vec<Value> = crate::library_art::clipart()
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "id": c.id,
+                "title": c.title,
+                "src": c.name,
+                "url": format!("{}://clipart/{}", crate::library_art::SCHEME, c.name),
+            })
+        })
+        .collect();
+    serde_json::json!({ "collections": collections, "clipart": clipart })
+}
+
 /// An image file the canvas can show: its bytes and extension.
 fn read_image(path: &Path) -> Result<(Vec<u8>, &'static str), String> {
     let size = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
@@ -77,6 +115,42 @@ impl Window {
                     }
                 }
                 Some("canvas-image") => this.canvas_choose_images(t),
+                Some("canvas-library") => this.canvas_send_library(t),
+                Some("canvas-clipart-search") => {
+                    let q = str_of(msg, "q");
+                    let page = msg.get("page").and_then(Value::as_u64).unwrap_or(1).max(1) as u32;
+                    this.clipart_search(t, q, page);
+                }
+                Some("canvas-clipart-add") => {
+                    let place = msg.get("place").and_then(Value::as_bool).unwrap_or(false);
+                    this.clipart_add(t, str_of(msg, "id"), str_of(msg, "title"), place.then_some(point));
+                }
+                Some("canvas-clipart-place") => {
+                    let src = str_of(msg, "src");
+                    match crate::library_art::clipart_file(&src) {
+                        Some(data) => this.canvas_add_images(t, vec![(data, "svg")], point),
+                        None => this.toast(t!("The graphic is missing")),
+                    }
+                }
+                Some("canvas-clipart-remove") => {
+                    crate::library_art::remove_clipart(&str_of(msg, "id"));
+                    this.refresh_library();
+                }
+                Some("canvas-icon") => {
+                    let data = crate::library_art::package_file(&str_of(msg, "coll"), &str_of(msg, "path"));
+                    match data.and_then(|d| canvas::sniff(&d).map(|ext| (d, ext))) {
+                        Some(image) => this.canvas_add_images(t, vec![image], point),
+                        None => this.toast(t!("The graphic is missing")),
+                    }
+                }
+                Some("canvas-stencil-import") => this.stencil_import(),
+                Some("canvas-stencil-browse") => this.stencil_browse(t),
+                Some("canvas-stencil-install") => this.stencil_install(t, str_of(msg, "id")),
+                Some("canvas-stencil-remove") => {
+                    crate::library_art::remove(&str_of(msg, "id"));
+                    this.refresh_library();
+                    this.send_repo(t);
+                }
                 _ => {}
             }
         }));
@@ -225,6 +299,135 @@ impl Window {
         }
         self.toast(t!("Could not read the dropped files"));
         false
+    }
+
+    // ----- art library -------------------------------------------------------
+
+    fn canvas_send_library(&self, t: &EditorTab) {
+        t.canvas_js(&format!("QC.library({})", library_json()));
+    }
+
+    /// Sends the library to every open canvas.
+    pub(super) fn refresh_library(&self) {
+        let json = library_json();
+        for entry in self.tabs.borrow().values() {
+            if let Tab::Text(t) = &entry.tab {
+                if t.is_canvas() {
+                    t.canvas_js(&format!("QC.library({json})"));
+                }
+            }
+        }
+    }
+
+    fn clipart_search(self: &Rc<Self>, t: &Rc<EditorTab>, q: String, page: u32) {
+        let t = t.clone();
+        t.canvas_js("QC.busy('clipart', true)");
+        glib::spawn_future_local(async move {
+            let query = q.clone();
+            let result = gio::spawn_blocking(move || crate::clipart::search(&query, page)).await.unwrap_or_else(|_| Err("failed".into()));
+            let reply = match result {
+                Ok(p) => serde_json::json!({ "q": q, "page": page, "items": p.items, "more": p.more }),
+                Err(e) => serde_json::json!({ "q": q, "page": page, "error": t!("OpenClipart cannot be reached: {}", e) }),
+            };
+            t.canvas_js("QC.busy('clipart', false)");
+            t.canvas_js(&format!("QC.clipartResults({reply})"));
+        });
+    }
+
+    /// Saves a graphic of OpenClipart in the collection, and puts it on the
+    /// canvas with `place`.
+    fn clipart_add(self: &Rc<Self>, t: &Rc<EditorTab>, id: String, title: String, place: Option<Point>) {
+        let (this, t) = (self.clone(), t.clone());
+        t.canvas_js("QC.busy('clipart', true)");
+        glib::spawn_future_local(async move {
+            let oc = id.clone();
+            let result = gio::spawn_blocking(move || crate::clipart::download(&oc)).await.unwrap_or_else(|_| Err("failed".into()));
+            t.canvas_js("QC.busy('clipart', false)");
+            match result.and_then(|svg| crate::library_art::add_clipart(&id, &title, &svg).map(|_| svg)) {
+                Ok(svg) => {
+                    if let Some(point) = place {
+                        this.canvas_add_images(&t, vec![(svg, "svg")], point);
+                    }
+                    this.refresh_library();
+                }
+                Err(e) => this.toast(&t!("Cannot get the graphic: {}", e)),
+            }
+        });
+    }
+
+    fn stencil_import(self: &Rc<Self>) {
+        let filter = gtk::FileFilter::new();
+        filter.set_name(Some(t!("Pencil stencil collections")));
+        filter.add_pattern("*.zip");
+        filter.add_pattern("*.epz");
+        let filters = gio::ListStore::new::<gtk::FileFilter>();
+        filters.append(&filter);
+        let dialog = gtk::FileDialog::builder().title(t!("Import Pencil Stencils")).modal(true).filters(&filters).build();
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let Ok(file) = dialog.open_future(Some(&this.win)).await else { return };
+            let Some(path) = file.path() else { return };
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let result = match std::fs::metadata(&path) {
+                Ok(m) if m.len() as usize > crate::library_art::MAX_PACKAGE => Err(t!("The stencil collection is larger than 60 MB").to_owned()),
+                _ => std::fs::read(&path).map_err(|e| e.to_string()).and_then(|data| crate::library_art::install(&data, &name, "")),
+            };
+            match result {
+                Ok(meta) => {
+                    this.toast(&t!("Installed “{}”", meta.name));
+                    this.refresh_library();
+                }
+                Err(e) => this.toast(&t!("Cannot import {}: {}", name, e)),
+            }
+        });
+    }
+
+    fn send_repo(&self, t: &EditorTab) {
+        let mut items = REPO.with(|r| r.borrow().clone());
+        if items.is_empty() {
+            return;
+        }
+        crate::library_art::mark_installed(&mut items);
+        t.canvas_js(&format!("QC.stencilRepo({})", serde_json::json!({ "items": items })));
+    }
+
+    fn stencil_browse(self: &Rc<Self>, t: &Rc<EditorTab>) {
+        let t = t.clone();
+        t.canvas_js("QC.busy('repo', true)");
+        glib::spawn_future_local(async move {
+            let result = gio::spawn_blocking(crate::library_art::repository).await.unwrap_or_else(|_| Err("failed".into()));
+            t.canvas_js("QC.busy('repo', false)");
+            match result {
+                Ok(items) => {
+                    REPO.with(|r| *r.borrow_mut() = items);
+                    let mut items = REPO.with(|r| r.borrow().clone());
+                    crate::library_art::mark_installed(&mut items);
+                    t.canvas_js(&format!("QC.stencilRepo({})", serde_json::json!({ "items": items })));
+                }
+                Err(e) => {
+                    let error = t!("The stencil repository cannot be reached: {}", e);
+                    t.canvas_js(&format!("QC.stencilRepo({})", serde_json::json!({ "error": error })));
+                }
+            }
+        });
+    }
+
+    fn stencil_install(self: &Rc<Self>, t: &Rc<EditorTab>, id: String) {
+        let Some(item) = REPO.with(|r| r.borrow().iter().find(|i| i.id == id).cloned()) else { return };
+        let (this, t) = (self.clone(), t.clone());
+        t.canvas_js("QC.busy('install', true)");
+        glib::spawn_future_local(async move {
+            let url = item.url.clone();
+            let result = gio::spawn_blocking(move || crate::library_art::download(&url)).await.unwrap_or_else(|_| Err("failed".into()));
+            let result = result.and_then(|data| crate::library_art::install(&data, &item.url, &item.version));
+            t.canvas_js("QC.busy('install', false)");
+            match result {
+                Ok(meta) => this.toast(&t!("Installed “{}”", meta.name)),
+                Err(e) => this.toast(&t!("Cannot install “{}”: {}", item.name, e)),
+            }
+            this.refresh_library();
+            this.send_repo(&t);
+        });
     }
 
     // ----- files ---------------------------------------------------------

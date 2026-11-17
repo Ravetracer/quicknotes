@@ -472,7 +472,15 @@ stickers, arrows and pictures. Create one with *New Canvas* in the main menu (Ct
 - **Shape library** (S, or the shapes button): basic shapes, frame presets, flowchart symbols,
   wireframe elements (window, browser, buttons, text fields, checkboxes, tabs, lists, tables, …),
   mobile screens and other shapes and symbols, with a search field. Lists, tabs, tables and
-  navigation bars take one entry per line (table cells separated by `|`).
+  navigation bars take one entry per line (table cells separated by `|`). Click an entry to put it
+  in the middle of the view, or drag it to the spot you want – emoji and stickers, too.
+- **Clip art and stencils**: in the library, *Browse OpenClipart…* searches openclipart.org (free,
+  public-domain graphics); a picked graphic lands on the canvas and in your own *OpenClipArt*
+  collection (+ saves it without placing). *Get more stencils…* installs collections from Pencil's
+  official stencil repository, *Import Pencil stencils…* any Pencil collection (zip). Icon
+  collections (e.g. Community Material Icons) are searchable and work like clip art. Graphics put
+  on a canvas are copied into the canvas, so they sync with it. Preferences → Sync → *Sync Stencils
+  and Clip Art* also syncs the installed collections and your OpenClipArt collection.
 - **Frames** (F) are titled areas, e.g. a page or a screen: moving a frame moves what lies in it,
   deleting it keeps the contents. Presets for A4, slides, desktop and phone are in the library.
 - **Templates**: an empty canvas offers templates – brainstorm, retrospective, flowchart,

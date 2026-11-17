@@ -68,6 +68,8 @@ pub struct Settings {
     pub github_sync: bool,
     /// Sync which notes are open in tabs.
     pub sync_open: bool,
+    /// Sync the installed stencil collections and the saved clip art.
+    pub sync_library: bool,
     /// Sync target chosen in the preferences: github, nextcloud, webdav,
     /// folder or s3.
     pub sync_kind: String,
@@ -125,6 +127,7 @@ impl Default for Settings {
             github_repo: String::new(),
             github_sync: false,
             sync_open: true,
+            sync_library: false,
             obsidian_vaults: Vec::new(),
             sync_kind: String::new(),
             sync_target: None,

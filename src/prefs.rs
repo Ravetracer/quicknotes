@@ -43,6 +43,7 @@ pub trait Handler {
     fn github_disconnect(&self);
     fn set_github_sync(&self, on: bool);
     fn set_sync_open(&self, on: bool);
+    fn set_sync_library(&self, on: bool);
     fn github_sync_now(&self);
     /// The kind of target chosen in the Sync page.
     fn set_sync_kind(&self, kind: &str);
@@ -857,6 +858,14 @@ fn sync_page(dialog: &adw::PreferencesDialog, settings: &Settings, handler: &Rc<
     let h = handler.clone();
     open_row.connect_active_notify(move |row| h.set_sync_open(row.is_active()));
     options.add(&open_row);
+    let library_row = adw::SwitchRow::builder()
+        .title(t!("Sync Stencils and Clip Art"))
+        .subtitle(t!("Installed Pencil stencil collections and the OpenClipArt collection are available on the other computers too"))
+        .active(settings.sync_library)
+        .build();
+    let h = handler.clone();
+    library_row.connect_active_notify(move |row| h.set_sync_library(row.is_active()));
+    options.add(&library_row);
     page.add(&options);
     let sync_visible = {
         let (groups, remote_status) = (groups.clone(), remote_status.clone());

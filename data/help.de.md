@@ -491,7 +491,16 @@ Emoji, Sticker, Pfeile und Bilder. Ein neues legst du mit *Neues Canvas* im Haup
   Flussdiagramm-Symbole, Wireframe-Elemente (Fenster, Browser, Schaltflächen, Textfelder,
   Kontrollkästchen, Tabs, Listen, Tabellen, …), mobile Bildschirme sowie weitere Formen und
   Symbole, mit Suchfeld. Listen, Tabs, Tabellen und Navigationsleisten nehmen einen Eintrag pro
-  Zeile (Tabellenzellen getrennt durch `|`).
+  Zeile (Tabellenzellen getrennt durch `|`). Ein Klick setzt den Eintrag in die Mitte der Ansicht,
+  oder du ziehst ihn an die gewünschte Stelle – das geht auch mit Emoji und Stickern.
+- **Cliparts und Schablonen**: In der Bibliothek durchsucht *OpenClipart durchsuchen…* openclipart.org
+  (freie, gemeinfreie Grafiken); eine gewählte Grafik landet auf dem Canvas und in deiner eigenen
+  Sammlung *OpenClipArt* (+ speichert sie, ohne sie zu platzieren). *Weitere Schablonen holen…*
+  installiert Sammlungen aus Pencils offiziellem Schablonen-Verzeichnis, *Pencil-Schablonen
+  importieren…* jede Pencil-Sammlung (Zip). Symbol-Sammlungen (z. B. Community Material Icons) sind
+  durchsuchbar und funktionieren wie Cliparts. Grafiken auf einem Canvas werden in das Canvas
+  kopiert und mit ihm synchronisiert. Einstellungen → Sync → *Schablonen und Cliparts abgleichen*
+  gleicht auch die installierten Sammlungen und deine OpenClipArt-Sammlung ab.
 - **Rahmen** (F) sind benannte Bereiche, etwa eine Seite oder ein Bildschirm: Wird ein Rahmen
   verschoben, wandert sein Inhalt mit; beim Löschen bleibt der Inhalt erhalten. Vorlagen für A4,
   Folien, Desktop und Smartphone stehen in der Bibliothek.

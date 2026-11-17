@@ -52,6 +52,9 @@ pub const TOKEN_PAGE: &str = "https://github.com/settings/personal-access-tokens
 pub const DIR: &str = "quicknotes/";
 pub const VAULT: &str = "quicknotes/vault.json";
 pub const INDEX: &str = "quicknotes/index.enc";
+/// The art library (stencil collections, clip art), with the option on.
+pub const LIBRARY: &str = "quicknotes/library.enc";
+const LIBRARY_AAD: &[u8] = b"quicknotes-sync-library";
 const INDEX_AAD: &[u8] = b"quicknotes-sync-index";
 const FORMAT: u32 = 1;
 /// Attempts when other machines push at the same time.
@@ -930,6 +933,8 @@ pub struct Outcome {
     pub conflicts: usize,
     /// Canvas images to store locally: canvas id, name, bytes.
     pub assets: Vec<(String, String, Vec<u8>)>,
+    /// The merged art library and the packages/graphics fetched for it.
+    pub library: Option<(crate::library_art::Index, HashMap<String, Vec<u8>>)>,
 }
 
 /// Everything a sync run needs from the window.
@@ -945,6 +950,8 @@ pub struct Job {
     pub assets: HashMap<String, BTreeSet<String>>,
     /// The app key the local images are sealed with (app password on).
     pub local_key: Option<Key>,
+    /// The local art library, when it is synced.
+    pub library: Option<crate::library_art::Index>,
 }
 
 fn note_path(id: &str) -> String {
@@ -960,9 +967,58 @@ fn asset_aad(name: &str) -> Vec<u8> {
     format!("quicknotes-asset/{name}").into_bytes()
 }
 
+/// The art library: merges the local one (when it is synced) with the
+/// repository's, uploads its files and fetches the ones missing here.
+/// Returns the merged library with the fetched files, and the files the
+/// asset clean-up must keep (whatever any library refers to).
+#[allow(clippy::type_complexity)]
+fn sync_library(
+    gh: &dyn Remote,
+    key: &Key,
+    local: Option<&crate::library_art::Index>,
+    files: &HashMap<String, String>,
+    writes: &mut Vec<(String, Option<String>)>,
+) -> Result<(Option<(crate::library_art::Index, HashMap<String, Vec<u8>>)>, BTreeSet<String>)> {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let remote: crate::library_art::Index = match files.get(LIBRARY) {
+        Some(version) => {
+            let plain = key.open_text(&gh.read(LIBRARY, version)?, LIBRARY_AAD).map_err(|_| Error::Key)?;
+            serde_json::from_str(&plain).unwrap_or_default()
+        }
+        None => Default::default(),
+    };
+    let mut keep: BTreeSet<String> = remote.files().into_iter().collect();
+    let Some(local) = local else { return Ok((None, keep)) };
+    let merged = crate::library_art::merge(local, &remote);
+    let have: BTreeSet<String> = local.files().into_iter().collect();
+    let mut fetched = HashMap::new();
+    for name in merged.files() {
+        let path = asset_path(&name);
+        if have.contains(&name) {
+            if !files.contains_key(&path) {
+                if let Some(data) = crate::library_art::local_file(&name) {
+                    writes.push((path, Some(b64.encode(key.seal(&data, &asset_aad(&name))))));
+                }
+            }
+        } else if let Some(version) = files.get(&path) {
+            let sealed = b64.decode(gh.read(&path, version)?.trim()).map_err(|_| Error::Key)?;
+            let plain = key.open(&sealed, &asset_aad(&name)).map_err(|_| Error::Key)?.to_vec();
+            fetched.insert(name.clone(), plain);
+        }
+        keep.insert(name);
+    }
+    if merged != remote {
+        let json = serde_json::to_string(&merged).map_err(|e| Error::Net(e.to_string()))?;
+        writes.push((LIBRARY.to_owned(), Some(key.seal_text(&json, LIBRARY_AAD))));
+    }
+    Ok((Some((merged, fetched)), keep))
+}
+
 /// Canvas images: uploads the ones the repository lacks, fetches the ones
 /// missing here and removes the ones no canvas uses any more (only when
 /// the content of every note is known).
+#[allow(clippy::too_many_arguments)]
 fn sync_assets(
     gh: &dyn Remote,
     key: &Key,
@@ -970,6 +1026,7 @@ fn sync_assets(
     local_key: Option<&Key>,
     contents: &BTreeMap<String, Option<&str>>,
     files: &HashMap<String, String>,
+    keep: &BTreeSet<String>,
     writes: &mut Vec<(String, Option<String>)>,
 ) -> Result<Vec<(String, String, Vec<u8>)>> {
     use base64::Engine;
@@ -1025,7 +1082,7 @@ fn sync_assets(
         let prefix = format!("{DIR}assets/");
         for path in files.keys().filter(|p| p.starts_with(&prefix)) {
             let name = path[prefix.len()..].trim_end_matches(".enc");
-            if !used.contains(name) {
+            if !used.contains(name) && !keep.contains(name) {
                 writes.push((path.clone(), None));
             }
         }
@@ -1133,7 +1190,8 @@ pub fn run(gh: &dyn Remote, key: &Key, job: Job, new_id: &mut dyn FnMut() -> Str
                 (id.clone(), fetched.or(local))
             })
             .collect();
-        let assets = sync_assets(gh, key, &job.assets, job.local_key.as_ref(), &contents, files, &mut writes)?;
+        let (library, keep) = sync_library(gh, key, job.library.as_ref(), files, &mut writes)?;
+        let assets = sync_assets(gh, key, &job.assets, job.local_key.as_ref(), &contents, files, &keep, &mut writes)?;
         for id in &plan.upload {
             let path = note_file(ca, id, &local[id].hash());
             // Content-addressed: already there with this content.
@@ -1177,7 +1235,7 @@ pub fn run(gh: &dyn Remote, key: &Key, job: Job, new_id: &mut dyn FnMut() -> Str
             }
         }
         let state = State { repo: state.repo.clone(), notes: plan.base, folders: plan.folders.clone(), rev };
-        return Ok(Outcome { state, changes, folders: plan.folders, sent, conflicts: plan.conflicts, assets });
+        return Ok(Outcome { state, changes, folders: plan.folders, sent, conflicts: plan.conflicts, assets, library });
     }
     Err(Error::Moved)
 }
@@ -1600,12 +1658,14 @@ pub(crate) mod tests {
         name: &'static str,
         /// Data folder (canvas images).
         pub dir: std::path::PathBuf,
+        /// Syncs the art library.
+        pub library: bool,
     }
 
     impl Machine {
         pub fn new(name: &'static str, notes: Vec<Note>) -> Self {
             let dir = crate::store::tests::temp_data_dir(name);
-            Machine { notes, folders: Vec::new(), state: State::default(), ids: 0, name, dir }
+            Machine { notes, folders: Vec::new(), state: State::default(), ids: 0, name, dir, library: false }
         }
 
         /// Makes this machine's data folder the current one.
@@ -1629,6 +1689,7 @@ pub(crate) mod tests {
                 stamp: "now".into(),
                 assets,
                 local_key: None,
+                library: self.library.then(crate::library_art::local_index),
             };
             let name = self.name;
             let mut ids = self.ids;
@@ -1662,6 +1723,9 @@ pub(crate) mod tests {
             }
             for (id, name, data) in &out.assets {
                 crate::store::write_asset(id, name, data).unwrap();
+            }
+            if let Some((index, files)) = &out.library {
+                crate::library_art::apply(index, files);
             }
             self.folders = out.folders.clone();
             self.state = out.state.clone();
@@ -1766,6 +1830,7 @@ pub(crate) mod tests {
             stamp: String::new(),
             assets: HashMap::new(),
             local_key: None,
+            library: None,
         }, &mut String::new);
         assert!(matches!(wrong, Err(Error::Key)));
     }
@@ -1817,6 +1882,52 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn art_library_is_synced_when_wanted() {
+        let (ep, repo) = mock_github();
+        let gh = Client::new(ep, "tok", "me/notes");
+        let (lock, key) = Lock::create("pw", crate::crypto::tests::fast_kdf());
+        gh.create_vault(&lock).unwrap();
+        let mut a = Machine::new("lib-a", vec![note("n", "x")]);
+        a.library = true;
+        a.enter();
+        let pkg = crate::library_art::tests::package_zip("W", crate::library_art::tests::SHAPES, &[]);
+        let meta = crate::library_art::install(&pkg, "test", "1").unwrap();
+        let clip = crate::library_art::add_clipart("7", "Cat", b"<svg>cat</svg>").unwrap();
+        a.sync(&gh, &key);
+        let files = repo.lock().unwrap().files();
+        assert!(files.contains_key(LIBRARY));
+        assert!(files.contains_key(&asset_path(&meta.pkg)) && files.contains_key(&asset_path(&clip)));
+
+        // A machine without the option gets nothing and removes nothing.
+        let mut b = Machine::new("lib-b", vec![]);
+        let out = b.sync(&gh, &key);
+        assert!(out.library.is_none());
+        b.enter();
+        assert!(crate::library_art::installed().is_empty());
+        b.edit("n", "changed");
+        b.sync(&gh, &key);
+        assert!(repo.lock().unwrap().files().contains_key(&asset_path(&meta.pkg)));
+
+        // With the option, it gets everything; removals travel back.
+        let mut c = Machine::new("lib-c", vec![]);
+        c.library = true;
+        c.sync(&gh, &key);
+        c.enter();
+        assert_eq!(crate::library_art::installed().len(), 1);
+        assert_eq!(crate::library_art::clipart().len(), 1);
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        crate::library_art::remove_clipart("7");
+        c.sync(&gh, &key);
+        a.sync(&gh, &key);
+        a.enter();
+        assert!(crate::library_art::clipart().is_empty());
+        assert!(!repo.lock().unwrap().files().contains_key(&asset_path(&clip)));
+        for m in [&a, &b, &c] {
+            let _ = std::fs::remove_dir_all(&m.dir);
+        }
+    }
+
+    #[test]
     fn repositories_without_quicknotes_data_are_refused() {
         let (ep, repo) = mock_github();
         let gh = Client::new(ep, "tok", "me/notes");
@@ -1829,6 +1940,7 @@ pub(crate) mod tests {
             stamp: String::new(),
             assets: HashMap::new(),
             local_key: None,
+            library: None,
         };
         assert!(matches!(run(&gh, &Key::random(), job(), &mut String::new), Err(Error::Repo(_))));
         let mut r = repo.lock().unwrap();

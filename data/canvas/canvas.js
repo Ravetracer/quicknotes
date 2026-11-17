@@ -208,6 +208,32 @@
 //   st_fire: Fire
 //   st_rocket: Rocket
 //   st_plus1: Plus one
+//   catClipart: OpenClipArt
+//   browseClipart: Browse OpenClipart…
+//   clipartTitle: OpenClipart
+//   clipartSearch: Search OpenClipart
+//   clipartHint: Search the free clip art of OpenClipart.org.
+//   clipartCredit: OpenClipart.org · public domain (CC0)
+//   clipartSave: Save to my collection
+//   clipartSaved: In my collection
+//   clipartEmpty: Nothing saved yet – browse OpenClipart and pick graphics.
+//   more: More
+//   searching: Loading…
+//   removeItem: Remove from the collection
+//   removeColl: Remove collection
+//   confirmRemove: Click again to remove
+//   showMore: Show more ({} of {})
+//   pencilSoon: Live Pencil shapes arrive with the next update
+//   importStencils: Import Pencil stencils…
+//   getStencils: Get more stencils…
+//   repoTitle: Pencil stencils
+//   repoHint: Collections from the official Pencil repository.
+//   install: Install
+//   update: Update
+//   installed: Installed
+//   remove: Remove
+//   back: Back
+//   by: by {}
 (function () {
   'use strict';
 
@@ -349,7 +375,8 @@
     dH: 'M3 4v16M21 4v16M8 7h3v10H8zM13 7h3v10h-3z',
     dV: 'M4 3h16M4 21h16M7 8h10v3H7zM7 13h10v3H7z',
     sW: 'M4 6h16v4H4zM4 14h16v4H4z',
-    sH: 'M6 4h4v16H6zM14 4h4v16h-4z'
+    sH: 'M6 4h4v16H6zM14 4h4v16h-4z',
+    search: 'M10.5 4a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM15.5 15.5L20 20'
   };
 
   function icon(name, sw) {
@@ -2213,6 +2240,7 @@
 
   function closePop() {
     if (pop) { pop.remove(); pop = null; popAnchor = null; }
+    libRefresh = clipRefresh = repoRefresh = null;
   }
 
   function openPop(anchorEl, build, cls) {
@@ -2222,13 +2250,20 @@
     pop.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
     build(pop);
     app.appendChild(pop);
-    var r = anchorEl.getBoundingClientRect(), pw = pop.offsetWidth, ph = pop.offsetHeight;
-    var left, top;
-    if (toolsBox.contains(anchorEl)) { left = r.right + 8; top = r.top; } else { left = r.left; top = r.bottom + 6; }
-    left = Math.max(6, Math.min(left, window.innerWidth - pw - 6));
-    top = Math.max(6, Math.min(top, window.innerHeight - ph - 6));
-    pop.style.left = left + 'px';
-    pop.style.top = top + 'px';
+    var el = pop;
+    function place() {
+      if (pop !== el) return;
+      var r = anchorEl.getBoundingClientRect(), pw = el.offsetWidth, ph = el.offsetHeight;
+      var left, top;
+      if (toolsBox.contains(anchorEl)) { left = r.right + 8; top = r.top; } else { left = r.left; top = r.bottom + 6; }
+      left = Math.max(6, Math.min(left, window.innerWidth - pw - 6));
+      top = Math.max(6, Math.min(top, window.innerHeight - ph - 6));
+      el.style.left = left + 'px';
+      el.style.top = top + 'px';
+    }
+    place();
+    // Panels that fill in later (search results, the repository) stay inside the view.
+    if (window.ResizeObserver) new ResizeObserver(place).observe(el);
   }
 
   document.addEventListener('pointerdown', function (e) {
@@ -2278,6 +2313,7 @@
               closePop();
               insertAtCenter(newItem('sticker', null, { k: k, w: 96, h: 96 }));
             });
+            dragTile(b, function () { return newItem('sticker', null, { k: k, w: 96, h: 96 }); });
             g.appendChild(b);
           });
           list.appendChild(g);
@@ -2296,6 +2332,7 @@
               closePop();
               insertAtCenter(newItem('emoji', null, { ch: e.ch, w: 64, h: 64 }));
             });
+            dragTile(b, function () { return newItem('emoji', null, { ch: e.ch, w: 64, h: 64 }); });
             g.appendChild(b);
           });
           list.appendChild(g);
@@ -2331,6 +2368,59 @@
     return s;
   }
 
+  /// Lets a library or picker tile be dragged onto the canvas: `make`
+  /// returns the new item (with its size). A click without moving still
+  /// runs the tile's click handler.
+  function dragTile(el, make) {
+    el.setAttribute('draggable', 'false');
+    el.addEventListener('dragstart', function (e) { e.preventDefault(); });
+    el.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      var sx = e.clientX, sy = e.clientY, it = null, ghost = null;
+      function place(ev) {
+        var p = toWorld(ev.clientX, ev.clientY);
+        it.x = p.x - it.w / 2;
+        it.y = p.y - it.h / 2;
+        if (snapOn && !ev.altKey) { it.x = snap(it.x); it.y = snap(it.y); }
+      }
+      function move(ev) {
+        if (!it) {
+          if (Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) < 6) return;
+          it = make();
+          closePop();
+          ghost = svgEl('g', { opacity: 0.6, 'pointer-events': 'none' });
+          world.appendChild(ghost);
+          svg.classList.add('dropping');
+        }
+        ev.preventDefault();
+        place(ev);
+        ghost.textContent = '';
+        ghost.appendChild(draw(it, true));
+      }
+      function up(ev) {
+        document.removeEventListener('pointermove', move, true);
+        document.removeEventListener('pointerup', up, true);
+        document.removeEventListener('pointercancel', up, true);
+        if (!it) return;
+        ghost.remove();
+        svg.classList.remove('dropping');
+        // Dropped outside the board or on a panel: nothing happens.
+        var r = svg.getBoundingClientRect();
+        var target = document.elementFromPoint(ev.clientX, ev.clientY);
+        var inside = ev.type === 'pointerup' && ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom;
+        if (!inside || (target && target.closest && target.closest('.panel'))) return;
+        place(ev);
+        addItem(it);
+        setTool('select');
+        setSel([it.id]);
+        commit();
+      }
+      document.addEventListener('pointermove', move, true);
+      document.addEventListener('pointerup', up, true);
+      document.addEventListener('pointercancel', up, true);
+    });
+  }
+
   function addStencil(k) {
     var def = STENCILS[k];
     var it = newItem('stencil', null, { k: k, w: def.w, h: def.h });
@@ -2344,16 +2434,333 @@
     ensureVisible(it);
   }
 
+  // ----- library: OpenClipart, installed collections, stencil repository -----------------------
+
+  var library = { collections: [], clipart: [] };
+  var libExpanded = {};
+  var libRefresh = null;      // re-fills the open library popover
+  var libAnchor = null;
+  var clip = { q: '', page: 0, items: [], more: false, error: '', busy: false };
+  var clipRefresh = null;
+  var repo = { items: null, error: '', busy: false };
+  var repoRefresh = null;
+  var installBusy = false;
+
+  function libName(path) {
+    var f = String(path).split('/').pop();
+    return f.replace(/\.[a-z0-9]+$/i, '').replace(/[-_]+/g, ' ');
+  }
+
+  function isSaved(id) {
+    return library.clipart.some(function (c) { return String(c.id) === String(id); });
+  }
+
+  /// Drag of a tile whose item Rust creates (clip art, icons): a preview
+  /// image follows the pointer; on a drop over the board `drop(x, y)` gets
+  /// the client coordinates. A click without moving keeps the click handler.
+  function dragOut(el, url, drop) {
+    el.setAttribute('draggable', 'false');
+    el.addEventListener('dragstart', function (e) { e.preventDefault(); });
+    el.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0 || (e.target.closest && e.target.closest('.corner'))) return;
+      var sx = e.clientX, sy = e.clientY, ghost = null, size = 96;
+      function move(ev) {
+        if (!ghost) {
+          if (Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) < 6) return;
+          closePop();
+          ghost = h('div', { class: 'drag-ghost' });
+          if (url) ghost.appendChild(h('img', { src: url, alt: '' }));
+          document.body.appendChild(ghost);
+          svg.classList.add('dropping');
+        }
+        ev.preventDefault();
+        ghost.style.left = (ev.clientX - size / 2) + 'px';
+        ghost.style.top = (ev.clientY - size / 2) + 'px';
+      }
+      function up(ev) {
+        document.removeEventListener('pointermove', move, true);
+        document.removeEventListener('pointerup', up, true);
+        document.removeEventListener('pointercancel', up, true);
+        if (!ghost) return;
+        ghost.remove();
+        svg.classList.remove('dropping');
+        var r = svg.getBoundingClientRect();
+        var target = document.elementFromPoint(ev.clientX, ev.clientY);
+        var inside = ev.type === 'pointerup' && ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom;
+        if (!inside || (target && target.closest && target.closest('.panel'))) return;
+        drop(ev.clientX, ev.clientY);
+      }
+      document.addEventListener('pointermove', move, true);
+      document.addEventListener('pointerup', up, true);
+      document.addEventListener('pointercancel', up, true);
+    });
+  }
+
+  function spinner() { return h('span', { class: 'spinner', role: 'status', 'aria-label': S('searching', 'Loading…') }); }
+
+  /// A header with a remove button that asks by a second click.
+  function collHeader(title, onRemove) {
+    var head = h('h4', { class: 'collhead' }, h('span', null, title));
+    if (onRemove) {
+      var armed = false, x = h('button', { class: 'collx', type: 'button', title: S('removeColl', 'Remove collection') }, '×');
+      x.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (!armed) {
+          armed = true;
+          x.classList.add('armed');
+          x.textContent = S('confirmRemove', 'Click again to remove');
+          setTimeout(function () {
+            if (!x.isConnected) return;
+            armed = false;
+            x.classList.remove('armed');
+            x.textContent = '×';
+          }, 3000);
+          return;
+        }
+        onRemove();
+      });
+      head.appendChild(x);
+    }
+    return head;
+  }
+
+  /// The library sections after the built-in shapes (clip art, collections).
+  function librarySections(list, q, tile) {
+    var match = function () {
+      if (!q) return true;
+      for (var i = 0; i < arguments.length; i++) if (arguments[i] && String(arguments[i]).toLowerCase().indexOf(q) >= 0) return true;
+      return false;
+    };
+    function grid(tiles, cls) {
+      var g = h('div', { class: 'grid tiles' + (cls ? ' ' + cls : '') });
+      tiles.forEach(function (t) { g.appendChild(t); });
+      list.appendChild(g);
+      return g;
+    }
+
+    // OpenClipArt: saved items and the browser.
+    var clips = library.clipart.filter(function (c) { return match(c.title, 'openclipart', 'clipart'); });
+    if (clips.length || !q || match(S('catClipart', 'OpenClipArt'), 'openclipart')) {
+      list.appendChild(collHeader(S('catClipart', 'OpenClipArt')));
+      var tiles = clips.map(function (c) {
+        var b = h('button', { class: 'tile pic', type: 'button', title: c.title || '' }, h('img', { src: c.url, alt: '', loading: 'lazy' }));
+        var x = h('span', { class: 'corner remove', title: S('removeItem', 'Remove from the collection') }, '×');
+        x.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+        x.addEventListener('click', function (e) {
+          e.stopPropagation();
+          post({ type: 'canvas-clipart-remove', id: c.id });
+        });
+        b.appendChild(x);
+        b.addEventListener('click', function () {
+          closePop();
+          post({ type: 'canvas-clipart-place', src: c.src, x: null, y: null });
+        });
+        dragOut(b, c.url, function (cx, cy) { post({ type: 'canvas-clipart-place', src: c.src, x: cx, y: cy }); });
+        return b;
+      });
+      var browse = h('button', { class: 'tile browse', type: 'button', title: S('browseClipart', 'Browse OpenClipart…') }, iconSpan('search'));
+      browse.addEventListener('click', function () { clipartPop(); });
+      tiles.push(browse);
+      grid(tiles, 'pics');
+      if (!library.clipart.length && !q) list.appendChild(h('div', { class: 'note' }, S('clipartEmpty', 'Nothing saved yet – browse OpenClipart and pick graphics.')));
+    }
+
+    // Installed collections.
+    library.collections.forEach(function (c) {
+      var remove = function () { post({ type: 'canvas-stencil-remove', id: c.id }); };
+      if (c.kind === 'icons') {
+        var icons = (c.icons || []).filter(function (p) { return match(libName(p), c.name); });
+        if (!icons.length) return;
+        list.appendChild(collHeader(c.name, remove));
+        // Big bundles (thousands of icons) are shown in chunks, searching or not.
+        var all = icons.length, limit = Math.min(all, libExpanded[c.id] || 120);
+        grid(icons.slice(0, limit).map(function (path) {
+          var url = (c.base || '') + path;
+          var b = h('button', { class: 'tile pic', type: 'button', title: libName(path) }, h('img', { src: url, alt: '', loading: 'lazy' }));
+          b.addEventListener('click', function () {
+            closePop();
+            post({ type: 'canvas-icon', coll: c.id, path: path, x: null, y: null });
+          });
+          dragOut(b, url, function (cx, cy) { post({ type: 'canvas-icon', coll: c.id, path: path, x: cx, y: cy }); });
+          return b;
+        }), 'pics');
+        if (limit < all) {
+          var more = h('button', { class: 'linkbtn', type: 'button' }, S('showMore', 'Show more ({} of {})').replace('{}', limit).replace('{}', all));
+          more.addEventListener('click', function () { libExpanded[c.id] = limit + 360; if (libRefresh) libRefresh(); });
+          list.appendChild(more);
+        }
+      } else {
+        var shapes = (c.shapes || []).filter(function (sh) { return match(sh.name, sh.id, c.name); });
+        if (!shapes.length) return;
+        list.appendChild(collHeader(c.name, remove));
+        grid(shapes.map(function (sh) {
+          var art = sh.icon ? h('img', { src: sh.icon, alt: '', loading: 'lazy' }) : h('span', { class: 'noicon' }, (sh.name || '?').slice(0, 2));
+          return h('span', { class: 'tile pic soon', title: sh.name + ' – ' + S('pencilSoon', 'Live Pencil shapes arrive with the next update') }, art);
+        }), 'pics');
+      }
+    });
+
+    // Footer.
+    if (!q) {
+      var foot = h('div', { class: 'libfoot' });
+      var imp = h('button', { class: 'btn', type: 'button' }, S('importStencils', 'Import Pencil stencils…'));
+      imp.addEventListener('click', function () { closePop(); post({ type: 'canvas-stencil-import' }); });
+      var get = h('button', { class: 'btn', type: 'button' }, S('getStencils', 'Get more stencils…'));
+      get.addEventListener('click', function () { repoPop(); });
+      foot.append(imp, get);
+      if (installBusy) foot.appendChild(spinner());
+      list.appendChild(foot);
+    }
+  }
+
+  /// Anchor for the library's sub-panels: the shapes button.
+  function libAnchorEl() { return (libAnchor && libAnchor.isConnected) ? libAnchor : shapeBtn; }
+
+  function panelHead(p, title, back) {
+    var head = h('div', { class: 'panelhead' });
+    var b = h('button', { class: 'btn small', type: 'button', title: S('back', 'Back') }, '‹');
+    b.addEventListener('click', back);
+    head.append(b, h('strong', null, title));
+    p.appendChild(head);
+    return head;
+  }
+
+  function clipartPop() {
+    openPop(libAnchorEl(), function (p) {
+      panelHead(p, S('clipartTitle', 'OpenClipart'), function () { libraryPop(libAnchorEl()); });
+      var form = h('div', { class: 'row searchrow' });
+      var search = h('input', { class: 'search', type: 'search', placeholder: S('clipartSearch', 'Search OpenClipart'), value: clip.q });
+      form.appendChild(search);
+      var status = h('span', { class: 'status' });
+      form.appendChild(status);
+      var list = h('div', { class: 'list' });
+      var credit = h('div', { class: 'credit' }, S('clipartCredit', 'OpenClipart.org · public domain (CC0)'));
+      p.append(form, list, credit);
+      function run(page) {
+        var q = search.value.trim();
+        if (!q) return;
+        if (page === 1) { clip.items = []; clip.more = false; }
+        clip.q = q;
+        clip.error = '';
+        clip.busy = true;
+        fill();
+        post({ type: 'canvas-clipart-search', q: q, page: page });
+      }
+      search.addEventListener('keydown', function (e) {
+        e.stopPropagation();
+        if (e.key === 'Escape') closePop();
+        else if (e.key === 'Enter') { e.preventDefault(); run(1); }
+      });
+      function fill() {
+        status.textContent = '';
+        if (clip.busy) status.appendChild(spinner());
+        list.textContent = '';
+        if (clip.error) list.appendChild(h('div', { class: 'error' }, clip.error));
+        if (!clip.items.length && !clip.busy && !clip.error) {
+          list.appendChild(h('div', { class: 'empty' }, clip.q ? S('noResults', 'Nothing found') : S('clipartHint', 'Search the free clip art of OpenClipart.org.')));
+        }
+        var g = h('div', { class: 'grid results' });
+        clip.items.forEach(function (it) {
+          var saved = isSaved(it.id);
+          var b = h('button', { class: 'tile result', type: 'button', title: it.title || '' }, h('img', { src: it.thumb, alt: '', loading: 'lazy' }));
+          var plus = h('span', { class: 'corner ' + (saved ? 'saved' : 'save'), title: saved ? S('clipartSaved', 'In my collection') : S('clipartSave', 'Save to my collection') }, saved ? '✓' : '+');
+          plus.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+          plus.addEventListener('click', function (e) {
+            e.stopPropagation();
+            if (!isSaved(it.id)) post({ type: 'canvas-clipart-add', id: it.id, title: it.title, place: false, x: null, y: null });
+          });
+          b.appendChild(plus);
+          b.addEventListener('click', function () {
+            closePop();
+            post({ type: 'canvas-clipart-add', id: it.id, title: it.title, place: true, x: null, y: null });
+          });
+          dragOut(b, it.thumb, function (cx, cy) {
+            post({ type: 'canvas-clipart-add', id: it.id, title: it.title, place: true, x: cx, y: cy });
+          });
+          g.appendChild(b);
+        });
+        if (clip.items.length) list.appendChild(g);
+        if (clip.more && !clip.busy) {
+          var more = h('button', { class: 'btn morebtn', type: 'button' }, S('more', 'More'));
+          more.addEventListener('click', function () { run(clip.page + 1); });
+          list.appendChild(more);
+        }
+      }
+      clipRefresh = fill;
+      fill();
+      setTimeout(function () { search.focus(); search.select(); }, 0);
+    }, 'clippop');
+  }
+
+  function repoPop() {
+    openPop(libAnchorEl(), function (p) {
+      panelHead(p, S('repoTitle', 'Pencil stencils'), function () { libraryPop(libAnchorEl()); });
+      var status = h('span', { class: 'status' });
+      p.firstChild.appendChild(status);
+      p.appendChild(h('div', { class: 'note' }, S('repoHint', 'Collections from the official Pencil repository.')));
+      var list = h('div', { class: 'list' });
+      p.appendChild(list);
+      function fill() {
+        status.textContent = '';
+        if (repo.busy || installBusy) status.appendChild(spinner());
+        list.textContent = '';
+        if (repo.error) list.appendChild(h('div', { class: 'error' }, repo.error));
+        (repo.items || []).forEach(function (it) {
+          var row = h('div', { class: 'repoitem' });
+          row.appendChild(it.thumb ? h('img', { class: 'thumb', src: it.thumb, alt: '', loading: 'lazy' }) : h('div', { class: 'thumb' }));
+          var info = h('div', { class: 'info' });
+          info.appendChild(h('div', { class: 'name' }, it.name || it.id));
+          var meta = [];
+          if (it.author) meta.push(S('by', 'by {}').replace('{}', it.author));
+          if (it.version) meta.push(it.version);
+          if (it.license) meta.push(it.license);
+          if (meta.length) info.appendChild(h('div', { class: 'meta' }, meta.join(' · ')));
+          if (it.description) info.appendChild(h('div', { class: 'desc', title: it.description }, it.description));
+          row.appendChild(info);
+          var acts = h('div', { class: 'acts' });
+          if (!it.installed || it.update) {
+            var inst = h('button', { class: 'btn primary', type: 'button' }, it.installed ? S('update', 'Update') : S('install', 'Install'));
+            if (installBusy) inst.disabled = true;
+            inst.addEventListener('click', function () {
+              installBusy = true;
+              fill();
+              post({ type: 'canvas-stencil-install', id: it.id });
+            });
+            acts.appendChild(inst);
+          } else {
+            acts.appendChild(h('span', { class: 'ok' }, '✓ ' + S('installed', 'Installed')));
+          }
+          if (it.installed) {
+            var rm = h('button', { class: 'btn', type: 'button' }, S('remove', 'Remove'));
+            var armed = false;
+            rm.addEventListener('click', function () {
+              if (!armed) { armed = true; rm.textContent = S('confirmRemove', 'Click again to remove'); rm.classList.add('danger'); return; }
+              post({ type: 'canvas-stencil-remove', id: it.id });
+            });
+            acts.appendChild(rm);
+          }
+          row.appendChild(acts);
+          list.appendChild(row);
+        });
+      }
+      repoRefresh = fill;
+      if (!repo.items && !repo.busy) { repo.busy = true; repo.error = ''; post({ type: 'canvas-stencil-browse' }); }
+      fill();
+    }, 'repopop');
+  }
+
   function libraryPop(anchorEl) {
+    libAnchor = anchorEl;
     openPop(anchorEl, function (p) {
       var search = h('input', { class: 'search', type: 'search', placeholder: S('search', 'Search') });
       var list = h('div', { class: 'list' });
       p.append(search, list);
       search.addEventListener('keydown', function (e) { e.stopPropagation(); if (e.key === 'Escape') closePop(); });
-      function tile(name, art, onClick, on) {
+      function tile(name, art, onClick, on, make) {
         var b = h('button', { class: 'tile' + (on ? ' on' : ''), type: 'button', title: name });
         b.appendChild(art);
         b.addEventListener('click', onClick);
+        if (make) dragTile(b, make);
         return b;
       }
       function section(title, tiles) {
@@ -2373,23 +2780,32 @@
           return false;
         };
         var basic = SHAPES.filter(function (s) { return match(SHAPE_NAMES[s], s); }).map(function (s) {
-          return tile(tip(SHAPE_NAMES[s], SHAPE_KEYS[s]), iconSpan(s), function () { setTool(s); closePop(); }, s === tool);
+          return tile(tip(SHAPE_NAMES[s], SHAPE_KEYS[s]), iconSpan(s), function () { setTool(s); closePop(); }, s === tool, function () {
+            return newItem(s, TOOL_CAT[s], { w: 160, h: s === 'rect' ? 100 : 120 });
+          });
         });
         if (match(S('frame', 'Frame'), 'Frame')) {
           basic.push(tile(tip(S('frame', 'Frame'), 'F'), iconSpan('frame'), function () { setTool('frame'); closePop(); }, tool === 'frame'));
         }
         section(S('catBasic', 'Basic shapes'), basic);
         section(S('catFrames', 'Frames'), FRAME_PRESETS.filter(function (f) { return match(S(f[0], f[1]), f[1]); }).map(function (f) {
-          return tile(S(f[0], f[1]) + ' · ' + f[2] + ' × ' + f[3], framePreview(f[2], f[3]), function () { closePop(); addFrame(f); });
+          return tile(S(f[0], f[1]) + ' · ' + f[2] + ' × ' + f[3], framePreview(f[2], f[3]), function () { closePop(); addFrame(f); }, false, function () {
+            return newItem('frame', 'frame', { w: f[2], h: f[3], txt: S(f[0], f[1]) });
+          });
         }));
         STENCIL_CATS.forEach(function (c) {
           section(S(c[1], c[2]), Object.keys(STENCILS).filter(function (k) { return STENCILS[k].c === c[0] && match(stName(k), STENCILS[k].n, k); }).map(function (k) {
-            return tile(stName(k), stencilPreview(k), function () { closePop(); addStencil(k); });
+            return tile(stName(k), stencilPreview(k), function () { closePop(); addStencil(k); }, false, function () {
+              return newItem('stencil', null, { k: k, w: STENCILS[k].w, h: STENCILS[k].h });
+            });
           }));
         });
+        librarySections(list, q, tile);
         if (!list.childNodes.length) list.appendChild(h('div', { class: 'empty' }, S('noResults', 'Nothing found')));
       }
-      search.addEventListener('input', fill);
+      var fillTimer = null;
+      search.addEventListener('input', function () { clearTimeout(fillTimer); fillTimer = setTimeout(fill, 150); });
+      libRefresh = function () { var top = list.scrollTop; fill(); list.scrollTop = top; };
       fill();
       setTimeout(function () { search.focus(); }, 0);
     }, 'libpop');
@@ -3508,6 +3924,56 @@
     },
 
     /// Zooms around the centre: step > 0 in, < 0 out, 0 to 100 %.
+    /// The installed collections and the saved clip art.
+    library: function (lib) {
+      library = { collections: (lib && lib.collections) || [], clipart: (lib && lib.clipart) || [] };
+      installBusy = false;
+      if (repo.items) {
+        var ids = {};
+        library.collections.forEach(function (c) { ids[c.id] = true; });
+        repo.items.forEach(function (it) { if (!ids[it.id]) { it.installed = false; it.update = false; } });
+      }
+      if (libRefresh) libRefresh();
+      if (clipRefresh) clipRefresh();
+      if (repoRefresh) repoRefresh();
+    },
+
+    clipartResults: function (r) {
+      if (!r || r.q !== clip.q) return;
+      clip.busy = false;
+      clip.page = r.page || 1;
+      if (r.error) {
+        clip.error = r.error;
+      } else {
+        clip.error = '';
+        var seen = {};
+        clip.items.forEach(function (it) { seen[it.id] = true; });
+        (r.items || []).forEach(function (it) { if (!seen[it.id]) clip.items.push(it); });
+        clip.more = !!r.more;
+      }
+      if (clipRefresh) clipRefresh();
+    },
+
+    stencilRepo: function (r) {
+      repo.busy = false;
+      if (!r || r.error) {
+        repo.error = (r && r.error) || '';
+      } else {
+        repo.error = '';
+        repo.items = r.items || [];
+      }
+      if (repoRefresh) repoRefresh();
+    },
+
+    busy: function (kind, on) {
+      if (kind === 'clipart') clip.busy = !!on;
+      else if (kind === 'repo') repo.busy = !!on;
+      else if (kind === 'install') installBusy = !!on;
+      if (clipRefresh) clipRefresh();
+      if (repoRefresh) repoRefresh();
+      if (libRefresh && kind === 'install') libRefresh();
+    },
+
     zoomBy: function (step) {
       if (step === 0) zoomCentered(1);
       else zoomCentered(step > 0 ? view.z * 1.25 : view.z / 1.25);
@@ -3571,4 +4037,5 @@
   setTool('select');
   applyView();
   render();
+  post({ type: 'canvas-library' });
 })();

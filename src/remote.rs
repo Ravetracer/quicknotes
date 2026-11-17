@@ -184,11 +184,12 @@ fn known(rel: &str) -> bool {
         .strip_prefix(&format!("{DIR}assets/"))
         .and_then(|n| n.strip_suffix(".enc"))
         .is_some_and(crate::canvas::valid_name);
-    asset || rel == VAULT || rel == INDEX || (rel.starts_with(&format!("{DIR}notes/")) && rel.ends_with(".enc") && !rel.contains(' '))
+    asset || rel == VAULT || rel == INDEX || rel == github::LIBRARY || (rel.starts_with(&format!("{DIR}notes/")) && rel.ends_with(".enc") && !rel.contains(' '))
 }
 
-/// Largest file read from a sync target (an encrypted image of 25 MB in Base64).
-const MAX_READ: u64 = 64 * 1024 * 1024;
+/// Largest file read from a sync target (an encrypted stencil package of
+/// 60 MB in Base64).
+const MAX_READ: u64 = 96 * 1024 * 1024;
 
 fn read_body(response: ureq::Response) -> Result<String> {
     use std::io::Read;
@@ -230,7 +231,7 @@ impl Remote for FolderRemote {
             return Err(Error::Repo(t!("The folder does not exist").into()));
         }
         let mut files = HashMap::new();
-        for rel in [VAULT, INDEX] {
+        for rel in [VAULT, INDEX, github::LIBRARY] {
             if let Some(v) = Self::version(&self.root.join(rel)) {
                 files.insert(rel.to_owned(), v);
             }

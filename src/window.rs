@@ -2601,6 +2601,7 @@ impl Window {
                 .unwrap_or_default(),
             assets: store::asset_owners().into_iter().map(|id| (id.clone(), store::list_assets(&id))).collect(),
             local_key: store::app_key(),
+            library: self.settings.borrow().sync_library.then(crate::library_art::local_index),
         };
         let this = self.clone();
         let name = active.name();
@@ -2666,6 +2667,11 @@ impl Window {
         for (id, name, data) in std::mem::take(&mut outcome.assets) {
             if let Err(e) = store::write_asset(&id, &name, &data) {
                 eprintln!("quicknotes: cannot store image {id}/{name}: {e}");
+            }
+        }
+        if let Some((index, files)) = outcome.library.take() {
+            if crate::library_art::apply(&index, &files) {
+                self.refresh_library();
             }
         }
         let (mut received, mut deleted, mut conflicts) = (0, 0, outcome.conflicts);
@@ -6921,6 +6927,12 @@ impl prefs::Handler for PrefsBridge {
     fn set_sync_open(&self, on: bool) {
         self.with(|w| {
             w.settings.borrow_mut().sync_open = on;
+            w.persist_all();
+        });
+    }
+    fn set_sync_library(&self, on: bool) {
+        self.with(|w| {
+            w.settings.borrow_mut().sync_library = on;
             w.persist_all();
         });
     }

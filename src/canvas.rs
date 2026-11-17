@@ -89,10 +89,13 @@ pub fn payload_assets(payload: &Value) -> BTreeSet<String> {
     payload.get("items").and_then(Value::as_array).map(|i| items_assets(i)).unwrap_or_default()
 }
 
-/// Image file names: 64 hex digits and a known extension (no paths).
+/// Asset file names: 64 hex digits and a known extension (no paths). Besides
+/// images, `zip` names Pencil stencil packages.
 pub fn valid_name(name: &str) -> bool {
     let Some((hash, ext)) = name.split_once('.') else { return false };
-    hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) && IMAGE_TYPES.iter().any(|(e, _)| *e == ext)
+    hash.len() == 64
+        && hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        && (ext == "zip" || IMAGE_TYPES.iter().any(|(e, _)| *e == ext))
 }
 
 /// Canvas images: file extension and MIME type.
@@ -101,6 +104,9 @@ pub const IMAGE_TYPES: &[(&str, &str)] =
 
 pub fn mime_type(name: &str) -> &'static str {
     let ext = name.rsplit('.').next().unwrap_or("");
+    if ext == "zip" {
+        return "application/zip";
+    }
     IMAGE_TYPES.iter().find(|(e, _)| *e == ext).map(|(_, m)| *m).unwrap_or("application/octet-stream")
 }
 
@@ -399,6 +405,32 @@ const STRINGS: &[(&str, &str)] = &[
     ("st_fire", "Fire"),
     ("st_rocket", "Rocket"),
     ("st_plus1", "Plus one"),
+    ("catClipart", "OpenClipArt"),
+    ("browseClipart", "Browse OpenClipart…"),
+    ("clipartTitle", "OpenClipart"),
+    ("clipartSearch", "Search OpenClipart"),
+    ("clipartHint", "Search the free clip art of OpenClipart.org."),
+    ("clipartCredit", "OpenClipart.org · public domain (CC0)"),
+    ("clipartSave", "Save to my collection"),
+    ("clipartSaved", "In my collection"),
+    ("clipartEmpty", "Nothing saved yet – browse OpenClipart and pick graphics."),
+    ("more", "More"),
+    ("searching", "Loading…"),
+    ("removeItem", "Remove from the collection"),
+    ("removeColl", "Remove collection"),
+    ("confirmRemove", "Click again to remove"),
+    ("showMore", "Show more ({} of {})"),
+    ("pencilSoon", "Live Pencil shapes arrive with the next update"),
+    ("importStencils", "Import Pencil stencils…"),
+    ("getStencils", "Get more stencils…"),
+    ("repoTitle", "Pencil stencils"),
+    ("repoHint", "Collections from the official Pencil repository."),
+    ("install", "Install"),
+    ("update", "Update"),
+    ("installed", "Installed"),
+    ("remove", "Remove"),
+    ("back", "Back"),
+    ("by", "by {}"),
 ];
 
 // ===== images in the web view ================================================
@@ -415,9 +447,33 @@ pub fn register_scheme() {
     }
     let Some(context) = webkit6::WebContext::default() else { return };
     if let Some(security) = context.security_manager() {
-        security.register_uri_scheme_as_secure(SCHEME);
-        security.register_uri_scheme_as_cors_enabled(SCHEME);
+        for scheme in [SCHEME, crate::library_art::SCHEME] {
+            security.register_uri_scheme_as_secure(scheme);
+            security.register_uri_scheme_as_cors_enabled(scheme);
+        }
     }
+    // Files of the art library: `stencils/<collection>/<path>`, `clipart/<name>`.
+    context.register_uri_scheme(crate::library_art::SCHEME, |request| {
+        let uri = request.uri().map(|u| u.to_string()).unwrap_or_default();
+        let rest = uri.strip_prefix(&format!("{}://", crate::library_art::SCHEME)).unwrap_or("");
+        let rest = urlencoding::decode(rest.split(['?', '#']).next().unwrap_or("")).map(|r| r.into_owned()).unwrap_or_default();
+        let data = match rest.split_once('/') {
+            Some(("stencils", path)) => path.split_once('/').and_then(|(id, file)| crate::library_art::package_file(id, file)),
+            Some(("clipart", name)) => crate::library_art::clipart_file(name),
+            _ => None,
+        };
+        match data {
+            Some(data) => {
+                let len = data.len() as i64;
+                let stream = gio::MemoryInputStream::from_bytes(&glib::Bytes::from_owned(data));
+                request.finish(&stream, len, Some(crate::library_art::mime_type(&rest)));
+            }
+            None => {
+                let mut e = glib::Error::new(gio::IOErrorEnum::NotFound, "not found");
+                request.finish_error(&mut e);
+            }
+        }
+    });
     context.register_uri_scheme(SCHEME, |request| {
         let uri = request.uri().map(|u| u.to_string()).unwrap_or_default();
         let rest = uri.strip_prefix(&format!("{SCHEME}://")).unwrap_or("");
