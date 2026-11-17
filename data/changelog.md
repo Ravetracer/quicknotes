@@ -1,3 +1,11 @@
+## 0.20.0 – 2026-11-17
+
+- **Canvases** (switchable): a free board for sketching ideas – pen, highlighter and eraser, shapes, text, sticky notes, emoji and stickers, connectors that follow their objects, images pasted from the clipboard or dropped onto the board, frames, grouping, alignment, undo and zoom. Everything stays vector; export as SVG, PDF or PNG, *Save As* writes a single `.qncanvas` file.
+- **Shape library** with flowchart symbols, wireframe and mobile elements and more; templates for brainstorming, retrospectives, flowcharts, wireframes, SWOT and weekly plans. Drag shapes, emoji and stickers onto the board.
+- **OpenClipart**: browse openclipart.org from the library; picked graphics go onto the canvas and into your own *OpenClipArt* collection.
+- **Pencil stencils**: install collections from Pencil's official repository or any Pencil zip – icon collections work like clip art, shape collections as **live Pencil shapes** (they resize the Pencil way, editable text, properties, actions, handles, collection settings such as shadcn/ui themes).
+- Images and stencil collections used on a canvas live in its own folder (encrypted with the app password) and sync with it; Preferences → Sync → *Sync Stencils and Clip Art* also syncs your installed collections and clip art.
+
 ## 0.19.0 – 2026-11-16
 
 - Sync: notes opened or closed on one device are opened or closed on your other devices as well (Preferences → Sync → *Sync Open Notes*, on by default).

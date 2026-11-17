@@ -1,3 +1,11 @@
+## 0.20.0 – 2026-11-17
+
+- **Canvases** (abschaltbar): eine freie Fläche zum Skizzieren von Ideen – Stift, Textmarker und Radierer, Formen, Text, Haftnotizen, Emoji und Sticker, Verbinder, die ihren Objekten folgen, Bilder aus der Zwischenablage oder per Ziehen, Rahmen, Gruppieren, Ausrichten, Rückgängig und Zoom. Alles bleibt Vektorgrafik; Export als SVG, PDF oder PNG, *Speichern unter* schreibt eine einzelne `.qncanvas`-Datei.
+- **Formenbibliothek** mit Flussdiagramm-Symbolen, Wireframe- und Mobil-Elementen und mehr; Vorlagen für Brainstorming, Retrospektiven, Flussdiagramme, Wireframes, SWOT und Wochenpläne. Formen, Emoji und Sticker lassen sich auf die Fläche ziehen.
+- **OpenClipart**: openclipart.org direkt aus der Bibliothek durchsuchen; gewählte Grafiken landen auf dem Canvas und in deiner eigenen Sammlung *OpenClipArt*.
+- **Pencil-Schablonen**: Sammlungen aus Pencils offiziellem Verzeichnis oder beliebige Pencil-Zips installieren – Symbol-Sammlungen funktionieren wie Cliparts, Formensammlungen als **lebendige Pencil-Formen** (Größenänderung wie in Pencil, bearbeitbarer Text, Eigenschaften, Aktionen, Griffe, Sammlungseinstellungen wie die Themen von shadcn/ui).
+- Bilder und Schablonensammlungen eines Canvas liegen in seinem eigenen Ordner (mit dem App-Passwort verschlüsselt) und werden mit ihm synchronisiert; Einstellungen → Sync → *Schablonen und Cliparts abgleichen* gleicht auch deine installierten Sammlungen und Cliparts ab.
+
 ## 0.19.0 – 2026-11-16
 
 - Sync: Notizen, die auf einem Gerät geöffnet oder geschlossen werden, werden auch auf deinen anderen Geräten geöffnet oder geschlossen (Einstellungen → Sync → *Geöffnete Notizen abgleichen*, standardmäßig an).
