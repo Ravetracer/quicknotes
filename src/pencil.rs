@@ -41,12 +41,14 @@ pub type Done = Box<dyn FnOnce(Result<Value, String>)>;
 pub enum Source {
     /// The image folder of a canvas (note id).
     Canvas(String),
+    /// An installed collection (collection id).
+    Library(String),
 }
 
 struct Job {
     pkg: String,
     source: Source,
-    /// `render` or `action`.
+    /// `render`, `action`, `resume` or `collectionSettings`.
     func: &'static str,
     req: Value,
     done: Done,
@@ -207,6 +209,7 @@ fn call(r: &Renderer, func: &str, arg: String, done: impl FnOnce(Result<Value, S
 fn package_files(pkg: &str, source: &Source) -> Result<serde_json::Map<String, Value>, String> {
     let data = match source {
         Source::Canvas(id) => crate::store::read_asset(id, pkg),
+        Source::Library(id) => crate::library_art::package_data(id),
     }
     .ok_or_else(|| t!("The stencil collection of this shape is missing").to_string())?;
     unpack(&data)

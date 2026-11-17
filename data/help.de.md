@@ -507,6 +507,10 @@ Emoji, Sticker, Pfeile und Bilder. Ein neues legst du mit *Neues Canvas* im Haup
   eigenen Aktionen der Form aus, und die gelben Knöpfe stellen Details ein (z. B. die Position eines
   Schiebereglers). Die Sammlung wird in das Canvas kopiert, damit die Formen auf jedem Computer
   gleich aussehen – auch dort, wo sie nicht installiert ist.
+  ⚙ neben einer Sammlung in der Bibliothek öffnet ihre Einstellungen (z. B. Thema, Akzentfarbe und
+  Rundung bei shadcn/ui); sie gelten für Formen, die du danach hinzufügst, und werden mit der
+  Sammlung abgeglichen. Aktionen, die nach einem Symbol fragen, öffnen eine Auswahl aus den eigenen
+  Symbolen der Sammlung und deinen installierten Symbol-Sammlungen.
 - **Rahmen** (F) sind benannte Bereiche, etwa eine Seite oder ein Bildschirm: Wird ein Rahmen
   verschoben, wandert sein Inhalt mit; beim Löschen bleibt der Inhalt erhalten. Vorlagen für A4,
   Folien, Desktop und Smartphone stehen in der Bibliothek.

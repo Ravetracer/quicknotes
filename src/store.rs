@@ -449,6 +449,23 @@ pub fn write_asset_with(key: Option<&Key>, id: &str, name: &str, data: &[u8]) ->
     Ok(())
 }
 
+/// Stores a file under a known name as a hard link to `source` where
+/// possible (no app password: the bytes are the same), otherwise as a copy.
+pub fn link_asset(id: &str, name: &str, source: &Path) -> io::Result<()> {
+    let dir = canvas_dir(id).filter(|_| crate::canvas::valid_name(name)).ok_or_else(|| io::Error::other("invalid name"))?;
+    if app_key().is_none() {
+        let target = dir.join(name);
+        if target.exists() {
+            return Ok(());
+        }
+        fs::create_dir_all(&dir)?;
+        if fs::hard_link(source, &target).is_ok() {
+            return Ok(());
+        }
+    }
+    write_asset(id, name, &fs::read(source)?)
+}
+
 pub fn read_asset(id: &str, name: &str) -> Option<Vec<u8>> {
     read_asset_with(app_key().as_ref(), id, name)
 }
@@ -665,6 +682,27 @@ pub(crate) mod tests {
         assert_eq!(asset_owners(), ["c1"]);
         delete_note("c1");
         assert!(!dir.join("canvas/c1").exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn packages_are_linked_or_copied() {
+        let dir = temp_data_dir("links");
+        let src = dir.join("package.zip");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&src, b"zipdata").unwrap();
+        let name = crate::canvas::asset_name(b"zipdata", "zip");
+        link_asset("c1", &name, &src).unwrap();
+        assert_eq!(read_asset("c1", &name).as_deref(), Some(&b"zipdata"[..]));
+        // Replacing the source with a new file leaves the link alone.
+        std::fs::write(dir.join("new.zip"), b"other").unwrap();
+        std::fs::rename(dir.join("new.zip"), &src).unwrap();
+        assert_eq!(read_asset("c1", &name).as_deref(), Some(&b"zipdata"[..]));
+        // With the app password: a sealed copy.
+        set_app_key(Some(Key::random()));
+        link_asset("c2", &name, &src).unwrap();
+        assert!(dir.join("canvas/c2").join(format!("{name}.enc")).exists());
+        set_app_key(None);
         let _ = std::fs::remove_dir_all(dir);
     }
 

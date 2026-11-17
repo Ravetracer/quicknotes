@@ -246,6 +246,14 @@
 //   remove: Remove
 //   back: Back
 //   by: by {}
+//   stencilSettings: Collection settings
+//   stencilSettingsHint: Used for shapes you add from now on.
+//   noSettings: This collection has no settings.
+//   reset: Reset
+//   resetSetting: Back to the default
+//   pickIcon: Choose an icon
+//   cancel: Cancel
+//   noIcons: No icon collections installed – get one with “Get more stencils…”.
 (function () {
   'use strict';
 
@@ -1951,6 +1959,16 @@
         g.appendChild(tt);
       }
     }
+    if (!ex && pState[it.id] && pState[it.id].acting) {
+      // A shape action is running (it may wait for an icon to be picked).
+      g.appendChild(svgEl('rect', { class: 'pencil-busy', width: r1(w), height: r1(hh), rx: 4, fill: canvasBg, 'fill-opacity': 0.55 }));
+      var bl = svgEl('text', {
+        x: r1(w / 2), y: r1(hh / 2), 'text-anchor': 'middle', 'dominant-baseline': 'central',
+        'font-size': Math.max(9, Math.min(13, hh / 3)), 'font-family': FONT, fill: ink, 'fill-opacity': 0.8
+      });
+      bl.textContent = S('pRendering', 'Drawing…');
+      g.appendChild(bl);
+    }
     if (!ex) hitRect(g, w, hh);
   }
 
@@ -2127,7 +2145,14 @@
   }
 
   function propEditor(it, en) {
-    var v = pencilValue(it, en.name), type = String(en.type || '').toLowerCase(), set = function (nv) { setPencilProp(it, en.name, nv); };
+    return valueEditor(pencilValue(it, en.name), en, function (nv) { setPencilProp(it, en.name, nv); }, en.disabled || it.lock);
+  }
+
+  /// An editor for one Pencil value (shape property or collection setting):
+  /// `v` the current value string, `set` gets the new one.
+  function valueEditor(v, en, set, disabled) {
+    v = v === undefined || v === null ? '' : String(v);
+    var type = String(en.type || '').toLowerCase();
     var box = h('div', { class: 'ped' }), inp;
     if (type === 'color') {
       var col = parsePColor(v);
@@ -2235,7 +2260,7 @@
       inp.addEventListener('change', function () { set(inp.value); });
       box.appendChild(inp);
     }
-    if (en.disabled || it.lock) {
+    if (disabled) {
       box.querySelectorAll('input, select, textarea, button').forEach(function (x) { x.disabled = true; });
     }
     return box;
@@ -2275,11 +2300,15 @@
           acts.forEach(function (a) {
             if (!a || !a.id) return;
             var b = h('button', { class: 'btn', type: 'button' }, a.label || a.displayName || a.id);
-            if (it.lock || a.disabled) b.disabled = true;
+            if (it.lock || a.disabled || (pState[id] && pState[id].acting)) b.disabled = true;
             b.addEventListener('click', function () {
               var cur = byId[id];
               if (!cur) return;
-              (pState[id] || (pState[id] = {})).actionError = '';
+              var ps = pState[id] || (pState[id] = {});
+              ps.actionError = '';
+              ps.acting = true;
+              render();
+              if (pPropsRefresh && pPropsRefresh.id === id) pPropsRefresh();
               post({ type: 'canvas-pencil-action', id: id, action: a.id, pkg: cur.pkg, s: cur.s, p: cur.p || {}, w: cur.w, h: cur.h, fonts: !!pFonts[cur.pkg] });
             });
             ab.appendChild(b);
@@ -2306,7 +2335,7 @@
     var k = JSON.stringify(it);
     if (it.t === 'conn') k += JSON.stringify(endItem(it.a) || 0) + JSON.stringify(endItem(it.b) || 0);
     if (editing === it.id) k += '#edit';
-    if (it.t === 'pencil') k += '#' + (pVer[it.id] || 0);
+    if (it.t === 'pencil') k += '#' + (pVer[it.id] || 0) + (pState[it.id] && pState[it.id].acting ? '#busy' : '');
     return k;
   }
 
@@ -2847,9 +2876,14 @@
 
   var pop = null, popAnchor = null;
 
+  var popOnClose = null;   // runs once when the open popover closes
+
   function closePop() {
+    var f = popOnClose;
+    popOnClose = null;
     if (pop) { pop.remove(); pop = null; popAnchor = null; }
-    libRefresh = clipRefresh = repoRefresh = pPropsRefresh = null;
+    libRefresh = clipRefresh = repoRefresh = pPropsRefresh = setRefresh = null;
+    if (f) f();
   }
 
   function openPop(anchorEl, build, cls) {
@@ -2876,7 +2910,12 @@
   }
 
   document.addEventListener('pointerdown', function (e) {
-    if (pop && !pop.contains(e.target) && !(popAnchor && popAnchor.contains(e.target))) closePop();
+    if (pop && !pop.contains(e.target) && !(popAnchor && popAnchor.contains(e.target))) {
+      closePop();
+      // A click on the board that closes a popover does nothing else
+      // (e.g. no shape is drawn with the tool the library selected).
+      if (svg.contains(e.target)) { e.stopPropagation(); e.preventDefault(); }
+    }
   }, true);
 
   function colorPop(anchorEl, key, current, colors, extra) {
@@ -3108,8 +3147,13 @@
   function spinner() { return h('span', { class: 'spinner', role: 'status', 'aria-label': S('searching', 'Loading…') }); }
 
   /// A header with a remove button that asks by a second click.
-  function collHeader(title, onRemove) {
+  function collHeader(title, onRemove, onSettings) {
     var head = h('h4', { class: 'collhead' }, h('span', null, title));
+    if (onSettings) {
+      var gear = h('button', { class: 'collx collgear', type: 'button', title: S('stencilSettings', 'Collection settings') }, '\u2699\uFE0E');
+      gear.addEventListener('click', function (e) { e.stopPropagation(); onSettings(); });
+      head.appendChild(gear);
+    }
     if (onRemove) {
       var armed = false, x = h('button', { class: 'collx', type: 'button', title: S('removeColl', 'Remove collection') }, '×');
       x.addEventListener('click', function (e) {
@@ -3201,7 +3245,7 @@
       } else {
         var shapes = (c.shapes || []).filter(function (sh) { return match(sh.name, sh.id, c.name); });
         if (!shapes.length) return;
-        list.appendChild(collHeader(c.name, remove));
+        list.appendChild(collHeader(c.name, remove, c.settings ? function () { settingsPop(c); } : null));
         grid(shapes.map(function (sh) {
           var art = sh.icon ? h('img', { src: sh.icon, alt: '', loading: 'lazy' }) : h('span', { class: 'noicon' }, (sh.name || '?').slice(0, 2));
           var b = h('button', { class: 'tile pic', type: 'button', title: sh.name }, art);
@@ -3305,6 +3349,169 @@
       fill();
       setTimeout(function () { search.focus(); search.select(); }, 0);
     }, 'clippop');
+  }
+
+  // ----- collection settings ------------------------------------------------------------
+
+  var setState = null;    // { id, name, schema, values, busy }
+  var setRefresh = null;
+
+  function settingsPop(c) {
+    setState = { id: c.id, name: c.name, schema: null, values: {}, busy: true };
+    post({ type: 'canvas-stencil-settings', id: c.id });
+    openPop(libAnchorEl(), function (p) {
+      var head = panelHead(p, c.name, function () { libraryPop(libAnchorEl()); });
+      var status = h('span', { class: 'status' });
+      head.appendChild(status);
+      p.appendChild(h('div', { class: 'note' }, S('stencilSettingsHint', 'Used for shapes you add from now on.')));
+      var list = h('div', { class: 'plist' });
+      p.appendChild(list);
+      p.addEventListener('keydown', function (e) { if (e.key === 'Escape') closePop(); });
+      function fill() {
+        var st = setState;
+        status.textContent = '';
+        if (!st || st.id !== c.id) return;
+        if (st.busy) status.appendChild(spinner());
+        list.textContent = '';
+        if (!st.schema) return;
+        var entries = st.schema.filter(function (en) { return en && en.name && !en.hidden; });
+        if (!entries.length) { list.appendChild(h('div', { class: 'empty' }, S('noSettings', 'This collection has no settings.'))); return; }
+        var groups = [], byGroup = {};
+        entries.forEach(function (en) {
+          var g = en.group || S('pGeneral', 'General');
+          if (!byGroup[g]) { byGroup[g] = []; groups.push(g); }
+          byGroup[g].push(en);
+        });
+        groups.forEach(function (g) {
+          if (groups.length > 1 || g !== S('pGeneral', 'General')) list.appendChild(h('h4', null, g));
+          byGroup[g].forEach(function (en) {
+            var own = Object.prototype.hasOwnProperty.call(st.values, en.name) && st.values[en.name] !== null;
+            var value = own ? st.values[en.name] : en.value;
+            var set = function (nv) {
+              st.values[en.name] = nv;
+              post({ type: 'canvas-stencil-setting', id: st.id, name: en.name, value: nv });
+              fill();
+            };
+            var row = h('div', { class: 'prow' + (en.disabled ? ' off' : '') });
+            var label = h('label', null, en.label || en.displayName || en.name);
+            if (own) {
+              var reset = h('button', { class: 'linkbtn reset', type: 'button', title: S('resetSetting', 'Back to the default') }, S('reset', 'Reset'));
+              reset.addEventListener('click', function () {
+                delete st.values[en.name];
+                post({ type: 'canvas-stencil-setting', id: st.id, name: en.name, value: null });
+                fill();
+              });
+              label = h('div', { class: 'plabel' }, label, reset);
+            }
+            row.append(label, valueEditor(value, en, set, en.disabled));
+            list.appendChild(row);
+          });
+        });
+      }
+      setRefresh = function () {
+        var ae = document.activeElement;
+        if (ae && p.contains(ae) && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) && ae.type !== 'range' && ae.type !== 'checkbox') return;
+        fill();
+      };
+      fill();
+    }, 'pencilpop setpop');
+  }
+
+  // ----- icon picker for shape actions ---------------------------------------------------
+
+  var pick = null;        // { token, id, done }
+
+  /// An anchor element at the item's place on screen (for the picker).
+  function itemAnchor(it) {
+    var a = h('div', { class: 'anchor' });
+    var r = svg.getBoundingClientRect();
+    if (it) {
+      a.style.left = (r.left + view.x + it.x * view.z) + 'px';
+      a.style.top = (r.top + view.y + it.y * view.z) + 'px';
+      a.style.width = Math.max(1, it.w * view.z) + 'px';
+      a.style.height = Math.max(1, it.h * view.z) + 'px';
+    } else {
+      a.style.left = (r.left + r.width / 2 - 200) + 'px';
+      a.style.top = (r.top + 60) + 'px';
+    }
+    app.appendChild(a);
+    return a;
+  }
+
+  function pickResourcePop(req) {
+    var it = byId[req.id];
+    var anchor = itemAnchor(it);
+    var shown = {};
+    var cur = { token: req.token, id: req.id, done: false };
+    openPop(anchor, function (p) {
+      pick = cur;
+      panelHeadless(p, req.title || S('pickIcon', 'Choose an icon'));
+      var search = stopKeys(h('input', { class: 'search', type: 'search', placeholder: S('search', 'Search') }));
+      var list = h('div', { class: 'list' });
+      p.append(search, list);
+      var sources = (req.sources || []).filter(function (src) { return src && src.icons && src.icons.length; });
+      function choose(src, path) {
+        cur.done = true;
+        post({ type: 'canvas-pencil-resume', token: cur.token, id: cur.id, coll: src.id, path: path });
+        closePop();
+      }
+      function fill() {
+        list.textContent = '';
+        if (!sources.length) {
+          list.appendChild(h('div', { class: 'empty' }, S('noIcons', 'No icon collections installed – get one with “Get more stencils…”.')));
+          var get = h('button', { class: 'btn', type: 'button' }, S('getStencils', 'Get more stencils…'));
+          get.addEventListener('click', function () { repoPop(); });
+          list.appendChild(h('div', { class: 'center' }, get));
+          return;
+        }
+        var q = search.value.trim().toLowerCase(), any = false;
+        sources.forEach(function (src) {
+          var icons = src.icons.filter(function (path) { return !q || libName(path).toLowerCase().indexOf(q) >= 0 || path.toLowerCase().indexOf(q) >= 0; });
+          if (!icons.length) return;
+          any = true;
+          if (sources.length > 1) list.appendChild(h('h4', null, src.name || src.id));
+          var all = icons.length, limit = Math.min(all, shown[src.id] || 120);
+          var g = h('div', { class: 'grid tiles pics' });
+          icons.slice(0, limit).forEach(function (path) {
+            var b = h('button', { class: 'tile pic', type: 'button', title: libName(path) }, h('img', { src: (src.base || '') + path, alt: '', loading: 'lazy' }));
+            b.addEventListener('click', function () { choose(src, path); });
+            g.appendChild(b);
+          });
+          list.appendChild(g);
+          if (limit < all) {
+            var more = h('button', { class: 'linkbtn', type: 'button' }, S('showMore', 'Show more ({} of {})').replace('{}', limit).replace('{}', all));
+            more.addEventListener('click', function () { shown[src.id] = limit + 360; var top = list.scrollTop; fill(); list.scrollTop = top; });
+            list.appendChild(more);
+          }
+        });
+        if (!any) list.appendChild(h('div', { class: 'empty' }, S('noResults', 'Nothing found')));
+      }
+      var timer = null;
+      search.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(fill, 150); });
+      p.addEventListener('keydown', function (e) { if (e.key === 'Escape') closePop(); });
+      fill();
+      setTimeout(function () { search.focus(); }, 0);
+    }, 'libpop pickpop');
+    // Closing without a choice (Escape, a click elsewhere, another popover) cancels.
+    popOnClose = function () {
+      anchor.remove();
+      if (pick === cur) pick = null;
+      if (!cur.done) {
+        cur.done = true;
+        post({ type: 'canvas-pencil-resume', token: cur.token, id: cur.id, cancel: true });
+        if (pState[cur.id]) { pState[cur.id].acting = false; render(); }
+        if (pPropsRefresh && pPropsRefresh.id === cur.id) pPropsRefresh();
+      }
+    };
+  }
+
+  function panelHeadless(p, title) {
+    var head = h('div', { class: 'panelhead' }, h('strong', null, title));
+    var x = h('button', { class: 'btn small', type: 'button', title: S('cancel', 'Cancel') }, '×');
+    x.addEventListener('click', function () { closePop(); });
+    head.appendChild(x);
+    p.appendChild(head);
+    return head;
   }
 
   function repoPop() {
@@ -4621,6 +4828,25 @@
       if (repoRefresh) repoRefresh();
     },
 
+    /// The settings of a collection (answer to `canvas-stencil-settings`).
+    stencilSettings: function (r) {
+      if (!setState || !r || r.id !== setState.id) return;
+      setState.busy = false;
+      setState.schema = Array.isArray(r.schema) ? r.schema : [];
+      setState.values = r.values && typeof r.values === 'object' ? clone(r.values) : {};
+      if (r.name) setState.name = r.name;
+      if (setRefresh) setRefresh();
+    },
+
+    /// A shape action needs an icon: shows the picker.
+    pickResource: function (req) {
+      if (!req || !req.token) return;
+      var ps = pState[req.id] || (pState[req.id] = {});
+      ps.acting = true;
+      render();
+      pickResourcePop(req);
+    },
+
     busy: function (kind, on) {
       if (kind === 'clipart') clip.busy = !!on;
       else if (kind === 'repo') repo.busy = !!on;
@@ -4713,8 +4939,11 @@
 
     /// The result of a shape action: new property values (and size).
     pencilAction: function (id, r) {
+      if (pState[id]) pState[id].acting = false;
+      if (pick && pick.id === id) { pick.done = true; closePop(); }
       var it = byId[id];
       if (!it || it.t !== 'pencil') return;
+      render();
       if (!r || !r.ok) {
         (pState[id] || (pState[id] = {})).actionError = (r && r.error) || '?';
         if (pPropsRefresh && pPropsRefresh.id === id) pPropsRefresh();

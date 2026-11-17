@@ -447,6 +447,14 @@ const STRINGS: &[(&str, &str)] = &[
     ("remove", "Remove"),
     ("back", "Back"),
     ("by", "by {}"),
+    ("stencilSettings", "Collection settings"),
+    ("stencilSettingsHint", "Used for shapes you add from now on."),
+    ("noSettings", "This collection has no settings."),
+    ("reset", "Reset"),
+    ("resetSetting", "Back to the default"),
+    ("pickIcon", "Choose an icon"),
+    ("cancel", "Cancel"),
+    ("noIcons", "No icon collections installed – get one with “Get more stencils…”."),
 ];
 
 // ===== images in the web view ================================================

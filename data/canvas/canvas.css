@@ -302,3 +302,18 @@ textarea.editor.pencil { background: var(--bg); }
 .pencilpop .error { color: var(--danger); margin-top: 6px; }
 .pencilpop .muted { color: var(--muted); padding-top: 4px; }
 .pencilpop .empty { color: var(--muted); padding: 8px 0; }
+
+/* ----- collection settings, icon picker ----- */
+.collgear { font-size: 13px; }
+.setpop { width: 360px; max-width: calc(100vw - 24px); }
+.setpop .plist { max-height: min(460px, calc(100vh - 140px)); overflow-y: auto; }
+.setpop .note { color: var(--muted); font-size: 12px; padding: 0 2px 6px; }
+.setpop .plabel { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
+.setpop .plabel > label { color: var(--muted); overflow: hidden; text-overflow: ellipsis; padding-top: 4px; }
+.setpop .linkbtn.reset { font-size: 11px; padding: 0; }
+.setpop .empty { color: var(--muted); padding: 12px; text-align: center; }
+.anchor { position: absolute; pointer-events: none; }
+.pickpop { width: 380px; max-width: calc(100vw - 24px); }
+.pickpop .panelhead strong { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pickpop .list { max-height: min(400px, calc(100vh - 120px)); overflow-y: auto; }
+.pickpop .center { text-align: center; padding-bottom: 8px; }

@@ -61,8 +61,11 @@ pub struct Meta {
     pub source: String,
     /// Content name of the package (`<sha256>.zip`).
     pub pkg: String,
-    /// When it was installed (seconds since 1970).
+    /// When it was installed or its settings changed (seconds since 1970).
     pub added: u64,
+    /// The user's values of collection settings (`$$name` in stencils).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub settings: BTreeMap<String, String>,
 }
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +89,8 @@ pub struct Listing {
     pub icons: Vec<String>,
     /// URL prefix of the package's files.
     pub base: String,
+    /// The collection has settings of its own.
+    pub settings: bool,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -112,6 +117,8 @@ pub struct Package {
     pub resources: Vec<String>,
     /// All file paths below `root`.
     pub files: Vec<String>,
+    /// Collection-level properties exist.
+    pub has_settings: bool,
 }
 
 /// Reads a Pencil collection zip.
@@ -177,7 +184,13 @@ fn parse_definition(xml: &str) -> Option<Package> {
                         shapes: Vec::new(),
                         resources: Vec::new(),
                         files: Vec::new(),
+                        has_settings: false,
                     });
+                }
+                (1, "Properties") => {
+                    if let Some(p) = package.as_mut() {
+                        p.has_settings = true;
+                    }
                 }
                 (1, "Shape") | (1, "Shortcut") => {
                     if let Some(p) = package.as_mut() {
@@ -220,8 +233,21 @@ fn meta_path(id: &str) -> PathBuf {
     stencils_dir().join(id).join("meta.json")
 }
 
-fn package_path(id: &str) -> PathBuf {
+/// Where an installed collection's package is.
+pub fn package_path(id: &str) -> PathBuf {
     stencils_dir().join(id).join("package.zip")
+}
+
+/// Changes a collection setting (`None` resets it to the package default).
+pub fn set_setting(id: &str, name: &str, value: Option<&str>) -> Result<(), String> {
+    let mut meta = installed().into_iter().find(|m| m.id == id).ok_or_else(|| "unknown collection".to_owned())?;
+    match value {
+        Some(v) => meta.settings.insert(name.to_owned(), v.to_owned()),
+        None => meta.settings.remove(name),
+    };
+    // Newer wins when libraries are merged.
+    meta.added = now().max(meta.added + 1);
+    std::fs::write(meta_path(&meta.id), serde_json::to_vec_pretty(&meta).unwrap_or_default()).map_err(|e| e.to_string())
 }
 
 /// Installs (or replaces) a collection.
@@ -231,6 +257,8 @@ pub fn install(data: &[u8], source: &str, version: &str) -> Result<Meta, String>
     }
     let package = read_package(data)?;
     let id = safe_id(&package.id).ok_or_else(|| t!("Not a Pencil stencil collection").to_string())?.to_owned();
+    // An update keeps the user's settings.
+    let settings = installed().into_iter().find(|m| m.id == id).map(|m| m.settings).unwrap_or_default();
     let meta = Meta {
         id: id.clone(),
         name: if package.name.is_empty() { id.clone() } else { package.name },
@@ -238,10 +266,14 @@ pub fn install(data: &[u8], source: &str, version: &str) -> Result<Meta, String>
         source: source.to_owned(),
         pkg: crate::canvas::asset_name(data, "zip"),
         added: now(),
+        settings,
     };
     let dir = stencils_dir().join(&id);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    std::fs::write(package_path(&id), data).map_err(|e| e.to_string())?;
+    // A new file (not rewritten in place): canvases may hard-link the old one.
+    let tmp = dir.join("package.zip.tmp");
+    std::fs::write(&tmp, data).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, package_path(&id)).map_err(|e| e.to_string())?;
     std::fs::write(meta_path(&id), serde_json::to_vec_pretty(&meta).unwrap_or_default()).map_err(|e| e.to_string())?;
     ZIPS.with(|z| z.borrow_mut().remove(&id));
     forget_removal(&format!("st:{id}"));
@@ -303,7 +335,8 @@ pub fn listing(meta: &Meta) -> Option<Listing> {
         Vec::new()
     };
     let kind = if shapes.is_empty() && !icons.is_empty() { Kind::Icons } else { Kind::Shapes };
-    Some(Listing { id: meta.id.clone(), name: meta.name.clone(), kind, description: package.description, shapes, icons, base })
+    let settings = package.has_settings && kind == Kind::Shapes;
+    Some(Listing { id: meta.id.clone(), name: meta.name.clone(), kind, description: package.description, shapes, icons, base, settings })
 }
 
 thread_local! {
@@ -604,8 +637,13 @@ pub fn apply(index: &Index, files: &HashMap<String, Vec<u8>>) -> bool {
         }
     }
     for m in &index.collections {
-        let have = local.collections.iter().any(|l| l.id == m.id && l.pkg == m.pkg);
-        if have {
+        let have = local.collections.iter().find(|l| l.id == m.id && l.pkg == m.pkg);
+        if let Some(l) = have {
+            // Same package, newer settings from elsewhere.
+            if l != m && m.added > l.added {
+                let _ = std::fs::write(meta_path(&m.id), serde_json::to_vec_pretty(m).unwrap_or_default());
+                changed = true;
+            }
             continue;
         }
         let Some(data) = files.get(&m.pkg).cloned().or_else(|| local_file(&m.pkg)) else { continue };
@@ -666,6 +704,7 @@ pub(crate) mod tests {
 
     pub(crate) const SHAPES: &str = r#"<Shapes xmlns="http://www.evolus.vn/Namespace/Pencil" id="test.Wire" displayName="Test &amp; Wire" description="d">
   <Script comments="x"><![CDATA[ collection.X = 1; ]]></Script>
+  <Properties><PropertyGroup name="Style"><Property name="accent" displayName="Accent" type="Color">#3584e4ff</Property></PropertyGroup></Properties>
   <Shape id="button" displayName="Button" icon="icons/button.png?token=1"><Properties/><p:Content xmlns:p="http://www.evolus.vn/Namespace/Pencil"><rect id="r"/></p:Content></Shape>
   <Shape id="base" displayName="Base" system="true"/>
   <Shortcut to="button" displayName="Big button" icon="icons/big.png"><PropertyValue name="box">200,40</PropertyValue></Shortcut>
@@ -708,6 +747,14 @@ collection.RESOURCE_LIST = [ {name: "<All>", prefix: "icons", type: "svg"} ];
         let icons = install(&package_zip("I", ICONS, &[("icons/a-b.svg", b"<svg/>"), ("other/x.svg", b"<svg/>")]), "", "").unwrap();
         let l = listing(&icons).unwrap();
         assert_eq!((l.kind, l.icons.clone()), (Kind::Icons, vec!["icons/a-b.svg".to_owned()]));
+
+        set_setting("test.Wire", "accent", Some("#ff0000")).unwrap();
+        assert_eq!(installed().iter().find(|m| m.id == "test.Wire").unwrap().settings["accent"], "#ff0000");
+        // Updating the package keeps the settings.
+        install(&package_zip("Wire", SHAPES, &[("icons/button.png", b"png2")]), "file.zip", "1.1").unwrap();
+        assert_eq!(installed().iter().find(|m| m.id == "test.Wire").unwrap().settings["accent"], "#ff0000");
+        set_setting("test.Wire", "accent", None).unwrap();
+        assert!(installed().iter().find(|m| m.id == "test.Wire").unwrap().settings.is_empty());
 
         remove("test.Wire");
         assert_eq!(installed().len(), 1);

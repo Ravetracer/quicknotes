@@ -35,6 +35,63 @@ fn js_point(point: Point) -> String {
     }
 }
 
+thread_local! {
+    /// Actions waiting for an icon: token → package.
+    static PENDING: std::cell::RefCell<HashMap<String, String>> = std::cell::RefCell::new(HashMap::new());
+}
+
+/// The collection settings for shapes of a package (of the installed
+/// collection with this package, if any).
+fn settings_of(pkg: &str) -> Value {
+    crate::library_art::installed()
+        .into_iter()
+        .find(|m| m.pkg == pkg)
+        .map(|m| serde_json::to_value(m.settings).unwrap_or_default())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+/// A file for the engine: SVG as text, anything else as a data URL.
+fn file_value(path: &str, data: &[u8]) -> String {
+    use base64::Engine;
+    if path.ends_with(".svg") || canvas::sniff(data) == Some("svg") {
+        return String::from_utf8_lossy(data).into_owned();
+    }
+    let mime = canvas::sniff(data).map(|k| canvas::mime_type(&format!("x.{k}"))).unwrap_or_else(|| crate::library_art::mime_type(path));
+    format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(data))
+}
+
+/// Where an action can take icons from: the shape's own collection (its
+/// resource folders) and the installed icon collections.
+fn resource_sources(pkg: &str, prefixes: &[String], kind: &str) -> Vec<Value> {
+    let wanted = |path: &str| match kind {
+        "svg" => path.ends_with(".svg"),
+        "bitmap" => path.ends_with(".png") || path.ends_with(".jpg") || path.ends_with(".gif"),
+        _ => path.ends_with(".svg") || path.ends_with(".png"),
+    };
+    let mut sources = Vec::new();
+    for meta in crate::library_art::installed() {
+        let Some(listing) = LISTINGS.with(|l| l.borrow().get(&meta.pkg).cloned()).or_else(|| crate::library_art::listing(&meta)) else { continue };
+        let icons: Vec<String> = if meta.pkg == pkg && !prefixes.is_empty() {
+            let Some(data) = crate::library_art::package_data(&meta.id) else { continue };
+            let Ok(package) = crate::library_art::read_package(&data) else { continue };
+            package
+                .files
+                .into_iter()
+                .filter(|f| prefixes.iter().any(|p| f.starts_with(&format!("{}/", p.trim_matches('/')))))
+                .filter(|f| wanted(f))
+                .collect()
+        } else if listing.kind == crate::library_art::Kind::Icons {
+            listing.icons.iter().filter(|f| wanted(f)).cloned().collect()
+        } else {
+            Vec::new()
+        };
+        if !icons.is_empty() {
+            sources.push(serde_json::json!({ "id": meta.id, "name": meta.name, "base": listing.base, "icons": icons }));
+        }
+    }
+    sources
+}
+
 /// Gives the page the fonts of a stencil package.
 fn send_fonts(t: &EditorTab, pkg: &str) {
     if let Some(css) = crate::pencil::font_css(pkg).filter(|c| !c.is_empty()) {
@@ -156,6 +213,14 @@ impl Window {
                 Some("canvas-pencil-place") => this.pencil_place(t, str_of(msg, "coll"), str_of(msg, "shape"), point),
                 Some("canvas-pencil-render") => this.pencil_call(t, msg, "render"),
                 Some("canvas-pencil-action") => this.pencil_call(t, msg, "action"),
+                Some("canvas-pencil-resume") => this.pencil_resume(t, msg),
+                Some("canvas-stencil-settings") => this.stencil_settings(t, str_of(msg, "id")),
+                Some("canvas-stencil-setting") => {
+                    let value = msg.get("value").and_then(Value::as_str);
+                    if let Err(e) = crate::library_art::set_setting(&str_of(msg, "id"), &str_of(msg, "name"), value) {
+                        this.toast(&e);
+                    }
+                }
                 Some("canvas-stencil-import") => this.stencil_import(),
                 Some("canvas-stencil-browse") => this.stencil_browse(t),
                 Some("canvas-stencil-install") => this.stencil_install(t, str_of(msg, "id")),
@@ -452,14 +517,12 @@ impl Window {
             self.toast(t!("The stencil collection of this shape is missing"));
             return;
         };
-        let data = crate::library_art::package_data(&meta.id);
-        let stored = data.map(|d| store::write_asset(&t.id, &meta.pkg, &d));
-        if !matches!(stored, Some(Ok(()))) {
+        if store::link_asset(&t.id, &meta.pkg, &crate::library_art::package_path(&meta.id)).is_err() {
             self.toast(t!("The stencil collection of this shape is missing"));
             return;
         }
         let (this, t) = (self.clone(), t.clone());
-        let req = serde_json::json!({ "s": shape });
+        let req = serde_json::json!({ "s": shape, "settings": meta.settings });
         let pkg = meta.pkg.clone();
         crate::pencil::request(&meta.pkg, crate::pencil::Source::Canvas(t.id.clone()), "render", req, move |result| {
             match result.and_then(|r| if r["ok"] == true { Ok(r) } else { Err(r["error"].as_str().unwrap_or("?").to_owned()) }) {
@@ -492,17 +555,114 @@ impl Window {
                 req[k] = v.clone();
             }
         }
-        let t = t.clone();
+        if func == "action" {
+            req["settings"] = settings_of(&pkg);
+        }
+        let (this, t) = (self.clone(), t.clone());
         let p = pkg.clone();
         crate::pencil::request(&pkg, crate::pencil::Source::Canvas(t.id.clone()), func, req, move |result| {
             let r = result.unwrap_or_else(|e| serde_json::json!({ "ok": false, "error": e }));
             if !fonts && r["ok"] == true {
                 send_fonts(&t, &p);
             }
-            let id = Value::from(id.as_str());
             match func {
-                "render" => t.canvas_js(&format!("QC.pencilRendered({id}, {key}, {r})")),
-                _ => t.canvas_js(&format!("QC.pencilAction({id}, {r})")),
+                "render" => t.canvas_js(&format!("QC.pencilRendered({}, {key}, {r})", Value::from(id.as_str()))),
+                _ => this.pencil_action_done(&t, &p, id, r),
+            }
+        });
+    }
+
+    /// The result of an action: final, or waiting for an icon or an image.
+    fn pencil_action_done(self: &Rc<Self>, t: &Rc<EditorTab>, pkg: &str, id: String, r: Value) {
+        let pending = &r["pending"];
+        if r["ok"] != true || !pending.is_object() {
+            t.canvas_js(&format!("QC.pencilAction({}, {r})", Value::from(id.as_str())));
+            return;
+        }
+        let token = pending["token"].clone();
+        if pending["kind"] == "image" {
+            self.pencil_pick_image(t, pkg.to_owned(), id, token);
+            return;
+        }
+        let prefixes: Vec<String> = pending["prefixes"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_owned)).collect();
+        let kind = pending["type"].as_str().unwrap_or("").to_owned();
+        let sources = resource_sources(pkg, &prefixes, &kind);
+        let req = serde_json::json!({
+            "token": token, "id": id, "title": t!("Choose an Icon"), "kind": "resource", "sources": sources,
+        });
+        PENDING.with(|p| p.borrow_mut().insert(token.to_string(), pkg.to_owned()));
+        t.canvas_js(&format!("QC.pickResource({req})"));
+    }
+
+    /// `canvas-pencil-resume`: the icon chosen for a waiting action (or none).
+    fn pencil_resume(self: &Rc<Self>, t: &Rc<EditorTab>, msg: &Value) {
+        let token = msg.get("token").cloned().unwrap_or(Value::Null);
+        let Some(pkg) = PENDING.with(|p| p.borrow_mut().remove(&token.to_string())) else { return };
+        let value = if msg.get("cancel").and_then(Value::as_bool).unwrap_or(false) {
+            Value::Null
+        } else {
+            let (coll, path) = (str_of(msg, "coll"), str_of(msg, "path"));
+            match crate::library_art::package_file(&coll, &path) {
+                Some(data) => serde_json::json!({ "coll": coll, "path": path, "data": file_value(&path, &data) }),
+                None => Value::Null,
+            }
+        };
+        self.pencil_resume_with(t, pkg, str_of(msg, "id"), token, value);
+    }
+
+    fn pencil_resume_with(self: &Rc<Self>, t: &Rc<EditorTab>, pkg: String, id: String, token: Value, value: Value) {
+        let req = serde_json::json!({ "token": token, "value": value, "settings": settings_of(&pkg) });
+        let (this, t) = (self.clone(), t.clone());
+        let p = pkg.clone();
+        crate::pencil::request(&pkg, crate::pencil::Source::Canvas(t.id.clone()), "resume", req, move |result| {
+            let r = result.unwrap_or_else(|e| serde_json::json!({ "ok": false, "error": e }));
+            this.pencil_action_done(&t, &p, id, r);
+        });
+    }
+
+    /// An action asks for an image file.
+    fn pencil_pick_image(self: &Rc<Self>, t: &Rc<EditorTab>, pkg: String, id: String, token: Value) {
+        let filter = gtk::FileFilter::new();
+        filter.set_name(Some(t!("Images")));
+        for (_, mime) in canvas::IMAGE_TYPES {
+            filter.add_mime_type(mime);
+        }
+        let filters = gio::ListStore::new::<gtk::FileFilter>();
+        filters.append(&filter);
+        let dialog = gtk::FileDialog::builder().title(t!("Choose an Image")).modal(true).filters(&filters).build();
+        let (this, t) = (self.clone(), t.clone());
+        glib::spawn_future_local(async move {
+            let picked = dialog.open_future(Some(&this.win)).await.ok().and_then(|f| f.path());
+            let value = match picked.map(|p| read_image(&p)) {
+                Some(Ok((data, ext))) => {
+                    use base64::Engine;
+                    let (w, h) = gdk::Texture::from_bytes(&glib::Bytes::from(&data)).map(|tx| (tx.width(), tx.height())).unwrap_or((0, 0));
+                    let url = format!("data:{};base64,{}", canvas::mime_type(&format!("x.{ext}")), base64::engine::general_purpose::STANDARD.encode(&data));
+                    serde_json::json!({ "data": url, "w": w, "h": h })
+                }
+                Some(Err(e)) => {
+                    this.toast(&e);
+                    Value::Null
+                }
+                None => Value::Null,
+            };
+            this.pencil_resume_with(&t, pkg, id, token, value);
+        });
+    }
+
+    /// The settings of a collection (⚙ in the library).
+    fn stencil_settings(self: &Rc<Self>, t: &Rc<EditorTab>, id: String) {
+        let Some(meta) = crate::library_art::installed().into_iter().find(|m| m.id == id) else { return };
+        let req = serde_json::json!({ "settings": meta.settings });
+        let (this, t) = (self.clone(), t.clone());
+        crate::pencil::request(&meta.pkg, crate::pencil::Source::Library(meta.id.clone()), "collectionSettings", req, move |result| {
+            match result {
+                Ok(r) if r["ok"] == true => {
+                    let reply = serde_json::json!({ "id": meta.id, "name": meta.name, "schema": r["schema"], "values": meta.settings });
+                    t.canvas_js(&format!("QC.stencilSettings({reply})"));
+                }
+                Ok(r) => this.toast(&t!("The shape cannot be drawn: {}", r["error"].as_str().unwrap_or("?"))),
+                Err(e) => this.toast(&t!("The shape cannot be drawn: {}", e)),
             }
         });
     }

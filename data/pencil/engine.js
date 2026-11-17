@@ -289,8 +289,11 @@ ImageData.prototype.toString = function () {
 };
 ImageData.idToRefString = function (id) { return 'ref://' + id; };
 ImageData.refStringToUrl = function (ref) { return PE.resolveUrl(ref); };
-ImageData.prompt = function (cb) { if (cb) cb(null); };
+/// Asks the host for an image file (the action pauses until `PE.resume`).
+ImageData.prompt = function (cb) { PE.openDialog({ kind: 'image', cb: cb }); };
 ImageData.prototype.getDataAsXML = function () { return PE.resolveText(this.data); };
+/// A URL for <image href> (data URLs only here).
+ImageData.prototype.toImageSrc = function () { return PE.resolveUrl(this.data); };
 ImageData.prototype.isEmpty = function () { return !(this.w > 0) || PE.isEmptyImage(this.data); };
 
 var PE_TYPES = {
@@ -315,8 +318,48 @@ function T(x, y) { PE_last = { x: x, y: y }; return pe_path('T', [x, y]); }
 function A(rx, ry, r, f1, f2, x, y) { PE_last = { x: x, y: y }; return pe_path('A', [rx, ry, r, f1, f2, x, y]); }
 function a(rx, ry, r, f1, f2, x, y) { return pe_path('a', [rx, ry, r, f1, f2, x, y]); }
 var z = 'z';
-function sk(x1, y1, x2, y2, d, noMove) { PE_last = { x: x2, y: y2 }; return (noMove ? '' : 'M ' + x1 + ' ' + y1 + ' ') + 'L ' + x2 + ' ' + y2; }
-function skTo(x, y) { PE_last = { x: x, y: y }; return 'L ' + x + ' ' + y; }
+// Hand-drawn lines. A small pseudo-random generator seeded from the
+// coordinates keeps every re-render identical.
+function pe_seed(a, b, c, d) {
+  var h = 2166136261;
+  [a, b, c, d].forEach(function (v) {
+    var n = Math.round((+v || 0) * 10);
+    for (var i = 0; i < 4; i++) { h ^= (n >>> (i * 8)) & 255; h = Math.imul(h, 16777619) >>> 0; }
+  });
+  return function () {
+    h = (Math.imul(h ^ (h >>> 15), 2246822507) ^ Math.imul(h ^ (h >>> 13), 3266489909)) >>> 0;
+    return (h % 10000) / 10000;
+  };
+}
+/// One wavy stroke from (x1, y1) to (x2, y2); `over` lets the ends overshoot.
+function pe_wobble(rnd, x1, y1, x2, y2, dev, over) {
+  var dx = x2 - x1, dy = y2 - y1, len = Math.sqrt(dx * dx + dy * dy) || 1;
+  var nx = -dy / len, ny = dx / len, ux = dx / len, uy = dy / len;
+  var amp = Math.min(dev, len / 12);
+  var j = function () { return (rnd() - 0.5) * 2 * amp; };
+  var o1 = over ? (rnd() * 0.6 + 0.2) * amp : 0, o2 = over ? (rnd() * 0.6 + 0.2) * amp : 0;
+  var sx = x1 - ux * o1, sy = y1 - uy * o1, ex = x2 + ux * o2, ey = y2 + uy * o2;
+  var t1 = 0.25 + rnd() * 0.2, t2 = 0.55 + rnd() * 0.2, a1 = j(), a2 = j();
+  var c1x = x1 + dx * t1 + nx * a1, c1y = y1 + dy * t1 + ny * a1;
+  var c2x = x1 + dx * t2 + nx * a2, c2y = y1 + dy * t2 + ny * a2;
+  var r = function (v) { return Math.round(v * 100) / 100; };
+  return { start: [r(sx), r(sy)], curve: 'C ' + [c1x, c1y, c2x, c2y, ex, ey].map(r).join(' ') };
+}
+/// A hand-drawn line. On its own (with a move) it is drawn twice with
+/// overshooting ends; inside a path (`noMove`) it ends exactly at (x2, y2)
+/// so shapes stay closed.
+function sk(x1, y1, x2, y2, d, noMove) {
+  PE_last = { x: x2, y: y2 };
+  var dev = d > 0 ? d : 1.6;
+  var rnd = pe_seed(x1, y1, x2, y2);
+  if (noMove) return pe_wobble(rnd, x1, y1, x2, y2, dev, false).curve;
+  var a1 = pe_wobble(rnd, x1, y1, x2, y2, dev, true), a2 = pe_wobble(rnd, x1, y1, x2, y2, dev * 0.8, true);
+  return 'M ' + a1.start.join(' ') + ' ' + a1.curve + ' M ' + a2.start.join(' ') + ' ' + a2.curve;
+}
+function skTo(x, y, d) {
+  var from = PE_last || { x: 0, y: 0 };
+  return sk(from.x, from.y, x, y, d, true);
+}
 
 function translate(x, y) { return 'translate(' + (x || 0) + ',' + (y || 0) + ')'; }
 function scale(x, y) { return 'scale(' + x + ',' + (y === undefined ? x : y) + ')'; }
@@ -342,8 +385,36 @@ var CollectionResourceBrowserDialog = {
   TYPE_BITMAP: 'bitmap', TYPE_SVG: 'svg',
   RETURN_IMAGEDATA: 'imagedata', RETURN_CONTENT: 'content', RETURN_DOMCONTENT: 'domcontent',
   lastCollectionId: null,
-  open: function () {},
-  _getParsedSvgSize: function () { return { w: 24, h: 24 }; }
+  /// Asks the host to pick a resource (icon) – the action pauses until
+  /// `PE.resume` brings the choice.
+  open: function (collection, options, callback) {
+    options = options || {};
+    var prefixes = (options.prefixes || []).map(function (p) { return typeof p === 'string' ? p : (p && p.prefix) || ''; }).filter(Boolean);
+    PE.openDialog({
+      kind: 'resource',
+      cb: callback,
+      prefixes: prefixes,
+      type: options.type || null,
+      returnType: options.returnType || CollectionResourceBrowserDialog.RETURN_IMAGEDATA,
+      collection: CollectionResourceBrowserDialog.lastCollectionId || (collection && collection.id) || null
+    });
+    CollectionResourceBrowserDialog.lastCollectionId = null;
+  },
+  /// Size of an SVG text: width/height attributes, else the viewBox.
+  _getParsedSvgSize: function (svg) {
+    var size = { w: 24, h: 24 };
+    try {
+      var doc = typeof svg === 'string' ? new DOMParser().parseFromString(svg, 'image/svg+xml') : svg;
+      var root = doc && (doc.documentElement || doc);
+      if (!root || !root.getAttribute) return size;
+      var vb = (root.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(parseFloat);
+      var w = parseFloat(root.getAttribute('width')), h = parseFloat(root.getAttribute('height'));
+      if (!(w > 0) || /%$/.test(root.getAttribute('width') || '')) w = vb.length === 4 ? vb[2] : NaN;
+      if (!(h > 0) || /%$/.test(root.getAttribute('height') || '')) h = vb.length === 4 ? vb[3] : NaN;
+      if (w > 0 && h > 0) size = { w: w, h: h };
+    } catch (e) { /* default size */ }
+    return size;
+  }
 };
 var CollectionManager = {
   findCollection: function (id) {
@@ -478,11 +549,14 @@ var PE_BEHAVIORS = {
     else this.removeAttribute(name);
   },
   Box: function (d) {
+    if (this.__peBox) this.__peBox = { w: Math.max(0, d.w), h: Math.max(0, d.h) };
     this.setAttribute('width', Math.max(0, d.w));
     this.setAttribute('height', Math.max(0, d.h));
   },
   Bound: function (b) {
     if (this.localName === 'g') {
+      // A former foreignObject keeps its size for wrapping text.
+      if (this.__peBox) this.__peBox = { w: Math.max(0, b.w), h: Math.max(0, b.h) };
       this.setAttribute('transform', translate(b.x, b.y));
       return;
     }
@@ -581,7 +655,15 @@ var PE_BEHAVIORS = {
     this.setAttribute('height', img.h);
   },
   BoxFit: function (bound, align) {
-    if (this.localName !== 'text' || !bound) return;
+    if (!bound) return;
+    // Boxes take the bound; anything else (texts, groups, paths) is moved
+    // into it by the alignment.
+    if (/^(rect|image|use|svg|foreignObject)$/.test(this.localName)) {
+      this.setAttribute('x', bound.x); this.setAttribute('y', bound.y);
+      this.setAttribute('width', Math.max(0, bound.w)); this.setAttribute('height', Math.max(0, bound.h));
+      return;
+    }
+    this.removeAttribute('transform');
     var b = pe_bbox(this);
     align = align || new Alignment(0, 0);
     var dx = Math.round((bound.w - b.width) * align.h / 2 + bound.x - b.x);
@@ -596,7 +678,10 @@ var PE_BEHAVIORS = {
       this.appendChild(this.ownerDocument.createTextNode(v));
       return;
     }
-    PE.layoutInto(this, rich ? PE.htmlToBlocks(v) : PE.plainToBlocks(v), new Bound(0, 0, 100000, 0), new Alignment(0, 0), true);
+    // An HTML container (a former foreignObject) wraps at its width.
+    var box = this.__peBox;
+    var bound = box && box.w > 0 ? new Bound(0, 0, box.w, box.h || 0) : new Bound(0, 0, 100000, 0);
+    PE.layoutInto(this, rich ? PE.htmlToBlocks(v) : PE.plainToBlocks(v), bound, new Alignment(0, 0), true);
   },
   PlainTextContent: function (text, bound, align) {
     var v = text && text.value !== undefined ? text.value : String(text === null || text === undefined ? '' : text);
@@ -766,7 +851,7 @@ var PE = {
       propertyGroups: [],
       fonts: []
     };
-    var def = { collection: col, shapes: {}, shortcuts: {}, scripts: [], fonts: [] };
+    var def = { collection: col, shapes: {}, shortcuts: {}, scripts: [], fonts: [], propertyMeta: {} };
     PE.children(root).forEach(function (el) {
       var n = el.localName;
       if (n === 'Script') def.scripts.push(PE.text(el));
@@ -778,6 +863,12 @@ var PE = {
             var T = PE_TYPES[type];
             var value = T ? T.fromString(PE.text(p)) : PE.text(p);
             var prop = { name: p.getAttribute('name'), displayName: p.getAttribute('displayName') || p.getAttribute('name'), type: type, value: value };
+            var meta = {};
+            for (var i = 0; i < p.attributes.length; i++) {
+              var at = p.attributes[i];
+              if (at.namespaceURI === PE_NS.p || at.name.indexOf('p:') === 0) meta[at.localName] = at.value;
+            }
+            def.propertyMeta[prop.name] = meta;
             col.properties[prop.name] = prop;
             group.properties.push(prop);
           });
@@ -803,11 +894,61 @@ var PE = {
         def.shortcuts[sc.id] = sc;
       }
     });
+    Object.keys(def.shapes).forEach(function (id) { PE.inherit(def, def.shapes[id], {}); });
     return def;
   },
 
+  /// Merges the shape a shape inherits from (`inherits="[coll:]shape"`):
+  /// properties, behaviours and actions of the parent come first and the
+  /// child's replace them by name; `<p:ParentContent/>` in the child's
+  /// content stands for the parent's content (no content: the parent's).
+  inherit: function (def, sh, seen) {
+    if (!sh.inherits || sh.inherited) return sh;
+    sh.inherited = true;
+    var ref = sh.inherits, i = ref.lastIndexOf(':');
+    var collId = i >= 0 ? ref.slice(0, i) : def.collection.id, key = i >= 0 ? ref.slice(i + 1) : ref;
+    var parent = null;
+    if (collId === def.collection.id) parent = def.shapes[key];
+    else {
+      for (var k in PE.packages) if (PE.packages[k].collection.id === collId) parent = PE.packages[k].def.shapes[key];
+    }
+    if (!parent || parent === sh || seen[parent.id]) return sh;
+    seen[sh.id] = true;
+    PE.inherit(def, parent, seen);
+    var props = parent.props.map(function (p) { return sh.propMap[p.name] || p; });
+    sh.props.forEach(function (p) { if (!parent.propMap[p.name]) props.push(p); });
+    sh.props = props;
+    sh.propMap = {};
+    props.forEach(function (p) { sh.propMap[p.name] = p; });
+    // Later behaviours win: the child's run after the parent's.
+    sh.behaviors = parent.behaviors.concat(sh.behaviors);
+    sh.actions = parent.actions.filter(function (a2) {
+      return !sh.actions.some(function (b2) { return b2.id === a2.id; });
+    }).concat(sh.actions);
+    if (!sh.content) {
+      sh.content = parent.content;
+    } else if (parent.content) {
+      var marker = null;
+      var all = sh.content.getElementsByTagName('*');
+      for (var j = 0; j < all.length; j++) if (all[j].localName === 'ParentContent') { marker = all[j]; break; }
+      if (marker) {
+        var merged = sh.content.cloneNode(true);
+        var list = merged.getElementsByTagName('*'), at = null;
+        for (var m = 0; m < list.length; m++) if (list[m].localName === 'ParentContent') { at = list[m]; break; }
+        var doc = merged.ownerDocument;
+        PE.children(parent.content).forEach(function (n) { at.parentNode.insertBefore(doc.importNode(n, true), at); });
+        at.parentNode.removeChild(at);
+        sh.content = merged;
+      }
+    }
+    return sh;
+  },
+
   parseShape: function (el) {
-    var sh = { id: el.getAttribute('id'), displayName: el.getAttribute('displayName') || '', props: [], propMap: {}, behaviors: [], actions: [], content: null };
+    var sh = {
+      id: el.getAttribute('id'), displayName: el.getAttribute('displayName') || '', props: [], propMap: {}, behaviors: [], actions: [], content: null,
+      inherits: el.getAttribute('inherits') || ''
+    };
     PE.children(el).forEach(function (part) {
       var n = part.localName;
       if (n === 'Properties') {
@@ -1078,6 +1219,7 @@ var PE = {
       }
       var x = pe_num(el.getAttribute('x')), y = pe_num(el.getAttribute('y'));
       if ((x || y) && !ng.getAttribute('transform')) ng.setAttribute('transform', translate(x, y));
+      ng.__peBox = { w: pe_num(el.getAttribute('width')), h: pe_num(el.getAttribute('height')) };
       el.parentNode.replaceChild(ng, el);
     });
     host.appendChild(g);
@@ -1525,12 +1667,29 @@ var PE = {
       if (typeof xml !== 'string') throw new Error('Definition.xml is missing');
       if (/^data:/.test(xml)) xml = PE.dataUrlText(xml);
       var def = PE.parseDefinition(xml);
-      var pkg = { name: req.pkg, files: files, def: def, collection: def.collection, fontCss: '' };
+      var pkg = { name: req.pkg, files: files, def: def, collection: def.collection, fontCss: '', collectionPropertyMeta: def.propertyMeta };
       PE.packages[req.pkg] = pkg;
       PE.current = pkg;
+      // The package's own collection settings (user overrides come per request).
+      pkg.settingDefaults = {};
+      Object.keys(def.collection.properties).forEach(function (n) {
+        var v = def.collection.properties[n].value;
+        pkg.settingDefaults[n] = v === null || v === undefined ? '' : String(v);
+      });
       def.scripts.forEach(function (code) {
         try { (new Function('collection', code))(def.collection); } catch (e) { PE.fail(e, 'collection script'); }
       });
+      if (typeof def.collection.browseResource !== 'function') {
+        // Pencil offers this to every collection with resources.
+        def.collection.browseResource = function (setNames, type, returnType, callback) {
+          var list = def.collection.RESOURCE_LIST || [];
+          var names = String(setNames || '').trim();
+          CollectionResourceBrowserDialog.open(def.collection, {
+            prefixes: list.filter(function (r) { return (!type || !r.type || r.type === type) && (!names || names.indexOf(r.name) >= 0); }),
+            type: type, returnType: returnType
+          }, callback);
+        };
+      }
       await PE.registerFonts(pkg);
       return JSON.stringify({ ok: true, id: def.collection.id, name: def.collection.displayName, fontCss: pkg.fontCss });
     } catch (e) {
@@ -1538,10 +1697,24 @@ var PE = {
     }
   },
 
+  /// Puts the user's collection settings (or the package defaults) in place.
+  applySettings: function (pkg, settings) {
+    var props = pkg.collection.properties;
+    Object.keys(props).forEach(function (n) {
+      var given = settings && typeof settings === 'object' && Object.prototype.hasOwnProperty.call(settings, n);
+      var str = given ? String(settings[n]) : pkg.settingDefaults[n];
+      var T = PE_TYPES[props[n].type];
+      var v = null;
+      try { v = T ? T.fromString(str) : str; } catch (e) { v = null; }
+      props[n].value = v === null ? (T ? T.fromString(pkg.settingDefaults[n]) : pkg.settingDefaults[n]) : v;
+    });
+  },
+
   prepare: function (req) {
     var pkg = PE.packages[req.pkg];
     if (!pkg) throw new Error('package not loaded');
     PE.current = pkg;
+    PE.applySettings(pkg, req.settings);
     var entry = PE.resolve(pkg, req.s);
     if (!entry) throw new Error('unknown shape ' + req.s);
     return PE.instance(pkg, entry, req);
@@ -1560,8 +1733,9 @@ var PE = {
       box: inst.boxInfo,
       actions: inst.shape.actions.filter(function (a2) {
         if (a2.id === 'getSnappingGuide' || !a2.code) return false;
-        // Actions that only open Pencil's dialogs or read the clipboard do nothing here.
-        if (/browseResource|browseLucideIcon|CollectionResourceBrowserDialog|ImageData\.prompt|clipboard\.|copyClipboardImage|Dialog\(/.test(a2.code)) return false;
+        // Clipboard actions do nothing here (resource and image dialogs are
+        // answered by the host, see `resume`).
+        if (/clipboard\.|copyClipboard/.test(a2.code)) return false;
         if (a2.disabled && PE.truthy(PE.evaluate(a2.disabled, PE.scopeOf(inst)))) return false;
         return true;
       }).map(function (a2) { return { id: a2.id, label: a2.label }; })
@@ -1594,13 +1768,151 @@ var PE = {
       if (!act) throw new Error('unknown action ' + req.action);
       var ctrl = PE.controller(inst);
       var fn = __peEval(PE.scopeOf(inst), '(function () {\n' + act.code + '\n})');
-      var result = fn.call(ctrl);
+      PE.dialog = null;
+      PE.dialogOpen = true;
+      var result;
+      try { result = fn.call(ctrl); } finally { PE.dialogOpen = false; }
       if (result && typeof result.then === 'function') { try { await result; } catch (e) { /* ignored */ } }
-      return JSON.stringify({ ok: true, props: PE.values(inst), w: inst.props.box.w, h: inst.props.box.h });
+      return JSON.stringify(PE.afterAction(inst, ctrl, req));
     } catch (e) {
       return JSON.stringify({ ok: false, error: String(e && e.message || e) });
     } finally {
       if (inst) PE.finish(inst);
+    }
+  },
+
+  // ----- dialogs of actions ---------------------------------------------------------------
+
+  dialog: null,
+  dialogOpen: false,
+  continuations: {},
+  continuationOrder: [],
+
+  /// Called by the dialog stubs: remembers the first dialog of the running
+  /// action (outside actions there is nobody to answer it).
+  openDialog: function (d) {
+    if (!PE.dialogOpen || PE.dialog) return;
+    PE.dialog = d;
+  },
+
+  /// The result of an action: final values, or a dialog the host must answer
+  /// (the shape and the callback wait under a token).
+  afterAction: function (inst, ctrl, req) {
+    var d = PE.dialog;
+    PE.dialog = null;
+    if (d && typeof d.cb === 'function') {
+      var token = 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+      PE.continuations[token] = { inst: inst, ctrl: ctrl, dialog: d, settings: req.settings || null };
+      PE.continuationOrder.push(token);
+      while (PE.continuationOrder.length > 20) delete PE.continuations[PE.continuationOrder.shift()];
+      var pending = { token: token, kind: d.kind, returnType: d.returnType || null };
+      if (d.kind === 'resource') {
+        pending.prefixes = d.prefixes || [];
+        pending.type = d.type || null;
+        pending.collection = d.collection || null;
+      }
+      return { ok: true, pending: pending };
+    }
+    return { ok: true, props: PE.values(inst), w: inst.props.box.w, h: inst.props.box.h };
+  },
+
+  /// Natural size of an image (data URL); `fallback` when it cannot be read.
+  imageSize: function (url, fallback) {
+    var text = /^data:image\/svg\+xml/i.test(url) ? PE.dataUrlText(url) : null;
+    if (text) return Promise.resolve(CollectionResourceBrowserDialog._getParsedSvgSize(text));
+    return new Promise(function (done) {
+      var finished = false;
+      var end = function (v) { if (!finished) { finished = true; done(v); } };
+      try {
+        var img = new Image();
+        img.onload = function () { end(img.naturalWidth > 0 ? { w: img.naturalWidth, h: img.naturalHeight } : fallback); };
+        img.onerror = function () { end(fallback); };
+        img.src = url;
+      } catch (e) { end(fallback); }
+      setTimeout(function () { end(fallback); }, 3000);
+    });
+  },
+
+  /// What a dialog callback gets for the host's answer `value`.
+  dialogResult: async function (d, value) {
+    var data = String(value.data || '');
+    var svgText = null, url = data;
+    if (/^\s*</.test(data)) { svgText = data; url = 'data:image/svg+xml;base64,' + PE.b64(data); }
+    else if (/^data:image\/svg\+xml/i.test(data)) svgText = PE.dataUrlText(data);
+    var given = value.w > 0 && value.h > 0 ? { w: +value.w, h: +value.h } : null;
+    var rt = d.returnType || CollectionResourceBrowserDialog.RETURN_IMAGEDATA;
+    if (d.kind === 'resource' && rt === CollectionResourceBrowserDialog.RETURN_CONTENT) return svgText !== null ? svgText : url;
+    if (d.kind === 'resource' && rt === CollectionResourceBrowserDialog.RETURN_DOMCONTENT) {
+      return svgText !== null ? Dom.parseDocument(svgText).documentElement : null;
+    }
+    var size = given || (svgText !== null ? CollectionResourceBrowserDialog._getParsedSvgSize(svgText) : await PE.imageSize(url, { w: 24, h: 24 }));
+    return new ImageData(Math.round(size.w), Math.round(size.h), url);
+  },
+
+  /// Answers the dialog of a paused action: `value` null (cancelled), or for
+  /// a resource `{coll, path, data}` and for an image `{data, w, h}`.
+  resume: async function (json) {
+    var cont = null, inst = null;
+    try {
+      var req = JSON.parse(json);
+      cont = PE.continuations[req.token];
+      if (!cont) throw new Error('the dialog is no longer open');
+      delete PE.continuations[req.token];
+      PE.continuationOrder = PE.continuationOrder.filter(function (t) { return t !== req.token; });
+      inst = cont.inst;
+      PE.current = inst.pkg;
+      PE.applySettings(inst.pkg, req.settings !== undefined ? req.settings : cont.settings);
+      PE.draw(inst);
+      cont.ctrl.svg = inst.root;
+      if (req.value === null || req.value === undefined) {
+        return JSON.stringify({ ok: true, props: PE.values(inst), w: inst.props.box.w, h: inst.props.box.h });
+      }
+      var arg = await PE.dialogResult(cont.dialog, req.value);
+      PE.dialog = null;
+      PE.dialogOpen = true;
+      var result;
+      try { result = cont.dialog.cb.call(cont.ctrl, arg); } finally { PE.dialogOpen = false; }
+      if (result && typeof result.then === 'function') { try { await result; } catch (e) { /* ignored */ } }
+      return JSON.stringify(PE.afterAction(inst, cont.ctrl, { settings: req.settings !== undefined ? req.settings : cont.settings }));
+    } catch (e) {
+      return JSON.stringify({ ok: false, error: String(e && e.message || e) });
+    } finally {
+      if (inst) PE.finish(inst);
+    }
+  },
+
+  // ----- collection settings ---------------------------------------------------------------
+
+  /// The collection-level properties with their effective values.
+  collectionSettings: async function (json) {
+    try {
+      var req = JSON.parse(json);
+      var pkg = PE.packages[req.pkg];
+      if (!pkg) throw new Error('package not loaded');
+      PE.applySettings(pkg, req.settings);
+      var schema = [];
+      pkg.collection.propertyGroups.forEach(function (g) {
+        g.properties.forEach(function (p) {
+          var prop = pkg.collection.properties[p.name] || p;
+          var v = prop.value;
+          var entry = { name: p.name, label: p.displayName || p.name, group: g.name, type: p.type, value: v === null || v === undefined ? '' : String(v) };
+          var raw = pkg.collectionPropertyMeta && pkg.collectionPropertyMeta[p.name];
+          if (raw && raw.enumValues) {
+            var list = null;
+            try { list = __peEval({ collection: pkg.collection }, raw.enumValues); } catch (e) { list = null; }
+            if (list && list.length) {
+              entry.enumValues = list.map(function (e2) {
+                var s2 = String(e2), i = s2.indexOf('|');
+                return i >= 0 ? [s2.slice(0, i), s2.slice(i + 1)] : [s2, s2];
+              });
+            }
+          }
+          schema.push(entry);
+        });
+      });
+      return JSON.stringify({ ok: true, schema: schema });
+    } catch (e) {
+      return JSON.stringify({ ok: false, error: String(e && e.message || e) });
     }
   },
 
